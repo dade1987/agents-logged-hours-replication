@@ -1,0 +1,27 @@
+diff --git a/sql/spatial.cc b/sql/spatial.cc
+index d1ed5bb8..e4099062 100644
+--- a/sql/spatial.cc
++++ b/sql/spatial.cc
+@@ -20,6 +20,8 @@
+ #include "spatial.h"
+ #include "gstream.h"                            // Gis_read_stream
+ #include "sql_string.h"                         // String
++#include "sql_class.h"                          // THD
++#include "sql_parse.h"                         // check_stack_overrun
+ 
+ /* This is from item_func.h. Didn't want to #include the whole file. */
+ double my_double_round(double value, longlong dec, bool dec_unsigned,
+@@ -311,6 +313,13 @@ Geometry *Geometry::create_from_wkt(Geometry_buffer *buffer,
+   Class_info *ci;
+   char next_sym;
+ 
++  if (THD *thd= current_thd)
++  {
++    uchar stack_top;
++    if (check_stack_overrun(thd, STACK_MIN_SIZE, &stack_top))
++      return NULL;
++  }
++
+   if (trs->get_next_word(&name))
+   {
+     trs->set_error_msg("Geometry name expected");

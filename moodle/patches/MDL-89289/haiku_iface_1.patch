@@ -1,0 +1,125 @@
+diff --git a/public/lang/en/admin.php b/public/lang/en/admin.php
+index c59f0ae188e..8430333566a 100644
+--- a/public/lang/en/admin.php
++++ b/public/lang/en/admin.php
+@@ -1461,6 +1461,7 @@ $string['taskcontextcleanup'] = 'Cleanup contexts';
+ $string['entitytasklog'] = 'Task log';
+ $string['tasklogging'] = 'Task log configuration';
+ $string['taskcreatecontexts'] = 'Create missing contexts';
++$string['taskdeleteblockinstances'] = 'Delete block instances';
+ $string['taskdeleteincompleteusers'] = 'Delete incomplete users';
+ $string['taskdeleteunconfirmedusers'] = 'Delete unconfirmed users';
+ $string['taskeventscron'] = 'Background processing for events';
+diff --git a/public/lib/classes/plugininfo/block.php b/public/lib/classes/plugininfo/block.php
+index 14f7af4de7a..0e92832186f 100644
+--- a/public/lib/classes/plugininfo/block.php
++++ b/public/lib/classes/plugininfo/block.php
+@@ -172,10 +172,16 @@ class block extends base {
+                 $blockobject->before_delete();  // Only if we can create instance, block might have been already removed.
+             }
+ 
+-            // First delete instances and related contexts.
+-            $instances = $DB->get_records('block_instances', ['blockname' => $block->name]);
+-            foreach ($instances as $instance) {
+-                blocks_delete_instance($instance);
++            if ($blockobject) {
++                // First delete instances and related contexts.
++                $instances = $DB->get_records('block_instances', ['blockname' => $block->name]);
++                foreach ($instances as $instance) {
++                    blocks_delete_instance($instance);
++                }
++            } else if ($DB->record_exists('block_instances', ['blockname' => $block->name])) {
++                // The block code is already gone, so there is no instance class to clean up after. The lengthy
++                // deletion of the instances and their contexts is deferred to an ad hoc task.
++                \core\task\manager::queue_adhoc_task(\core\task\delete_block_instances_task::instance($block->name));
+             }
+ 
+             // Delete block.
+diff --git a/public/lib/classes/task/delete_block_instances_task.php b/public/lib/classes/task/delete_block_instances_task.php
+new file mode 100644
+index 00000000000..09ceffd3ae0
+--- /dev/null
++++ b/public/lib/classes/task/delete_block_instances_task.php
+@@ -0,0 +1,82 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++/**
++ * Adhoc task to delete all the block instances of a given block type.
++ *
++ * @package    core
++ * @category   task
++ * @copyright  2026 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++
++namespace core\task;
++
++/**
++ * Adhoc task that deletes all the block instances (and their contexts, positions and preferences)
++ * of a block type. Used when a block plugin is removed, so that the potentially lengthy deletion
++ * does not have to run synchronously during an upgrade.
++ *
++ * @package    core
++ * @category   task
++ * @copyright  2026 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class delete_block_instances_task extends adhoc_task {
++
++    /**
++     * Returns the name of the task, shown to admins.
++     *
++     * @return string
++     */
++    public function get_name() {
++        return get_string('taskdeleteblockinstances', 'admin');
++    }
++
++    /**
++     * Creates a new task to delete all the instances of the given block.
++     *
++     * @param string $blockname The block name without the 'block_' prefix, e.g. 'mnet_hosts'.
++     * @return static
++     */
++    public static function instance(string $blockname): static {
++        $task = new static();
++        $task->set_component('core');
++        $task->set_custom_data(['blockname' => $blockname]);
++        return $task;
++    }
++
++    /**
++     * Deletes all the block instances of the block type set in the custom data.
++     *
++     * @return void
++     */
++    public function execute(): void {
++        global $DB;
++
++        $data = $this->get_custom_data();
++        $blockname = $data->blockname;
++
++        $instanceids = $DB->get_fieldset_select('block_instances', 'id', 'blockname = ?', [$blockname]);
++        if (empty($instanceids)) {
++            mtrace("No block instances found for block '{$blockname}'.");
++            return;
++        }
++
++        mtrace("Deleting " . count($instanceids) . " instance(s) of block '{$blockname}'.");
++        blocks_delete_instances($instanceids);
++    }
++}

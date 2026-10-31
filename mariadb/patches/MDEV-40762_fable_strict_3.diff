@@ -1,0 +1,206 @@
+diff --git a/mysql-test/main/desc_index_range.result b/mysql-test/main/desc_index_range.result
+index fd84fd97..071c858c 100644
+--- a/mysql-test/main/desc_index_range.result
++++ b/mysql-test/main/desc_index_range.result
+@@ -600,3 +600,63 @@ min(kp2)
+ 3
+ 3
+ drop table t20;
++#
++# MDEV-40762 Wrong MAX() result with GROUP BY when loose index scan
++#            uses DESC key part
++#
++# The MIN/MAX key part must be taken from the index chosen for the
++# loose index scan, not from the last index that was examined.
++create table t1 (a int, b int, key k_desc (a, b desc), key k_asc (a, b));
++insert into t1 values (1,23),(3,45),(1,11),(3,88),(3,70),(4,NULL),(1,14),(4,NULL),(4,8);
++EXPLAIN SELECT a, MAX(b) FROM t1 GROUP BY a;
++id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
++1	SIMPLE	t1	range	NULL	k_desc	5	NULL	#	Using index for group-by
++SELECT a, MAX(b) FROM t1 GROUP BY a;
++a	MAX(b)
++1	23
++3	88
++4	8
++EXPLAIN SELECT a, MIN(b) FROM t1 GROUP BY a;
++id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
++1	SIMPLE	t1	range	NULL	k_desc	10	NULL	#	Using index for group-by
++SELECT a, MIN(b) FROM t1 GROUP BY a;
++a	MIN(b)
++1	11
++3	45
++4	8
++EXPLAIN SELECT a, MIN(b), MAX(b) FROM t1 GROUP BY a;
++id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
++1	SIMPLE	t1	range	NULL	k_desc	10	NULL	#	Using index for group-by
++SELECT a, MIN(b), MAX(b) FROM t1 GROUP BY a;
++a	MIN(b)	MAX(b)
++1	11	23
++3	45	88
++4	8	8
++drop table t1;
++create table t1 (a int, b int, key k_asc (a, b), key k_desc (a, b desc));
++insert into t1 values (1,23),(3,45),(1,11),(3,88),(3,70),(4,NULL),(1,14),(4,NULL),(4,8);
++EXPLAIN SELECT a, MAX(b) FROM t1 GROUP BY a;
++id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
++1	SIMPLE	t1	range	NULL	k_asc	5	NULL	#	Using index for group-by
++SELECT a, MAX(b) FROM t1 GROUP BY a;
++a	MAX(b)
++1	23
++3	88
++4	8
++EXPLAIN SELECT a, MIN(b) FROM t1 GROUP BY a;
++id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
++1	SIMPLE	t1	range	NULL	k_asc	10	NULL	#	Using index for group-by
++SELECT a, MIN(b) FROM t1 GROUP BY a;
++a	MIN(b)
++1	11
++3	45
++4	8
++EXPLAIN SELECT a, MIN(b), MAX(b) FROM t1 GROUP BY a;
++id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
++1	SIMPLE	t1	range	NULL	k_asc	10	NULL	#	Using index for group-by
++SELECT a, MIN(b), MAX(b) FROM t1 GROUP BY a;
++a	MIN(b)	MAX(b)
++1	11	23
++3	45	88
++4	8	8
++drop table t1;
+diff --git a/mysql-test/main/desc_index_range.test b/mysql-test/main/desc_index_range.test
+index 36f4c406..c0cd6aed 100644
+--- a/mysql-test/main/desc_index_range.test
++++ b/mysql-test/main/desc_index_range.test
+@@ -396,3 +396,48 @@ eval EXPLAIN $query;
+ eval $query;
+ 
+ drop table t20;
++
++--echo #
++--echo # MDEV-40762 Wrong MAX() result with GROUP BY when loose index scan
++--echo #            uses DESC key part
++--echo #
++--echo # The MIN/MAX key part must be taken from the index chosen for the
++--echo # loose index scan, not from the last index that was examined.
++
++create table t1 (a int, b int, key k_desc (a, b desc), key k_asc (a, b));
++insert into t1 values (1,23),(3,45),(1,11),(3,88),(3,70),(4,NULL),(1,14),(4,NULL),(4,8);
++let $query=
++SELECT a, MAX(b) FROM t1 GROUP BY a;
++--replace_column 9 #
++eval EXPLAIN $query;
++eval $query;
++let $query=
++SELECT a, MIN(b) FROM t1 GROUP BY a;
++--replace_column 9 #
++eval EXPLAIN $query;
++eval $query;
++let $query=
++SELECT a, MIN(b), MAX(b) FROM t1 GROUP BY a;
++--replace_column 9 #
++eval EXPLAIN $query;
++eval $query;
++drop table t1;
++
++create table t1 (a int, b int, key k_asc (a, b), key k_desc (a, b desc));
++insert into t1 values (1,23),(3,45),(1,11),(3,88),(3,70),(4,NULL),(1,14),(4,NULL),(4,8);
++let $query=
++SELECT a, MAX(b) FROM t1 GROUP BY a;
++--replace_column 9 #
++eval EXPLAIN $query;
++eval $query;
++let $query=
++SELECT a, MIN(b) FROM t1 GROUP BY a;
++--replace_column 9 #
++eval EXPLAIN $query;
++eval $query;
++let $query=
++SELECT a, MIN(b), MAX(b) FROM t1 GROUP BY a;
++--replace_column 9 #
++eval EXPLAIN $query;
++eval $query;
++drop table t1;
+diff --git a/sql/opt_range.cc b/sql/opt_range.cc
+index c8d1d8da..2aec6ed8 100644
+--- a/sql/opt_range.cc
++++ b/sql/opt_range.cc
+@@ -14859,6 +14859,8 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
+     uint cur_key_infix_len= 0;
+     uchar cur_key_infix[MAX_KEY_LENGTH];
+     uint cur_used_key_parts;
++    /* The key part of cur_index_info referenced by the MIN/MAX argument. */
++    KEY_PART_INFO *cur_min_max_arg_part= NULL;
+     
+     /*
+       Check (B1) - if current index is covering.
+@@ -15028,7 +15030,7 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
+         cause= "aggregate column not suffix in idx";
+         goto next_index;
+       }
+-      min_max_arg_part= cur_index_info->key_part + key_part_nr - 1;
++      cur_min_max_arg_part= cur_index_info->key_part + key_part_nr - 1;
+     }
+ 
+     /*
+@@ -15062,19 +15064,20 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
+     first_non_group_part= (cur_group_key_parts < key_parts) ?
+                           cur_index_info->key_part + cur_group_key_parts :
+                           NULL;
+-    first_non_infix_part= min_max_arg_part ?
+-                          (min_max_arg_part < last_part) ?
+-                             min_max_arg_part :
++    first_non_infix_part= cur_min_max_arg_part ?
++                          (cur_min_max_arg_part < last_part) ?
++                             cur_min_max_arg_part :
+                              NULL :
+                            NULL;
+     if (first_non_group_part &&
+-        (!min_max_arg_part || (min_max_arg_part - first_non_group_part > 0)))
++        (!cur_min_max_arg_part ||
++         (cur_min_max_arg_part - first_non_group_part > 0)))
+     {
+       if (tree)
+       {
+         SEL_ARG *index_range_tree= tree->keys[cur_param_idx];
+         if (!get_constant_key_infix(cur_index_info, index_range_tree,
+-                                    first_non_group_part, min_max_arg_part,
++                                    first_non_group_part, cur_min_max_arg_part,
+                                     last_part, thd, cur_key_infix, 
+                                     &cur_key_infix_len,
+                                     &first_non_infix_part))
+@@ -15083,8 +15086,8 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
+           goto next_index;
+         }
+       }
+-      else if (min_max_arg_part &&
+-               (min_max_arg_part - first_non_group_part > 0))
++      else if (cur_min_max_arg_part &&
++               (cur_min_max_arg_part - first_non_group_part > 0))
+       {
+         /*
+           There is a gap but no range tree, thus no predicates at all for the
+@@ -15128,7 +15131,7 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
+     if (first_non_infix_part)
+     {
+       cur_part= first_non_infix_part +
+-                (min_max_arg_part && (min_max_arg_part < last_part));
++                (cur_min_max_arg_part && (cur_min_max_arg_part < last_part));
+       for (; cur_part != last_part; cur_part++)
+       {
+         if (bitmap_is_set(table->read_set, cur_part->field->field_index))
+@@ -15148,7 +15151,7 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
+     {
+       SEL_ARG *index_range_tree= tree->keys[cur_param_idx];
+       SEL_ARG *cur_range= NULL;
+-      if (get_sel_arg_for_keypart(min_max_arg_part->field,
++      if (get_sel_arg_for_keypart(cur_min_max_arg_part->field,
+                                   index_range_tree, &cur_range) ||
+           (cur_range && cur_range->type != SEL_ARG::KEY_RANGE))
+       {
+@@ -15209,6 +15212,7 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
+       best_index_tree= cur_index_tree;
+       best_quick_prefix_records= cur_quick_prefix_records;
+       best_param_idx= cur_param_idx;
++      min_max_arg_part= cur_min_max_arg_part;
+       group_key_parts= cur_group_key_parts;
+       group_prefix_len= cur_group_prefix_len;
+       key_infix_len= cur_key_infix_len;

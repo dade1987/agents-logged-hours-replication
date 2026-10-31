@@ -1,0 +1,89 @@
+diff --git a/mysql-test/suite/innodb_fts/r/phrase.result b/mysql-test/suite/innodb_fts/r/phrase.result
+index efcbaeac..14699d17 100644
+--- a/mysql-test/suite/innodb_fts/r/phrase.result
++++ b/mysql-test/suite/innodb_fts/r/phrase.result
+@@ -82,3 +82,30 @@ id	title	body
+ 9	mysql good database	
+ 10	mysql good database	NULL
+ DROP TABLE articles;
++#
++# MDEV-41022 Wildcard term returns no rows when combined with a phrase
++# in boolean search
++#
++CREATE TABLE t (id INT AUTO_INCREMENT PRIMARY KEY, txt TEXT, FULLTEXT(txt))
++ENGINE=InnoDB;
++INSERT INTO t (txt) VALUES ('auth code out');
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"zzzz" aut*' IN BOOLEAN MODE);
++id
++1
++SELECT id FROM t WHERE MATCH(txt) AGAINST('aut* "zzzz"' IN BOOLEAN MODE);
++id
++1
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"zzzz" +aut*' IN BOOLEAN MODE);
++id
++1
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"zzzz" auth' IN BOOLEAN MODE);
++id
++1
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"auth code" aut*' IN BOOLEAN MODE);
++id
++1
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"zzzz" -aut*' IN BOOLEAN MODE);
++id
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"auth code" -aut*' IN BOOLEAN MODE);
++id
++DROP TABLE t;
+diff --git a/mysql-test/suite/innodb_fts/t/phrase.test b/mysql-test/suite/innodb_fts/t/phrase.test
+index fb0d29f3..181f0117 100644
+--- a/mysql-test/suite/innodb_fts/t/phrase.test
++++ b/mysql-test/suite/innodb_fts/t/phrase.test
+@@ -37,3 +37,20 @@ SELECT * FROM articles WHERE MATCH(title, body)
+ 	AGAINST('("mysql good database")' IN BOOLEAN MODE);
+ 
+ DROP TABLE articles;
++
++--echo #
++--echo # MDEV-41022 Wildcard term returns no rows when combined with a phrase
++--echo # in boolean search
++--echo #
++CREATE TABLE t (id INT AUTO_INCREMENT PRIMARY KEY, txt TEXT, FULLTEXT(txt))
++ENGINE=InnoDB;
++INSERT INTO t (txt) VALUES ('auth code out');
++# The row is still in the FTS index cache (not yet synced to disk).
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"zzzz" aut*' IN BOOLEAN MODE);
++SELECT id FROM t WHERE MATCH(txt) AGAINST('aut* "zzzz"' IN BOOLEAN MODE);
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"zzzz" +aut*' IN BOOLEAN MODE);
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"zzzz" auth' IN BOOLEAN MODE);
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"auth code" aut*' IN BOOLEAN MODE);
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"zzzz" -aut*' IN BOOLEAN MODE);
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"auth code" -aut*' IN BOOLEAN MODE);
++DROP TABLE t;
+diff --git a/storage/innobase/fts/fts0que.cc b/storage/innobase/fts/fts0que.cc
+index b8f22076..d668c6d1 100644
+--- a/storage/innobase/fts/fts0que.cc
++++ b/storage/innobase/fts/fts0que.cc
+@@ -2720,6 +2720,14 @@ fts_query_phrase_search(
+ 	mem_heap_t*		heap = mem_heap_create(sizeof(fts_string_t));
+ 	ib_alloc_t*		heap_alloc;
+ 	ulint			num_token;
++	/* The phrase/proximity search type is only valid while this
++	phrase is being processed. Remember the original flags so that
++	they can be restored for the terms that follow the phrase:
++	otherwise fts_query_cache() would refuse to do a wildcard
++	lookup in the index cache for a subsequent wildcard term
++	(for example "zzzz" aut*), and rows that have not yet been
++	synced to disk would not be found. */
++	const ulint		orig_flags = query->flags;
+ 
+ 	heap_alloc = ib_heap_allocator_create(heap);
+ 
+@@ -2893,6 +2901,9 @@ fts_query_phrase_search(
+ 	/* Don't need it anymore. */
+ 	query->matched = NULL;
+ 
++	/* Restore the original search flags. */
++	query->flags = orig_flags;
++
+ 	return(query->error);
+ }
+ 

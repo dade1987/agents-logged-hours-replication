@@ -1,0 +1,36 @@
+diff --git a/public/admin/tool/uploadcourse/classes/course.php b/public/admin/tool/uploadcourse/classes/course.php
+index b4a35053d3a..7cb2317410a 100644
+--- a/public/admin/tool/uploadcourse/classes/course.php
++++ b/public/admin/tool/uploadcourse/classes/course.php
+@@ -914,6 +914,18 @@ class tool_uploadcourse_course {
+             $rc = new restore_controller($this->restoredata, $course->id, backup::INTERACTIVE_NO,
+                 backup::MODE_IMPORT, $USER->id, backup::TARGET_CURRENT_ADDING);
+ 
++            // Course configuration (including summary and overview files) is only restored into an existing
++            // course when overwrite_conf is enabled, so enable it to inherit these from the template.
++            $overwriteconf = false;
++            $plan = $rc->get_plan();
++            if ($plan->setting_exists('overwrite_conf')) {
++                $setting = $plan->get_setting('overwrite_conf');
++                if ($setting->get_status() == backup_setting::NOT_LOCKED) {
++                    $setting->set_value(true);
++                    $overwriteconf = true;
++                }
++            }
++
+             // Check if the format conversion must happen first.
+             if ($rc->get_status() == backup::STATUS_REQUIRE_CONV) {
+                 $rc->convert();
+@@ -921,6 +933,12 @@ class tool_uploadcourse_course {
+             if ($rc->execute_precheck()) {
+                 $rc->execute_plan();
+                 $this->status('courserestored', new lang_string('courserestored', 'tool_uploadcourse'));
++                if ($overwriteconf && $this->do === self::DO_CREATE) {
++                    // Re-apply the values provided for the new course, as the template configuration was restored over them.
++                    $coursedata = (object) $this->data;
++                    $coursedata->id = $course->id;
++                    update_course($coursedata);
++                }
+             } else {
+                 $this->error('errorwhilerestoringcourse', new lang_string('errorwhilerestoringcourse', 'tool_uploadcourse'));
+             }

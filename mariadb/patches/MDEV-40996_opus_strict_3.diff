@@ -1,0 +1,56 @@
+diff --git a/client/mysqltest.cc b/client/mysqltest.cc
+index d43b1c79..55892e9d 100644
+--- a/client/mysqltest.cc
++++ b/client/mysqltest.cc
+@@ -5340,7 +5340,7 @@ void do_sync_with_master(struct st_command *command)
+   long offset= 0;
+   char *p= command->first_argument;
+   const char *offset_start= p;
+-  char *start, *buff= 0;
++  char *start, *buff= 0, *alloced= 0;
+   start= const_cast<char*>("");
+ 
+   if (*offset_start)
+@@ -5358,15 +5358,19 @@ void do_sync_with_master(struct st_command *command)
+       p++;
+       while (*p && my_isspace(charset_info, *p))
+         p++;
+-      start= buff= (char*)my_malloc(PSI_NOT_INSTRUMENTED, strlen(p)+1,
+-                                    MYF(MY_WME|MY_FAE));
+-      get_string(&buff, &p, command);
++      buff= alloced= (char*)my_malloc(PSI_NOT_INSTRUMENTED, strlen(p)+1,
++                                      MYF(MY_WME|MY_FAE));
++      /*
++        get_string() returns either the parsed string (stored in buff)
++        or, if the argument was a variable, the value of that variable.
++      */
++      start= get_string(&buff, &p, command);
+     }
+     command->last_argument= p;
+   }
+   do_sync_with_master2(command, offset, start);
+-  if (buff)
+-    my_free(start);
++  if (alloced)
++    my_free(alloced);
+   return;
+ }
+ 
+diff --git a/mysql-test/suite/multi_source/mdev-9544.test b/mysql-test/suite/multi_source/mdev-9544.test
+index c2626dc7..b021db74 100644
+--- a/mysql-test/suite/multi_source/mdev-9544.test
++++ b/mysql-test/suite/multi_source/mdev-9544.test
+@@ -104,8 +104,11 @@ drop database c;
+ --save_master_pos
+ 
+ --connection server_4
+---sync_with_master 0,'m1'
+---sync_with_master 0,'m2'
++# MDEV-40996: connection name may be given as a variable
++--let $conn_name= m1
++--sync_with_master 0, $conn_name
++--let $conn_name= m2
++--sync_with_master 0,$conn_name
+ --sync_with_master 0,''
+ stop all slaves;
+ SET default_master_connection = "m1";

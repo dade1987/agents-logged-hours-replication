@@ -1,0 +1,64 @@
+diff --git a/public/ai/provider/openai/classes/process_generate_image.php b/public/ai/provider/openai/classes/process_generate_image.php
+index 91ea125fd31..55a5ab3cc6d 100644
+--- a/public/ai/provider/openai/classes/process_generate_image.php
++++ b/public/ai/provider/openai/classes/process_generate_image.php
+@@ -139,7 +139,7 @@ class process_generate_image extends abstract_processor {
+             headers: [
+                 'Content-Type' => 'application/json',
+             ],
+-            body: json_encode($requestobj),
++            body: json_encode($requestobj, JSON_UNESCAPED_SLASHES),
+         );
+     }
+ 
+diff --git a/public/ai/provider/openai/classes/process_generate_text.php b/public/ai/provider/openai/classes/process_generate_text.php
+index d21647d734d..8376cf8e30a 100644
+--- a/public/ai/provider/openai/classes/process_generate_text.php
++++ b/public/ai/provider/openai/classes/process_generate_text.php
+@@ -69,7 +69,7 @@ class process_generate_text extends abstract_processor {
+             headers: [
+                 'Content-Type' => 'application/json',
+             ],
+-            body: json_encode($requestobj),
++            body: json_encode($requestobj, JSON_UNESCAPED_SLASHES),
+         );
+     }
+ 
+diff --git a/public/ai/provider/openai/tests/process_generate_text_test.php b/public/ai/provider/openai/tests/process_generate_text_test.php
+index 79d163a407c..cedbe56d84f 100644
+--- a/public/ai/provider/openai/tests/process_generate_text_test.php
++++ b/public/ai/provider/openai/tests/process_generate_text_test.php
+@@ -138,6 +138,33 @@ final class process_generate_text_test extends \advanced_testcase {
+         $this->assertEquals('100', $body->max_completion_tokens);
+     }
+ 
++    /**
++     * Test create_request_object does not escape forward slashes in the model name.
++     */
++    public function test_create_request_object_model_with_slash(): void {
++        $this->provider = $this->create_provider(
++            actionclass: \core_ai\aiactions\generate_text::class,
++            actionconfig: [
++                'model' => 'cortecs/Llama-3.3-70B-Instruct-FP8-Dynamic',
++                'systeminstruction' => get_string('action_generate_text_instruction', 'core_ai'),
++            ],
++        );
++        $processor = new process_generate_text($this->provider, $this->action);
++
++        // We're working with a private method here, so we need to use reflection.
++        $method = new \ReflectionMethod($processor, 'create_request_object');
++        $request = $method->invoke($processor, 1);
++
++        $rawbody = $request->getBody()->getContents();
++
++        // The raw JSON body must keep the slash unescaped so OpenAI-compatible providers can route the request.
++        $this->assertStringContainsString('"model":"cortecs/Llama-3.3-70B-Instruct-FP8-Dynamic"', $rawbody);
++        $this->assertStringNotContainsString('\/', $rawbody);
++
++        $body = (object) json_decode($rawbody);
++        $this->assertEquals('cortecs/Llama-3.3-70B-Instruct-FP8-Dynamic', $body->model);
++    }
++
+     /**
+      * Test the API error response handler method.
+      */

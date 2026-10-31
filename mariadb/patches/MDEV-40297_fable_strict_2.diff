@@ -1,0 +1,107 @@
+diff --git a/mysql-test/suite/multi_source/rpl_filter_default_master.result b/mysql-test/suite/multi_source/rpl_filter_default_master.result
+index 044e8031..73dcbd47 100644
+--- a/mysql-test/suite/multi_source/rpl_filter_default_master.result
++++ b/mysql-test/suite/multi_source/rpl_filter_default_master.result
+@@ -13,6 +13,29 @@ named
+ SELECT @@GLOBAL.``.replicate_do_db;
+ @@GLOBAL.``.replicate_do_db
+ unnamed
++# MDEV-40297: SET changes @@default_master_connection's system variable
++# if the explicit connection name is blank
++SET @@GLOBAL.`name`.replicate_do_db= 'named2';
++SET @@GLOBAL.``.replicate_do_db= 'unnamed2';
++SELECT @@GLOBAL.name.replicate_do_db;
++@@GLOBAL.name.replicate_do_db
++named2
++SELECT @@GLOBAL.``.replicate_do_db;
++@@GLOBAL.``.replicate_do_db
++unnamed2
++SET @saved_slave_parallel_mode= @@GLOBAL.slave_parallel_mode;
++SET @@GLOBAL.`name`.slave_parallel_mode= 'minimal';
++SET @@GLOBAL.``.slave_parallel_mode= 'aggressive';
++SELECT @@GLOBAL.name.slave_parallel_mode;
++@@GLOBAL.name.slave_parallel_mode
++minimal
++SELECT @@GLOBAL.``.slave_parallel_mode;
++@@GLOBAL.``.slave_parallel_mode
++aggressive
++SELECT @@GLOBAL.slave_parallel_mode;
++@@GLOBAL.slave_parallel_mode
++minimal
++SET @@GLOBAL.``.slave_parallel_mode= @saved_slave_parallel_mode;
+ RESET SLAVE ALL;
+ SET @@SESSION.default_master_connection= @saved_default_master_connection;
+ SET @@GLOBAL.replicate_do_db= @saved_replicate_do_db;
+diff --git a/mysql-test/suite/multi_source/rpl_filter_default_master.test b/mysql-test/suite/multi_source/rpl_filter_default_master.test
+index 3693b1fd..5fb38af7 100644
+--- a/mysql-test/suite/multi_source/rpl_filter_default_master.test
++++ b/mysql-test/suite/multi_source/rpl_filter_default_master.test
+@@ -17,6 +17,21 @@ SELECT @@GLOBAL.replicate_do_db;
+ # MDEV-40297: Explicit empty connection name
+ SELECT @@GLOBAL.``.replicate_do_db;
+ 
++--echo # MDEV-40297: SET changes @@default_master_connection's system variable
++--echo # if the explicit connection name is blank
++SET @@GLOBAL.`name`.replicate_do_db= 'named2';
++SET @@GLOBAL.``.replicate_do_db= 'unnamed2';
++SELECT @@GLOBAL.name.replicate_do_db;
++SELECT @@GLOBAL.``.replicate_do_db;
++
++SET @saved_slave_parallel_mode= @@GLOBAL.slave_parallel_mode;
++SET @@GLOBAL.`name`.slave_parallel_mode= 'minimal';
++SET @@GLOBAL.``.slave_parallel_mode= 'aggressive';
++SELECT @@GLOBAL.name.slave_parallel_mode;
++SELECT @@GLOBAL.``.slave_parallel_mode;
++SELECT @@GLOBAL.slave_parallel_mode;
++SET @@GLOBAL.``.slave_parallel_mode= @saved_slave_parallel_mode;
++
+ # Cleanup
+ RESET SLAVE ALL;
+ SET @@SESSION.default_master_connection= @saved_default_master_connection;
+diff --git a/sql/sys_vars.cc b/sql/sys_vars.cc
+index 608a8a60..84da884f 100644
+--- a/sql/sys_vars.cc
++++ b/sql/sys_vars.cc
+@@ -2478,7 +2478,12 @@ Sys_var_slave_parallel_mode::global_update(THD *thd, set_var *var)
+   Master_info *mi;
+   bool res= false;
+ 
+-  if (!base_name->length)
++  /*
++    An implicit connection name (no "name." prefix) has base.str == NULL,
++    whereas an explicit empty name (``.) has base.str != NULL and length 0.
++    Only the former should fall back to @@default_master_connection.
++  */
++  if (!base_name->str)
+     base_name= &thd->variables.default_master_connection;
+ 
+   mysql_mutex_unlock(&LOCK_global_system_variables);
+@@ -2524,7 +2529,7 @@ Sys_var_slave_parallel_mode::global_value_ptr(THD *thd,
+   enum_slave_parallel_mode val=
+     (enum_slave_parallel_mode)opt_slave_parallel_mode;
+ 
+-  if (!base_name->length)
++  if (!base_name->str)
+     base_name= &thd->variables.default_master_connection;
+ 
+   mysql_mutex_unlock(&LOCK_global_system_variables);
+@@ -5682,12 +5687,17 @@ bool Sys_var_rpl_filter::global_update(THD *thd, set_var *var)
+   bool result= true;                            // Assume error
+   LEX_CSTRING *base_name= &var->base;
+ 
+-  if (!base_name->length)
++  /*
++    An implicit connection name (no "name." prefix) has base.str == NULL,
++    whereas an explicit empty name (``.) has base.str != NULL and length 0.
++    Only the former should fall back to @@default_master_connection.
++  */
++  if (!base_name->str)
+     base_name= &thd->variables.default_master_connection;
+ 
+   mysql_mutex_unlock(&LOCK_global_system_variables);
+ 
+-  if (Master_info *mi= get_master_info(base_name, !var->base.length ?
++  if (Master_info *mi= get_master_info(base_name, !base_name->length ?
+                                        Sql_condition::WARN_LEVEL_ERROR :
+                                        Sql_condition::WARN_LEVEL_WARN))
+   {

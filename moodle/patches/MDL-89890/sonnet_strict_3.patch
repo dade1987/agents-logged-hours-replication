@@ -1,0 +1,42 @@
+diff --git a/.upgradenotes/MDL-89890-2026102500000000.yml b/.upgradenotes/MDL-89890-2026102500000000.yml
+new file mode 100644
+index 00000000000..226e60156f8
+--- /dev/null
++++ b/.upgradenotes/MDL-89890-2026102500000000.yml
+@@ -0,0 +1,10 @@
++issueNumber: MDL-89890
++notes:
++  mod_forum:
++    - message: >-
++        The `mod_forum/forum_actionbar` template now renders the subscription
++        toggle (`subscribetoggle` context key) instead of a subscription
++        navigation selector. Template overrides must be updated. A deprecated
++        `subscriptionoption` context key is still exported for users who can
++        manage subscriptions.
++      type: changed
+diff --git a/public/mod/forum/classes/output/forum_actionbar.php b/public/mod/forum/classes/output/forum_actionbar.php
+index 1a3c8f66cc9..406ba27e550 100644
+--- a/public/mod/forum/classes/output/forum_actionbar.php
++++ b/public/mod/forum/classes/output/forum_actionbar.php
+@@ -138,6 +138,21 @@ class forum_actionbar implements renderable, templatable {
+                 'extraclasses' => 'd-flex flex-row-reverse align-items-center gap-6',
+             ];
+         }
++
++        // Backwards compatibility for template overrides written for the previous action bar, which rendered the
++        // subscription and "Manage subscribers" options as a navigation selector. The core template no longer
++        // uses this key.
++        // @deprecated since Moodle 5.2. Template overrides should use the 'subscribetoggle' key instead.
++        if ($canmanage) {
++            $subscribersurl = new moodle_url('/mod/forum/subscribers.php', ['id' => $this->forum->get_id()]);
++            $legacymenu = new \core\output\select_menu(
++                'subscriptionoption',
++                [$subscribersurl->out(false) => get_string('managesubscriptionson', 'mod_forum')],
++                $subscribersurl->out(false),
++            );
++            $legacymenu->set_label(get_string('subscribers', 'mod_forum'), ['class' => 'accesshide']);
++            $data['subscriptionoption'] = $legacymenu->export_for_template($output);
++        }
+         return $data;
+     }
+ }

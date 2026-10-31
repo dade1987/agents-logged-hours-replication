@@ -1,0 +1,35 @@
+diff --git a/client/mysqltest.cc b/client/mysqltest.cc
+index d43b1c79..c400baa4 100644
+--- a/client/mysqltest.cc
++++ b/client/mysqltest.cc
+@@ -5342,6 +5342,7 @@ void do_sync_with_master(struct st_command *command)
+   const char *offset_start= p;
+   char *start, *buff= 0;
+   start= const_cast<char*>("");
++  /* Connection name, may be given as a $variable */
+ 
+   if (*offset_start)
+   {
+@@ -5358,15 +5359,18 @@ void do_sync_with_master(struct st_command *command)
+       p++;
+       while (*p && my_isspace(charset_info, *p))
+         p++;
+-      start= buff= (char*)my_malloc(PSI_NOT_INSTRUMENTED, strlen(p)+1,
+-                                    MYF(MY_WME|MY_FAE));
+-      get_string(&buff, &p, command);
++      char *to;
++      buff= (char*)my_malloc(PSI_NOT_INSTRUMENTED, strlen(p)+1,
++                             MYF(MY_WME|MY_FAE));
++      to= buff;
++      /* get_string() resolves a $variable to its value */
++      start= get_string(&to, &p, command);
+     }
+     command->last_argument= p;
+   }
+   do_sync_with_master2(command, offset, start);
+   if (buff)
+-    my_free(start);
++    my_free(buff);
+   return;
+ }
+ 

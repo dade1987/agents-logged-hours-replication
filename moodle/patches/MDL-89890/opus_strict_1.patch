@@ -1,0 +1,120 @@
+diff --git a/.upgradenotes/MDL-89890-2026102412000000.yml b/.upgradenotes/MDL-89890-2026102412000000.yml
+new file mode 100644
+index 00000000000..13b197e8d63
+--- /dev/null
++++ b/.upgradenotes/MDL-89890-2026102412000000.yml
+@@ -0,0 +1,13 @@
++issueNumber: MDL-89890
++notes:
++  mod_forum:
++    - message: >-
++        The `mod_forum/forum_subscription_action` template now renders the view
++        and manage subscribers selector from the new `viewandmanageselectmenu`
++        context variable (a `core\output\select_menu` export rendered with
++        `core/tertiary_navigation_selector`). The `viewandmanageselect` context
++        variable still contains the previous `url_select` export so that
++        existing template overrides keep working, but it is deprecated and
++        will be removed in a future version. Template overrides should be
++        updated to use `viewandmanageselectmenu` instead.
++      type: deprecated
+diff --git a/public/mod/forum/classes/output/subscription_actionbar.php b/public/mod/forum/classes/output/subscription_actionbar.php
+index 43e34dbfc43..f2ab08e5e99 100644
+--- a/public/mod/forum/classes/output/subscription_actionbar.php
++++ b/public/mod/forum/classes/output/subscription_actionbar.php
+@@ -149,6 +149,35 @@ class subscription_actionbar implements renderable, templatable {
+         return $urlselect;
+     }
+ 
++    /**
++     * Create the legacy view and manage subscribers url select menu.
++     *
++     * This is only kept for backwards compatibility with template overrides that still render the
++     * `viewandmanageselect` context variable with the `core/url_select` template.
++     *
++     * @deprecated since Moodle 5.3 Use the `viewandmanageselectmenu` template context instead.
++     * @return url_select|null get url_select object.
++     */
++    private function create_legacy_view_manage_menu(): ?url_select {
++        // If forced subscription is used then no need to show the view.
++        if (\mod_forum\subscriptions::is_forcesubscribed($this->forum)) {
++            return null;
++        }
++
++        $viewlink = new moodle_url('/mod/forum/subscribers.php', ['id' => $this->id, 'edit' => 'off']);
++        $managelink = new moodle_url('/mod/forum/subscribers.php', ['id' => $this->id, 'edit' => 'on']);
++
++        $menu = [
++            $viewlink->out(false) => get_string('forum:viewsubscribers', 'forum'),
++            $managelink->out(false) => get_string('managesubscriptionson', 'forum'),
++        ];
++
++        $selected = ($this->edit === 0) ? $viewlink : $managelink;
++        $urlselect = new url_select($menu, $selected->out(false), null, 'selectviewandmanagesubscribers');
++        $urlselect->set_label(get_string('subscribers', 'forum'), ['class' => 'accesshide']);
++        return $urlselect;
++    }
++
+     /**
+      * Data for the template.
+      *
+@@ -164,7 +193,14 @@ class subscription_actionbar implements renderable, templatable {
+             $data ['subscriptionoptions'] = $subscribeoptionselect->export_for_template($output);
+         }
+         if ($viewmanageselect) {
+-            $data['viewandmanageselect'] = $viewmanageselect->export_for_template($output);
++            $data['viewandmanageselectmenu'] = $viewmanageselect->export_for_template($output);
++        }
++
++        // Keep the previous url_select based context so that existing template overrides keep working.
++        // This is deprecated since Moodle 5.3, overrides should use `viewandmanageselectmenu` instead.
++        $legacyviewmanageselect = $this->create_legacy_view_manage_menu();
++        if ($legacyviewmanageselect) {
++            $data['viewandmanageselect'] = $legacyviewmanageselect->export_for_template($output);
+         }
+         return $data;
+     }
+diff --git a/public/mod/forum/templates/forum_subscription_action.mustache b/public/mod/forum/templates/forum_subscription_action.mustache
+index 4d38c216f2c..f8ca1571e34 100644
+--- a/public/mod/forum/templates/forum_subscription_action.mustache
++++ b/public/mod/forum/templates/forum_subscription_action.mustache
+@@ -23,6 +23,9 @@
+     * data-region
+     Context variables required for this template:
+     * see mod/forum/classes/output/subscription_actionbar.php
++    * viewandmanageselectmenu - select_menu data for the view/manage subscribers tertiary navigation selector.
++    * viewandmanageselect - Deprecated since Moodle 5.3. Legacy url_select data for the view/manage subscribers selector,
++      kept only for backwards compatibility with template overrides. Use viewandmanageselectmenu instead.
+     Example context (json):
+     {
+         "subscriptionoptions": {
+@@ -43,7 +46,7 @@
+                 }
+             ]
+         },
+-        "viewandmanageselect": {
++        "viewandmanageselectmenu": {
+             "name": "selectviewandmanagesubscribers",
+             "value": "/mod/forum/subscribers.php?id=3&edit=off",
+             "baseid": "select-menu56789",
+@@ -73,11 +76,19 @@
+ }}
+ <div class="container-fluid tertiary-navigation">
+     <div class="d-flex">
+-        {{#viewandmanageselect}}
++        {{#viewandmanageselectmenu}}
+             <div class="navitem">
+                 {{>core/tertiary_navigation_selector}}
+             </div>
+-        {{/viewandmanageselect}}
++        {{/viewandmanageselectmenu}}
++        {{^viewandmanageselectmenu}}
++            {{! Deprecated since Moodle 5.3: legacy url_select based context, kept for backwards compatibility. }}
++            {{#viewandmanageselect}}
++                <div class="navitem">
++                    {{>core/url_select}}
++                </div>
++            {{/viewandmanageselect}}
++        {{/viewandmanageselectmenu}}
+         {{#subscriptionoptions}}
+             <div class="navitem ms-sm-auto">
+                 {{>core/url_select}}

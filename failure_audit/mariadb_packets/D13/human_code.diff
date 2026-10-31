@@ -1,0 +1,98 @@
+diff --git a/sql/sp_rcontext.cc b/sql/sp_rcontext.cc
+index 472f3ff7de6..2ae352b83ea 100644
+--- a/sql/sp_rcontext.cc
++++ b/sql/sp_rcontext.cc
+@@ -694,6 +694,20 @@ int sp_rcontext::set_variable_row_field(THD *thd, uint var_idx, uint field_idx,
+ }
+ 
+ 
++int sp_rcontext::set_variable_row_field_by_name(THD *thd, uint var_idx,
++                                            const Lex_ident_sys_st &field_name,
++                                            Item **value)
++{
++  DBUG_ENTER("sp_rcontext::set_variable_row_field");
++  DBUG_ASSERT(value);
++  uint field_idx= 0;
++  if (find_row_field_by_name_or_error(&field_idx, var_idx, field_name))
++    DBUG_RETURN(true);
++  Virtual_tmp_table *vtable= virtual_tmp_table_for_row(var_idx);
++  DBUG_RETURN(thd->sp_eval_expr(vtable->field[field_idx], value));
++}
++
++
+ int sp_rcontext::set_variable_row(THD *thd, uint var_idx, List<Item> &items)
+ {
+   DBUG_ENTER("sp_rcontext::set_variable_row");
+diff --git a/sql/sp_rcontext.h b/sql/sp_rcontext.h
+index 484d0e000ff..4d55f475e6b 100644
+--- a/sql/sp_rcontext.h
++++ b/sql/sp_rcontext.h
+@@ -209,6 +209,9 @@ class sp_rcontext : public Sql_alloc
+   int set_variable(THD *thd, uint var_idx, Item **value);
+   int set_variable_row_field(THD *thd, uint var_idx, uint field_idx,
+                              Item **value);
++  int set_variable_row_field_by_name(THD *thd, uint var_idx,
++                                     const Lex_ident_sys_st &field_name,
++                                     Item **value);
+   int set_variable_row(THD *thd, uint var_idx, List<Item> &items);
+ 
+   int set_variable_composite_field_by_key(THD *thd,
+diff --git a/sql/sql_type_row.cc b/sql/sql_type_row.cc
+index c72cab62075..c81e13d0636 100644
+--- a/sql/sql_type_row.cc
++++ b/sql/sql_type_row.cc
+@@ -135,6 +135,32 @@ class my_var_sp_row_field: public my_var_sp
+ };
+ 
+ 
++class my_var_sp_row_field_by_name: public my_var_sp
++{
++  const Lex_ident_sys_st m_field_name;
++public:
++  my_var_sp_row_field_by_name(const Lex_ident_sys_st &varname,
++                              const sp_rcontext_addr &varaddr,
++                              const Lex_ident_sys_st &field_name,
++                              sp_head *s)
++   :my_var_sp(varname, varaddr,
++              &type_handler_double/*Not really used*/, s),
++    m_field_name(field_name)
++  { }
++  bool check_assignability(THD *thd, const List<Item> &select_list,
++                           bool *assign_as_row) const override
++  {
++    *assign_as_row= false;
++    return select_list.elements == 1;
++  }
++  bool set(THD *thd, Item *item) override
++  {
++    return get_rcontext(thd->spcont)->
++             set_variable_row_field_by_name(thd, offset(), m_field_name, &item);
++  }
++};
++
++
+ my_var *Type_handler_row::make_outvar(THD *thd,
+                                       const Lex_ident_sys_st &name,
+                                       const sp_rcontext_addr &addr,
+@@ -159,11 +185,19 @@ my_var *Type_handler_row::make_outvar_field(THD *thd,
+   DBUG_ASSERT(t);
+   DBUG_ASSERT(t->type_handler() == this);
+ 
++  if (t->field_def.is_table_rowtype_ref() ||
++      t->field_def.is_cursor_rowtype_ref())
++  {
++    if (validate_only)
++      return nullptr;
++    return new (thd->mem_root) my_var_sp_row_field_by_name(name, addr,
++                                                           field, sphead);
++
++  }
+   uint row_field_offset;
+   if (!t->find_row_field(&name, &field, &row_field_offset))
+   {
+-    DBUG_ASSERT(0);
+-    my_error(ER_ROW_VARIABLE_DOES_NOT_HAVE_FIELD, MYF(0), name.str, field.str);
++    DBUG_ASSERT(thd->is_error());
+     return NULL;
+   }
+   if (validate_only) // e.g. EXPLAIN SELECT .. INTO spvar_row.field;

@@ -1,0 +1,67 @@
+diff --git a/public/backup/util/loggers/file_logger.class.php b/public/backup/util/loggers/file_logger.class.php
+index 797ffa0e29f..aadcc9b0feb 100644
+--- a/public/backup/util/loggers/file_logger.class.php
++++ b/public/backup/util/loggers/file_logger.class.php
+@@ -65,12 +65,57 @@ class file_logger extends base_logger {
+         return array('level', 'showdate', 'showlevel', 'next', 'fullpath');
+     }
+ 
+-    public function __wakeup() {
+-        // If the stored path no longer exists, reconstruct it using the current backup temp dir.
+-        if (!empty($this->fullpath) && !file_exists(dirname($this->fullpath))) {
+-            $filename = basename($this->fullpath);
++    /**
++     * Serialize the logger, storing a relative path (filename only) when the log lives in the backup temp dir.
++     *
++     * @return array
++     */
++    public function __serialize(): array {
++        if (is_resource($this->fhandle)) {
++            // Blindy close the file handler before serialization.
++            @fclose($this->fhandle);
++            $this->fhandle = null;
++        }
++        $fullpath = $this->fullpath;
++        if (!empty($fullpath)) {
+             $backuptempdir = make_backup_temp_directory('');
+-            $this->fullpath = $backuptempdir . '/' . $filename;
++            if (dirname($fullpath) === rtrim($backuptempdir, '/\\')) {
++                $fullpath = basename($fullpath);
++            }
++        }
++        return [
++            'level' => $this->level,
++            'showdate' => $this->showdate,
++            'showlevel' => $this->showlevel,
++            'next' => $this->next,
++            'fullpath' => $fullpath,
++        ];
++    }
++
++    /**
++     * Restore the logger, rebuilding the full path from the current backup temp dir if it was stored as relative.
++     *
++     * @param array $data
++     */
++    public function __unserialize(array $data): void {
++        $this->level = $data['level'];
++        $this->showdate = $data['showdate'];
++        $this->showlevel = $data['showlevel'];
++        $this->next = $data['next'];
++        $this->fullpath = $data['fullpath'];
++        $this->__wakeup();
++    }
++
++    public function __wakeup() {
++        if (!empty($this->fullpath)) {
++            $isabsolute = preg_match('~^(/|\\\\|[A-Za-z]:[/\\\\])~', $this->fullpath);
++            if (!$isabsolute) {
++                // Relative path: rebuild it using the current backup temp dir.
++                $this->fullpath = make_backup_temp_directory('') . '/' . basename($this->fullpath);
++            } else if (!file_exists(dirname($this->fullpath))) {
++                // If the stored path no longer exists, reconstruct it using the current backup temp dir.
++                $this->fullpath = make_backup_temp_directory('') . '/' . basename($this->fullpath);
++            }
+         }
+ 
+         if ($this->level > backup::LOG_NONE) { // Only create the file if we are going to log something

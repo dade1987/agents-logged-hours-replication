@@ -1,0 +1,103 @@
+diff --git a/public/search/engine/simpledb/classes/engine.php b/public/search/engine/simpledb/classes/engine.php
+index e2ab53558c2..0b7e06fdfbf 100644
+--- a/public/search/engine/simpledb/classes/engine.php
++++ b/public/search/engine/simpledb/classes/engine.php
+@@ -130,27 +130,48 @@ class engine extends \core_search\engine {
+         if (!empty($filters->q)) {
+             switch ($DB->get_dbfamily()) {
+                 case 'postgres':
++                    $terms = $this->get_search_terms($filters->q);
++                    if ($terms) {
++                        // Prefix matching of every term (AND).
++                        $tsquery = implode(' & ', array_map(function($term) {
++                            return "'" . $term . "':*";
++                        }, $terms));
++                        $fn = "to_tsquery('simple', ?)";
++                        $queryparam = $tsquery;
++                    } else {
++                        $fn = "plainto_tsquery('simple', ?)";
++                        $queryparam = $filters->q;
++                    }
+                     $ands[] = "(" .
+-                        "to_tsvector('simple', title) @@ plainto_tsquery('simple', ?) OR ".
+-                        "to_tsvector('simple', content) @@ plainto_tsquery('simple', ?) OR ".
+-                        "to_tsvector('simple', description1) @@ plainto_tsquery('simple', ?) OR ".
+-                        "to_tsvector('simple', description2) @@ plainto_tsquery('simple', ?)".
++                        "to_tsvector('simple', title) @@ $fn OR ".
++                        "to_tsvector('simple', content) @@ $fn OR ".
++                        "to_tsvector('simple', description1) @@ $fn OR ".
++                        "to_tsvector('simple', description2) @@ $fn".
+                         ")";
+-                    $params[] = $filters->q;
+-                    $params[] = $filters->q;
+-                    $params[] = $filters->q;
+-                    $params[] = $filters->q;
++                    $params[] = $queryparam;
++                    $params[] = $queryparam;
++                    $params[] = $queryparam;
++                    $params[] = $queryparam;
+                     break;
+                 case 'mysql':
+                     if ($DB->is_fulltext_search_supported()) {
+-                        $ands[] = "MATCH (title, content, description1, description2) AGAINST (?)";
+-                        $params[] = $filters->q;
+-
+                         // Sorry for the hack, but it does not seem that we will have a solution for
+                         // this soon (https://bugs.mysql.com/bug.php?id=78485).
+                         if ($filters->q === '*') {
+                             return array();
+                         }
++
++                        $terms = $this->get_search_terms($filters->q);
++                        if ($terms) {
++                            // All terms are required and match the start of words.
++                            $ands[] = "MATCH (title, content, description1, description2) AGAINST (? IN BOOLEAN MODE)";
++                            $params[] = implode(' ', array_map(function($term) {
++                                return '+' . $term . '*';
++                            }, $terms));
++                        } else {
++                            $ands[] = "MATCH (title, content, description1, description2) AGAINST (?)";
++                            $params[] = $filters->q;
++                        }
+                     } else {
+                         // Clumsy version for mysql versions with no fulltext support.
+                         list($queryand, $queryparams) = $this->get_simple_query($filters->q);
+@@ -161,10 +182,16 @@ class engine extends \core_search\engine {
+                 case 'mssql':
+                     if ($DB->is_fulltext_search_supported()) {
+                         $ands[] = "CONTAINS ((title, content, description1, description2), ?)";
+-                        // Special treatment for double quotes:
+-                        // - Puntuation is ignored so we can get rid of them.
+-                        // - Phrases should be enclosed in double quotation marks.
+-                        $params[] = '"' . str_replace('"', '', $filters->q) . '"';
++                        $terms = $this->get_search_terms($filters->q);
++                        if ($terms) {
++                            // All terms are required and match the start of words.
++                            $params[] = implode(' AND ', array_map(function($term) {
++                                return '"' . $term . '*"';
++                            }, $terms));
++                        } else {
++                            // Puntuation is ignored so we can get rid of double quotes.
++                            $params[] = '"' . str_replace('"', '', $filters->q) . '"';
++                        }
+                     } else {
+                         // Clumsy version for mysql versions with no fulltext support.
+                         list($queryand, $queryparams) = $this->get_simple_query($filters->q);
+@@ -331,6 +358,17 @@ class engine extends \core_search\engine {
+         return $this->totalresults;
+     }
+ 
++    /**
++     * Splits a query string into safe search terms (letters, numbers and underscores only).
++     *
++     * @param string $q The query string
++     * @return string[] The list of terms
++     */
++    protected function get_search_terms(string $q): array {
++        $terms = preg_split('/[^\p{L}\p{N}_]+/u', $q, -1, PREG_SPLIT_NO_EMPTY);
++        return $terms === false ? [] : $terms;
++    }
++
+     /**
+      * Returns the default query for db engines.
+      *

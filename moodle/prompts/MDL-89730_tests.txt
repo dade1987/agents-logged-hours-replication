@@ -1,0 +1,31 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You CAN run Moodle's existing PHPUnit tests: `cd {WS} && vendor/bin/phpunit <path/to/some_test.php>` (the test environment is already initialised). You may also run `php -l <file>` and read code with grep/find/cat. Use absolute paths starting with {WS} in every command.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-89730: Quiz creation and updates trigger warnings when duedate is omitted
+
+To replicate:
+
+# Download MCP Quiz Creator v1.3.0 ([https://github.com/Sergio-Oracle/moodle-local-mcp-quiz/releases/tag/v1.3.0|https://github.com/Sergio-Oracle/moodle-local-mcp-quiz/releases/tag/v1.3.0]) and
+extract it into *public/local/mcp_quiz*
+# Delete *public/local/mcp_quiz/db/install.xml* (this release contains an invalid empty schema file that prevents installation)
+# Navigate to “Site administration” > “Notifications” and complete the installation
+# Create a course and note its ID
+# Navigate to “Development” > “Debugging” and set debug messages to “DEVELOPER”
+# Enable Web services under Advanced features, then enable REST (under “Server” > “Web services” > “Manage protocols”)
+## Under “Manage tokens”, create a token for the administrator and MCP Quiz Service (take note of the token)
+# Run this command:
+{noformat}curl -sS '[YOUR SITE]/webservice/rest/server.php' \
+  --data-urlencode 'wstoken=[TOKEN]' \
+  --data-urlencode 'wsfunction=local_mcp_quiz_créer_quiz' \
+  --data 'moodlewsrestformat=json' \
+  --data 'courseid=COURSE_ID' \
+  --data-urlencode 'name=Missing duedate reproduction'{noformat}
+# Check the PHP error log and see: {{PHP Warning: Undefined property: stdClass::$duedate in .../public/mod/quiz/lib.php on line 1235}}
+
+The same issue affects [qtype_stack|https://github.com/maths/moodle-qtype_stack] but it’s more annoying to reproduce. Probably other third party plugins are affected too.

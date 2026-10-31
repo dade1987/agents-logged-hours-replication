@@ -1,0 +1,237 @@
+diff --git a/.upgradenotes/MDL-89726-2026102612000000.yml b/.upgradenotes/MDL-89726-2026102612000000.yml
+new file mode 100644
+index 00000000000..691d0e10f4a
+--- /dev/null
++++ b/.upgradenotes/MDL-89726-2026102612000000.yml
+@@ -0,0 +1,14 @@
++issueNumber: MDL-89726
++notes:
++  core:
++    - message: >-
++        A new `get_preload_urls()` method has been added to
++        `\core\output\requirements\import_map`. It returns the URL of each
++        concrete (non-prefix) import map entry for the active theme, and
++        `\core\output\requirements\page_requirements_manager::get_import_map()`
++        now emits a `<link rel="modulepreload">` tag for each of these entries
++        immediately after the `importmap` script tag so that the browser can
++        start fetching foundational ES module dependencies (`react`,
++        `react-dom`, `tabbable`, `bootstrap`, and the active theme's design
++        system bundle) in parallel with page parsing.
++      type: added
+diff --git a/public/lib/classes/output/requirements/import_map.php b/public/lib/classes/output/requirements/import_map.php
+index 7c1b1e5f69b..f96922c5c82 100644
+--- a/public/lib/classes/output/requirements/import_map.php
++++ b/public/lib/classes/output/requirements/import_map.php
+@@ -123,6 +123,45 @@ class import_map implements \JsonSerializable {
+         return $importmap;
+     }
+ 
++    /**
++     * Get the list of URLs which should be preloaded as modules.
++     *
++     * Only concrete (non-prefix) import map entries are returned, that is entries whose specifier does not
++     * end with a trailing slash (for example `react`, `react-dom`, `tabbable`, `bootstrap`, and the design
++     * system bundle). Prefix entries (for example `@moodle/lms/` or `react/`) cannot be preloaded because they
++     * do not resolve to a single module.
++     *
++     * For themable entries only the URL for the current theme is returned, not the dedicated per-theme entries.
++     *
++     * The resulting URLs are intended to be emitted as `<link rel="modulepreload">` tags *after* the import map
++     * so that the browser can start fetching these foundational dependencies in parallel with page parsing rather
++     * than only discovering them one import-graph level at a time.
++     *
++     * @return string[] The list of URLs to preload, keyed by specifier.
++     */
++    public function get_preload_urls(): array {
++        if (!isset($this->loader)) {
++            throw new \core\exception\coding_exception('Default loader URL must be set before fetching preload URLs.');
++        }
++
++        $urls = [];
++        foreach ($this->imports as $specifier => $importdata) {
++            if (str_ends_with($specifier, '/')) {
++                // Prefix entries do not resolve to a single module and cannot be preloaded.
++                continue;
++            }
++
++            if ($importdata->themable) {
++                $currenttheme = $this->currenttheme ? "/theme-{$this->currenttheme}" : '';
++                $urls[$specifier] = $this->loader_url_for($importdata, "{$specifier}{$currenttheme}");
++            } else {
++                $urls[$specifier] = $this->loader_url_for($importdata, $specifier);
++            }
++        }
++
++        return $urls;
++    }
++
+     /**
+      * Set the list of available themes by name.
+      *
+diff --git a/public/lib/classes/output/requirements/page_requirements_manager.php b/public/lib/classes/output/requirements/page_requirements_manager.php
+index f13039d2d28..209f6097d97 100644
+--- a/public/lib/classes/output/requirements/page_requirements_manager.php
++++ b/public/lib/classes/output/requirements/page_requirements_manager.php
+@@ -1044,6 +1044,15 @@ class page_requirements_manager {
+     /**
+      * Returns the import map script tag for React platform files.
+      *
++     * The import map script tag is followed by a `<link rel="modulepreload">` tag for each concrete,
++     * active-theme import map entry (for example `react`, `react-dom`, `tabbable`, `bootstrap`, and the
++     * active theme's design system bundle). This allows the browser to start fetching these foundational
++     * dependencies in parallel with page parsing, instead of discovering them one import-graph level at a time.
++     *
++     * Note: The modulepreload links must be emitted *after* the importmap script tag. Browsers only honour an
++     * import map for bare-specifier resolution if it is registered before the first module-related resource
++     * is processed.
++     *
+      * @return string
+      */
+     public function get_import_map(moodle_page $page): string {
+@@ -1063,7 +1072,7 @@ class page_requirements_manager {
+         $themes = core_component::get_all_plugins_list('theme');
+         $importmap->set_available_themes(array_keys($themes));
+ 
+-        return html_writer::tag(
++        $output = html_writer::tag(
+             'script',
+             json_encode(
+                 $importmap,
+@@ -1071,6 +1080,18 @@ class page_requirements_manager {
+             ),
+             ['type' => 'importmap'],
+         );
++
++        // Preload the concrete import map entries for the active theme.
++        // These must come after the import map so that the browser has registered it before processing any
++        // module-related resource.
++        foreach ($importmap->get_preload_urls() as $url) {
++            $output .= "\n" . html_writer::empty_tag('link', [
++                'rel' => 'modulepreload',
++                'href' => $url,
++            ]);
++        }
++
++        return $output;
+     }
+ 
+     /**
+diff --git a/public/lib/tests/output/requirements/import_map_test.php b/public/lib/tests/output/requirements/import_map_test.php
+index a69e8d0abd6..b77f75e0287 100644
+--- a/public/lib/tests/output/requirements/import_map_test.php
++++ b/public/lib/tests/output/requirements/import_map_test.php
+@@ -720,4 +720,66 @@ final class import_map_test extends \advanced_testcase {
+ 
+         $this->assertEquals($expectedpath, $map->get_path_for_script(-1, $requestedpath));
+     }
++
++    /**
++     * get_preload_urls() throws a coding_exception when no default loader has been set.
++     */
++    public function test_get_preload_urls_throws_without_loader(): void {
++        $this->expectException(\core\exception\coding_exception::class);
++        (\core\di::get(import_map::class))->get_preload_urls();
++    }
++
++    /**
++     * get_preload_urls() only returns concrete (non-prefix) entries, resolving themable entries to the current theme.
++     */
++    public function test_get_preload_urls_returns_concrete_entries_only(): void {
++        $map = \core\di::get(import_map::class);
++        $map->set_default_loader(new \core\url('https://example.com/esm/12345/'));
++        $map->set_current_theme('boost');
++        $map->set_available_themes(['boost', 'mytheme']);
++        $map->add_import('my-explicit', loader: new \core\url('https://cdn.example.com/my-explicit.js'));
++
++        $urls = $map->get_preload_urls();
++
++        // Standard concrete entries are preloaded.
++        $this->assertEquals('https://example.com/esm/12345/react', $urls['react']);
++        $this->assertEquals('https://example.com/esm/12345/react-dom', $urls['react-dom']);
++        $this->assertEquals('https://example.com/esm/12345/tabbable', $urls['tabbable']);
++        $this->assertEquals('https://example.com/esm/12345/bootstrap/bootstrap.js', $urls['bootstrap']);
++
++        // Themable concrete entries resolve to the active theme only.
++        $this->assertEquals(
++            'https://example.com/esm/12345/@moodlehq/design-system/theme-boost/index.js',
++            $urls['@moodlehq/design-system'],
++        );
++        $this->assertArrayNotHasKey('@moodlehq/design-system/theme-boost', $urls);
++        $this->assertArrayNotHasKey('@moodlehq/design-system/theme-mytheme', $urls);
++        $this->assertArrayNotHasKey('@moodlehq/design-system/theme-original', $urls);
++
++        // Explicit loaders are used verbatim.
++        $this->assertEquals('https://cdn.example.com/my-explicit.js', $urls['my-explicit']);
++
++        // Prefix entries are never preloaded.
++        foreach (array_keys($urls) as $specifier) {
++            $this->assertStringEndsNotWith('/', $specifier);
++        }
++        $this->assertArrayNotHasKey('@moodle/lms/', $urls);
++        $this->assertArrayNotHasKey('react/', $urls);
++        $this->assertArrayNotHasKey('react-dom/', $urls);
++        $this->assertArrayNotHasKey('bootstrap/', $urls);
++        $this->assertArrayNotHasKey('@popperjs/', $urls);
++        $this->assertArrayNotHasKey('@floating-ui/', $urls);
++    }
++
++    /**
++     * get_preload_urls() does not include a theme sub-path for themable entries when no theme is set.
++     */
++    public function test_get_preload_urls_without_current_theme(): void {
++        $map = \core\di::get(import_map::class);
++        $map->set_default_loader(new \core\url('https://example.com/'));
++
++        $urls = $map->get_preload_urls();
++
++        $this->assertEquals('https://example.com/@moodlehq/design-system/index.js', $urls['@moodlehq/design-system']);
++    }
+ }
+diff --git a/public/lib/tests/outputrequirementslib_test.php b/public/lib/tests/outputrequirementslib_test.php
+index 1acd2fe2b6d..54cdb6e992c 100644
+--- a/public/lib/tests/outputrequirementslib_test.php
++++ b/public/lib/tests/outputrequirementslib_test.php
+@@ -98,6 +98,43 @@ final class outputrequirementslib_test extends \advanced_testcase {
+         $this->assertFalse(strpos($requirecode, '\\'), "Output contains backslashes: " . $requirecode);
+     }
+ 
++    /**
++     * get_import_map() emits the importmap script tag followed by modulepreload links for concrete entries.
++     */
++    public function test_get_import_map_emits_modulepreload_links(): void {
++        $this->resetAfterTest();
++
++        $page = new \moodle_page();
++        $output = $page->requires->get_import_map($page);
++        $themename = $page->theme->name;
++
++        $importmappos = strpos($output, '<script type="importmap">');
++        $this->assertNotFalse($importmappos, "Output does not contain an importmap script tag: {$output}");
++
++        $importmap = \core\di::get(\core\output\requirements\import_map::class);
++        $preloadurls = $importmap->get_preload_urls();
++        $this->assertNotEmpty($preloadurls);
++
++        foreach (['react', 'react-dom', 'tabbable', 'bootstrap', '@moodlehq/design-system'] as $specifier) {
++            $this->assertArrayHasKey($specifier, $preloadurls);
++            $link = '<link rel="modulepreload" href="' . s($preloadurls[$specifier]) . '"';
++            $linkpos = strpos($output, $link);
++            $this->assertNotFalse($linkpos, "Output does not contain modulepreload link for {$specifier}: {$output}");
++            // The modulepreload links must be emitted after the import map.
++            $this->assertGreaterThan($importmappos, $linkpos);
++        }
++
++        // The design system preload must reference the active theme.
++        $this->assertStringContainsString(
++            "@moodlehq/design-system/theme-{$themename}/index.js",
++            $preloadurls['@moodlehq/design-system'],
++        );
++
++        // Prefix entries must never be preloaded.
++        $this->assertStringNotContainsString('<link rel="modulepreload" href="' . s($preloadurls['react']) . '/', $output);
++        $this->assertSame(count($preloadurls), substr_count($output, '<link rel="modulepreload"'));
++    }
++
+     /**
+      * Test AMD modules loading.
+      */

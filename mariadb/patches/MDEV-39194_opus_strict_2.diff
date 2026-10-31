@@ -1,0 +1,66 @@
+diff --git a/mysql-test/main/func_group.result b/mysql-test/main/func_group.result
+index 6c5e3571..44d1b8dd 100644
+--- a/mysql-test/main/func_group.result
++++ b/mysql-test/main/func_group.result
+@@ -2589,4 +2589,20 @@ def					AVG(1)	253	7	7	Y	0	39	8
+ 1	MAX(1)	AVG(1)
+ 1	1	1.00000
+ one	max	avg
++#
++# MDEV-39194 SUM(b'1100') and SUM(DISTINCT b'1100') return different
++#            numeric results for the same BIT literal
++#
++SELECT SUM(b'1100'), SUM(DISTINCT b'1100');
++SUM(b'1100')	SUM(DISTINCT b'1100')
++12	12
++SELECT AVG(b'1100'), AVG(DISTINCT b'1100');
++AVG(b'1100')	AVG(DISTINCT b'1100')
++12.0000	12.0000
++SELECT SUM(0x0C), SUM(DISTINCT 0x0C);
++SUM(0x0C)	SUM(DISTINCT 0x0C)
++12	12
++SELECT SUM(0xFFFFFFFFFFFFFFFF), SUM(DISTINCT 0xFFFFFFFFFFFFFFFF);
++SUM(0xFFFFFFFFFFFFFFFF)	SUM(DISTINCT 0xFFFFFFFFFFFFFFFF)
++18446744073709551615	18446744073709551615
+ # End of 10.11 tests
+diff --git a/mysql-test/main/func_group.test b/mysql-test/main/func_group.test
+index 045ddfeb..654af84b 100644
+--- a/mysql-test/main/func_group.test
++++ b/mysql-test/main/func_group.test
+@@ -1814,4 +1814,14 @@ SELECT 1, MAX(1), AVG(1) UNION ALL SELECT 'one', 'max', 'avg';
+ enable_view_protocol;
+ disable_metadata;
+ 
++
++--echo #
++--echo # MDEV-39194 SUM(b'1100') and SUM(DISTINCT b'1100') return different
++--echo #            numeric results for the same BIT literal
++--echo #
++SELECT SUM(b'1100'), SUM(DISTINCT b'1100');
++SELECT AVG(b'1100'), AVG(DISTINCT b'1100');
++SELECT SUM(0x0C), SUM(DISTINCT 0x0C);
++SELECT SUM(0xFFFFFFFFFFFFFFFF), SUM(DISTINCT 0xFFFFFFFFFFFFFFFF);
++
+ --echo # End of 10.11 tests
+diff --git a/sql/item_sum.cc b/sql/item_sum.cc
+index 0231870b..bc2bbf09 100644
+--- a/sql/item_sum.cc
++++ b/sql/item_sum.cc
+@@ -916,7 +916,16 @@ bool Aggregator_distinct::setup(THD *thd)
+     if (always_null)
+       DBUG_RETURN(FALSE);
+ 
+-    Field *field= arg->type_handler()->
++    /*
++      Use cast_to_int_type_handler() to get the numeric data type that
++      the argument has in numeric context, e.g. hex hybrid literals
++      (0xHHHH, b'BBBB') behave as BIGINT UNSIGNED, and ENUM/SET as BIGINT.
++      This is consistent with what Item_sum_sum::fix_length_and_dec() and
++      Item_sum_avg::fix_length_and_dec() do. Otherwise, a DOUBLE field
++      of a too small precision (based on the argument string length)
++      could be created and the values would be truncated (MDEV-39194).
++    */
++    Field *field= arg->cast_to_int_type_handler()->
+                     make_num_distinct_aggregator_field(thd->mem_root, arg);
+     if (!field || !(table= create_virtual_tmp_table(thd, field)))
+       DBUG_RETURN(TRUE);

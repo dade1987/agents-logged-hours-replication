@@ -1,0 +1,23 @@
+diff --git a/sql/handler.h b/sql/handler.h
+index cb408d1b..1daee3d7 100644
+--- a/sql/handler.h
++++ b/sql/handler.h
+@@ -4114,6 +4114,18 @@ class handler :public Sql_alloc
+     */
+     next_insert_id= (prev_insert_id > 0) ? prev_insert_id :
+       insert_id_for_cur_row;
++    /*
++      If the failed row was the first one drawn from a freshly reserved
++      interval, prev_insert_id is the boundary of an earlier interval. The
++      values between that boundary and auto_inc_interval_for_cur_row may
++      have been handed to (and written by) other sessions, so we must not
++      move the cursor below the interval we currently hold. In that case
++      the failed row's own id (the first value of the current interval) is
++      the correct value to reuse for the next row.
++    */
++    if (prev_insert_id > 0 &&
++        prev_insert_id < auto_inc_interval_for_cur_row.minimum())
++      next_insert_id= insert_id_for_cur_row;
+   }
+ 
+   virtual void update_create_info(HA_CREATE_INFO *create_info) {}

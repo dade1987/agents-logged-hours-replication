@@ -1,0 +1,58 @@
+diff --git a/public/blocks/recentlyaccesseditems/classes/helper.php b/public/blocks/recentlyaccesseditems/classes/helper.php
+index 61e215ca261..95518e62080 100644
+--- a/public/blocks/recentlyaccesseditems/classes/helper.php
++++ b/public/blocks/recentlyaccesseditems/classes/helper.php
+@@ -74,6 +74,11 @@ class helper {
+                 continue;
+             }
+             foreach ($items as $key => $item) {
++                // Exclude items whose course module no longer exists, removing the stale record.
++                if (empty($modinfo->cms[$item->cmid])) {
++                    $DB->delete_records('block_recentlyaccesseditems', ['id' => $item->id]);
++                    continue;
++                }
+                 // Exclude not visible items.
+                 if (!$modinfo->cms[$item->cmid]->uservisible) {
+                     continue;
+diff --git a/public/blocks/recentlyaccesseditems/tests/helper_test.php b/public/blocks/recentlyaccesseditems/tests/helper_test.php
+index 8021fe07118..77f749d2141 100644
+--- a/public/blocks/recentlyaccesseditems/tests/helper_test.php
++++ b/public/blocks/recentlyaccesseditems/tests/helper_test.php
+@@ -57,4 +57,37 @@ final class helper_test extends \advanced_testcase {
+         $recent2 = helper::get_recent_items();
+         self::assertCount(1, $recent2);
+     }
++
++    /**
++     * Tests that the get recent items method ignores and removes records for course modules that no longer exist.
++     */
++    public function test_get_recent_items_missing_cm(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $course = self::getDataGenerator()->create_course();
++        $user = self::getDataGenerator()->create_and_enrol($course, 'student');
++        $forum = self::getDataGenerator()->create_module('forum', ['course' => $course]);
++        self::setUser($user);
++
++        $event = \mod_forum\event\course_module_viewed::create([
++            'context' => \context_module::instance($forum->cmid),
++            'objectid' => $forum->id,
++        ]);
++        $event->trigger();
++
++        // Insert an orphaned row referencing a non-existent course module.
++        $missingcmid = $DB->get_field_sql('SELECT MAX(id) FROM {course_modules}') + 1000;
++        $staleid = $DB->insert_record('block_recentlyaccesseditems', (object) [
++            'courseid' => $course->id,
++            'cmid' => $missingcmid,
++            'userid' => $user->id,
++            'timeaccess' => time() + 10,
++        ]);
++
++        $recent = helper::get_recent_items();
++        $this->assertCount(1, $recent);
++        $this->assertEquals($forum->cmid, reset($recent)->cmid);
++        $this->assertFalse($DB->record_exists('block_recentlyaccesseditems', ['id' => $staleid]));
++    }
+ }

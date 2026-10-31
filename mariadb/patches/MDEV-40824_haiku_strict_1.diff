@@ -1,0 +1,25 @@
+diff --git a/sql/log_event_server.cc b/sql/log_event_server.cc
+index 411b9c6d..eabaf791 100644
+--- a/sql/log_event_server.cc
++++ b/sql/log_event_server.cc
+@@ -7779,9 +7779,18 @@ Write_rows_log_event::write_row(rpl_group_info *rgi,
+     error= update_sequence();
+   else
+   {
++    /*
++      write_record() also runs AFTER INSERT triggers. A trigger failure
++      returns non-zero without setting last_errno(), so fall back to
++      HA_ERR_GENERIC to not silently ignore it.
++    */
+     error= m_write_record->write_record();
+-
+-    DBUG_RETURN(error ? m_write_record->last_errno() : 0);
++    if (error)
++    {
++      int ret_err= m_write_record->last_errno();
++      DBUG_RETURN(ret_err ? ret_err : HA_ERR_GENERIC);
++    }
++    DBUG_RETURN(0);
+   }
+ 
+   if (invoke_triggers && !trg_skip_row &&

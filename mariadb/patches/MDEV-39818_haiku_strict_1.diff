@@ -1,0 +1,22 @@
+diff --git a/storage/innobase/handler/ha_innodb.cc b/storage/innobase/handler/ha_innodb.cc
+index 02649112..44afdc3a 100644
+--- a/storage/innobase/handler/ha_innodb.cc
++++ b/storage/innobase/handler/ha_innodb.cc
+@@ -3501,7 +3501,16 @@ innobase_quote_identifier(
+ 		quoted_identifier.append(id);
+ 	} else {
+ 		quoted_identifier += char(q);
+-		quoted_identifier.append(id);
++
++		/* Escape embedded quote characters by doubling them,
++		so that the result can be parsed back as one identifier. */
++		for (const char* p = id; *p != '\0'; p++) {
++			if (*p == q) {
++				quoted_identifier += char(q);
++			}
++			quoted_identifier += *p;
++		}
++
+ 		quoted_identifier += char(q);
+ 	}
+ 

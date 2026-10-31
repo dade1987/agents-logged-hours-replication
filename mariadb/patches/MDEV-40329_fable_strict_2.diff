@@ -1,0 +1,68 @@
+diff --git a/mysql-test/main/gis.result b/mysql-test/main/gis.result
+index 171803ec..7fe7e12f 100644
+--- a/mysql-test/main/gis.result
++++ b/mysql-test/main/gis.result
+@@ -5613,4 +5613,18 @@ NULL
+ select  glength(x'0000000001050000000100000001020000');
+ glength(x'0000000001050000000100000001020000')
+ NULL
++#
++# MDEV-40329 Binary_string::qs_append(char): Assertion
++# `str_length + (uint32) (1) <= Alloced_length' failed in AsText
++#
++SET @wkb= UNHEX(CONCAT('000000000', REPEAT('107000000010000000', 200),
++'10100000000000000000000000000000000000000'));
++SELECT ST_AsText(@wkb) = CONCAT(REPEAT('GEOMETRYCOLLECTION(', 200),
++'POINT(0 0)', REPEAT(')', 200)) AS oops;
++oops
++1
++SELECT LENGTH(ST_AsText(@wkb));
++LENGTH(ST_AsText(@wkb))
++4010
++
+ # End of 10.6 tests
+diff --git a/mysql-test/main/gis.test b/mysql-test/main/gis.test
+index 4cb51fdc..5f1c5403 100644
+--- a/mysql-test/main/gis.test
++++ b/mysql-test/main/gis.test
+@@ -3583,4 +3583,14 @@ select st_centroid(x'0000000001060000000100000001030000');
+ select  glength(x'0000000001050000000100000001020000');
+ 
+ 
++--echo #
++--echo # MDEV-40329 Binary_string::qs_append(char): Assertion
++--echo # `str_length + (uint32) (1) <= Alloced_length' failed in AsText
++--echo #
++SET @wkb= UNHEX(CONCAT('000000000', REPEAT('107000000010000000', 200),
++                       '10100000000000000000000000000000000000000'));
++SELECT ST_AsText(@wkb) = CONCAT(REPEAT('GEOMETRYCOLLECTION(', 200),
++                                'POINT(0 0)', REPEAT(')', 200)) AS oops;
++SELECT LENGTH(ST_AsText(@wkb));
++
+ --echo # End of 10.6 tests
+diff --git a/sql/spatial.cc b/sql/spatial.cc
+index e3ce5786..1f7a8fe7 100644
+--- a/sql/spatial.cc
++++ b/sql/spatial.cc
+@@ -3494,6 +3494,8 @@ bool Gis_geometry_collection::get_data_as_wkt(String *txt,
+     goto exit;
+   }
+ 
++  if (txt->reserve(1, 512))
++    return 1;
+   txt->qs_append('(');
+   while (n_objects--)
+   {
+@@ -3512,6 +3514,12 @@ bool Gis_geometry_collection::get_data_as_wkt(String *txt,
+     if (n_objects && txt->append(STRING_WITH_LEN(","), 512))
+       return 1;
+   }
++  /*
++    The nested as_wkt() calls above do not guarantee any spare room
++    in the buffer, so reserve space for the closing parenthesis.
++  */
++  if (txt->reserve(1, 512))
++    return 1;
+   txt->qs_append(')');
+ exit:
+   *end= data;

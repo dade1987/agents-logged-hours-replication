@@ -1,0 +1,43 @@
+diff --git a/sql/sql_yacc.yy b/sql/sql_yacc.yy
+index 83f8edd7..2e5c8ff5 100644
+--- a/sql/sql_yacc.yy
++++ b/sql/sql_yacc.yy
+@@ -1629,6 +1629,7 @@ bool my_yyoverflow(short **a, YYSTYPE **b, size_t *yystacksize);
+ %type <item_num>
+         NUM_literal
+         num_or_default
++        heartbeat_period_value
+ 
+ %type <item_basic_constant> text_literal
+ 
+@@ -2423,14 +2424,14 @@ master_def:
+             { mi->master_ssl_crlpath= path; };
+           }
+ 
+-        | MASTER_HEARTBEAT_PERIOD_SYM '=' opt_plus num_or_default
++        | MASTER_HEARTBEAT_PERIOD_SYM '=' heartbeat_period_value
+           {
+-            if ($4)
++            if ($3)
+             {
+               uint32_t milliseconds;
+               bool overprecise;
+               auto decimal_buf= my_decimal(),
+-                  *decimal= $4->val_decimal(&decimal_buf);
++                  *decimal= $3->val_decimal(&decimal_buf);
+               DBUG_ASSERT(decimal);
+               if (Master_info_file::Heartbeat_period_value::from_decimal(
+                 milliseconds, *decimal, overprecise
+@@ -2494,6 +2495,12 @@ num_or_default:
+         | DEFAULT { $$= nullptr; }
+         ;
+ 
++/* A leading '+' is allowed only before a number, not before DEFAULT */
++heartbeat_period_value:
++          num_or_default
++        | '+' NUM_literal { $$= $2; }
++        ;
++
+ ignore_server_id_list:
+           /* Empty */
+           | ignore_server_id

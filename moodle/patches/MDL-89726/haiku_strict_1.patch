@@ -1,0 +1,65 @@
+diff --git a/public/lib/classes/output/requirements/page_requirements_manager.php b/public/lib/classes/output/requirements/page_requirements_manager.php
+index f13039d2d28..89a50707a75 100644
+--- a/public/lib/classes/output/requirements/page_requirements_manager.php
++++ b/public/lib/classes/output/requirements/page_requirements_manager.php
+@@ -1042,8 +1042,29 @@ class page_requirements_manager {
+     }
+ 
+     /**
+-     * Returns the import map script tag for React platform files.
++     * Import map specifiers for the foundational modules that every React platform page depends on.
+      *
++     * A modulepreload link is emitted for each of these (when present in the import map) so that the
++     * browser can fetch them in parallel with page parsing, rather than discovering them one import-graph
++     * level at a time. Themable entries are matched by their bare specifier, which resolves to the
++     * active theme's file.
++     */
++    private const MODULEPRELOAD_SPECIFIERS = [
++        'react',
++        'react-dom',
++        'tabbable',
++        'bootstrap',
++        '@moodlehq/design-system',
++    ];
++
++    /**
++     * Returns the import map script tag for React platform files, followed by modulepreload hints
++     * for the foundational modules listed in MODULEPRELOAD_SPECIFIERS.
++     *
++     * The modulepreload links must follow the importmap script tag: browsers only honour an import map
++     * for bare-specifier resolution if it is registered before the first module-related resource is processed.
++     *
++     * @param moodle_page $page The page being rendered.
+      * @return string
+      */
+     public function get_import_map(moodle_page $page): string {
+@@ -1063,7 +1084,7 @@ class page_requirements_manager {
+         $themes = core_component::get_all_plugins_list('theme');
+         $importmap->set_available_themes(array_keys($themes));
+ 
+-        return html_writer::tag(
++        $output = html_writer::tag(
+             'script',
+             json_encode(
+                 $importmap,
+@@ -1071,6 +1092,20 @@ class page_requirements_manager {
+             ),
+             ['type' => 'importmap'],
+         );
++
++        // Preload the foundational modules, so they download in parallel with the rest of the page.
++        $imports = $importmap->jsonSerialize()['imports'];
++        foreach (self::MODULEPRELOAD_SPECIFIERS as $specifier) {
++            if (!isset($imports[$specifier])) {
++                continue;
++            }
++            $output .= html_writer::empty_tag('link', [
++                'rel' => 'modulepreload',
++                'href' => $imports[$specifier],
++            ]);
++        }
++
++        return $output;
+     }
+ 
+     /**

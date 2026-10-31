@@ -1,0 +1,116 @@
+diff --git a/mysql-test/main/partition_range_interval.result b/mysql-test/main/partition_range_interval.result
+index 6f7abf6d..c36eeffb 100644
+--- a/mysql-test/main/partition_range_interval.result
++++ b/mysql-test/main/partition_range_interval.result
+@@ -2557,3 +2557,29 @@ INTERVAL "hello" DAY
+ PARTITION p0 VALUES LESS THAN ('2026-04-20')
+ );
+ ERROR HY000: Wrong parameters for partitioned `t1`: wrong value for 'INTERVAL'
++#
++# MDEV-40978 PREPARE with INTERVAL ? in Partition DDL Crashes the Server
++#
++PREPARE s FROM 'CREATE TABLE t1 (c DATE)
++  PARTITION BY RANGE COLUMNS(c)
++  INTERVAL ? DAY
++  (PARTITION p0 VALUES LESS THAN (?))';
++ERROR HY000: Wrong parameters for partitioned `t1`: wrong value for 'INTERVAL'
++PREPARE s FROM 'CREATE TABLE t1 (c DATE)
++  PARTITION BY RANGE COLUMNS(c)
++  INTERVAL (? + 1) DAY
++  (PARTITION p0 VALUES LESS THAN (\'2026-04-20\'))';
++ERROR HY000: Wrong parameters for partitioned `t1`: wrong value for 'INTERVAL'
++PREPARE s FROM 'CREATE TABLE t1 (x INT) WITH SYSTEM VERSIONING
++  PARTITION BY SYSTEM_TIME INTERVAL ? HOUR PARTITIONS 3';
++ERROR HY000: Wrong parameters for partitioned `t1`: wrong value for 'INTERVAL'
++CREATE PROCEDURE p1()
++BEGIN
++  DECLARE v INT DEFAULT 1;
++  CREATE TABLE t1 (c DATE)
++    PARTITION BY RANGE COLUMNS(c)
++    INTERVAL v DAY
++    (PARTITION p0 VALUES LESS THAN ('2026-04-20'));
++END;
++$$
++ERROR HY000: Wrong parameters for partitioned `t1`: wrong value for 'INTERVAL'
+diff --git a/mysql-test/main/partition_range_interval.test b/mysql-test/main/partition_range_interval.test
+index df2e0b49..f7eb85b7 100644
+--- a/mysql-test/main/partition_range_interval.test
++++ b/mysql-test/main/partition_range_interval.test
+@@ -1041,3 +1041,36 @@ INTERVAL "hello" DAY
+ (
+ PARTITION p0 VALUES LESS THAN ('2026-04-20')
+ );
++
++--echo #
++--echo # MDEV-40978 PREPARE with INTERVAL ? in Partition DDL Crashes the Server
++--echo #
++--error ER_PART_WRONG_VALUE
++PREPARE s FROM 'CREATE TABLE t1 (c DATE)
++  PARTITION BY RANGE COLUMNS(c)
++  INTERVAL ? DAY
++  (PARTITION p0 VALUES LESS THAN (?))';
++
++--error ER_PART_WRONG_VALUE
++PREPARE s FROM 'CREATE TABLE t1 (c DATE)
++  PARTITION BY RANGE COLUMNS(c)
++  INTERVAL (? + 1) DAY
++  (PARTITION p0 VALUES LESS THAN (\'2026-04-20\'))';
++
++--error ER_PART_WRONG_VALUE
++PREPARE s FROM 'CREATE TABLE t1 (x INT) WITH SYSTEM VERSIONING
++  PARTITION BY SYSTEM_TIME INTERVAL ? HOUR PARTITIONS 3';
++
++--delimiter $$
++--error ER_PART_WRONG_VALUE
++CREATE PROCEDURE p1()
++BEGIN
++  DECLARE v INT DEFAULT 1;
++  CREATE TABLE t1 (c DATE)
++    PARTITION BY RANGE COLUMNS(c)
++    INTERVAL v DAY
++    (PARTITION p0 VALUES LESS THAN ('2026-04-20'));
++END;
++$$
++--delimiter ;
++
+diff --git a/sql/partition_info.cc b/sql/partition_info.cc
+index d1f85e26..11dee03b 100644
+--- a/sql/partition_info.cc
++++ b/sql/partition_info.cc
+@@ -2826,6 +2826,15 @@ bool partition_info::vers_set_interval(THD* thd, Item* interval,
+   vers_info->auto_hist= auto_hist;
+ 
+   /* 1. assign INTERVAL to interval.step */
++  /*
++    The interval value is evaluated at parse time, so it must not depend
++    on prepared statement parameters or SP variables (MDEV-40978).
++  */
++  if (interval->with_param() || interval->with_sp_var())
++  {
++    my_error(ER_PART_WRONG_VALUE, MYF(0), table_name, "INTERVAL");
++    return true;
++  }
+   if (interval->fix_fields_if_needed_for_scalar(thd, &interval))
+     return true;
+   bool error= get_interval_value(thd, interval, int_type, &vers_info->interval.step) ||
+diff --git a/sql/sql_partition_auto_interval.cc b/sql/sql_partition_auto_interval.cc
+index 2f599e64..d01b7bd5 100644
+--- a/sql/sql_partition_auto_interval.cc
++++ b/sql/sql_partition_auto_interval.cc
+@@ -402,6 +402,16 @@ bool partition_info::set_range_interval(THD* thd, Item* ival,
+                                         interval_type type,
+                                         const char *table_name)
+ {
++  /*
++    The interval value is evaluated at parse time, so it must not depend
++    on prepared statement parameters or SP variables, which have no value
++    yet (MDEV-40978).
++  */
++  if (ival->with_param() || ival->with_sp_var())
++  {
++    my_error(ER_PART_WRONG_VALUE, MYF(0), table_name, "INTERVAL");
++    return true;
++  }
+   if (ival->fix_fields_if_needed_for_scalar(thd, &ival))
+     return true;
+   bool error= get_interval_value(thd, ival, type, &interval) ||

@@ -1,0 +1,25 @@
+diff --git a/storage/innobase/row/row0sel.cc b/storage/innobase/row/row0sel.cc
+index f56810e9..f955c014 100644
+--- a/storage/innobase/row/row0sel.cc
++++ b/storage/innobase/row/row0sel.cc
+@@ -1249,6 +1249,11 @@ sel_set_rtr_rec_lock(
+ 		match->matched_recs->clear();
+ 		// FIXME: check for !cur_block
+ 
++		/* rtr_cur_search_with_match() may invoke rtr_init_match(),
++		which reinitializes match->block by buf_page_t::init().
++		That requires the shadow block to be unlatched. */
++		match->block->page.lock.x_unlock();
++
+ 		rtr_cur_search_with_match(
+ 			cur_block, index,
+ 			pcur->btr_cur.rtr_info->search_tuple,
+@@ -1256,6 +1261,8 @@ sel_set_rtr_rec_lock(
+ 			&pcur->btr_cur.page_cur,
+ 			pcur->btr_cur.rtr_info);
+ 
++		match->block->page.lock.x_lock();
++
+ 		if (!page_is_leaf(buf_block_get_frame(cur_block))) {
+ 			/* Page got splitted and promoted (only for
+ 			root page it is possible).  Release the

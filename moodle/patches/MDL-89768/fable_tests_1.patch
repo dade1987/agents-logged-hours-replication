@@ -1,0 +1,321 @@
+diff --git a/.upgradenotes/MDL-89768-2026102612000000.yml b/.upgradenotes/MDL-89768-2026102612000000.yml
+new file mode 100644
+index 00000000000..797526fa090
+--- /dev/null
++++ b/.upgradenotes/MDL-89768-2026102612000000.yml
+@@ -0,0 +1,12 @@
++issueNumber: MDL-89768
++notes:
++  mod_wiki:
++    - message: >-
++        The external functions `mod_wiki_get_subwikis`, `mod_wiki_get_subwiki_pages`
++        and `mod_wiki_get_page_contents` now return a new `cancreatepages` field
++        indicating whether the current user can create new pages in the subwiki
++        (requires both `mod/wiki:editpage` and `mod/wiki:createpage`).
++        The external function `mod_wiki_new_page` now enforces the
++        `mod/wiki:createpage` capability and throws a `nocreatepermission`
++        exception when the user does not have it.
++      type: changed
+diff --git a/public/mod/wiki/classes/external.php b/public/mod/wiki/classes/external.php
+index ec0f9e72a74..2596f24e445 100644
+--- a/public/mod/wiki/classes/external.php
++++ b/public/mod/wiki/classes/external.php
+@@ -353,8 +353,10 @@ class mod_wiki_external extends external_api {
+         require_capability('mod/wiki:viewpage', $context);
+ 
+         $returnedsubwikis = wiki_get_visible_subwikis($wiki, $cm, $context);
++        $cancreatepages = wiki_can_create_pages($context);
+         foreach ($returnedsubwikis as $subwiki) {
+             $subwiki->canedit = wiki_user_can_edit($subwiki);
++            $subwiki->cancreatepages = $subwiki->canedit && $cancreatepages;
+         }
+ 
+         $result = array();
+@@ -380,6 +382,8 @@ class mod_wiki_external extends external_api {
+                             'groupid' => new external_value(PARAM_RAW, 'Group ID.'),
+                             'userid' => new external_value(PARAM_INT, 'User ID.'),
+                             'canedit' => new external_value(PARAM_BOOL, 'True if user can edit the subwiki.'),
++                            'cancreatepages' => new external_value(PARAM_BOOL, 'True if user can create pages in the subwiki.',
++                                VALUE_OPTIONAL),
+                         ), 'Subwikis'
+                     )
+                 ),
+@@ -471,6 +475,7 @@ class mod_wiki_external extends external_api {
+ 
+             $pages = wiki_get_page_list($subwiki->id, $sort);
+             $caneditpages = wiki_user_can_edit($subwiki);
++            $cancreatepages = $caneditpages && wiki_can_create_pages($context);
+             $firstpage = wiki_get_first_page($subwiki->id);
+ 
+             foreach ($pages as $page) {
+@@ -485,6 +490,7 @@ class mod_wiki_external extends external_api {
+                         'pageviews' => $page->pageviews,
+                         'readonly' => $page->readonly,
+                         'caneditpage' => $caneditpages,
++                        'cancreatepages' => $cancreatepages,
+                         'firstpage' => $page->id == $firstpage->id,
+                         'tags' => \core_tag\external\util::get_item_tags('mod_wiki', 'wiki_pages', $page->id),
+                     );
+@@ -546,6 +552,8 @@ class mod_wiki_external extends external_api {
+                             'pageviews' => new external_value(PARAM_INT, 'Number of times the page has been viewed.'),
+                             'readonly' => new external_value(PARAM_INT, '1 if readonly, 0 otherwise.'),
+                             'caneditpage' => new external_value(PARAM_BOOL, 'True if user can edit the page.'),
++                            'cancreatepages' => new external_value(PARAM_BOOL, 'True if user can create pages in the subwiki.',
++                                VALUE_OPTIONAL),
+                             'firstpage' => new external_value(PARAM_BOOL, 'True if it\'s the first page.'),
+                             'cachedcontent' => new external_value(PARAM_RAW, 'Page contents.', VALUE_OPTIONAL),
+                             'contentformat' => new external_format_value('cachedcontent', VALUE_OPTIONAL),
+@@ -640,6 +648,7 @@ class mod_wiki_external extends external_api {
+             $subwiki->id
+         );
+         $returnedpage['caneditpage'] = wiki_user_can_edit($subwiki);
++        $returnedpage['cancreatepages'] = $returnedpage['caneditpage'] && wiki_can_create_pages($context);
+ 
+         // Get page version.
+         $version = wiki_get_current_version($page->id);
+@@ -673,6 +682,8 @@ class mod_wiki_external extends external_api {
+                         'cachedcontent' => new external_value(PARAM_RAW, 'Page contents.'),
+                         'contentformat' => new external_format_value('cachedcontent', VALUE_OPTIONAL),
+                         'caneditpage' => new external_value(PARAM_BOOL, 'True if user can edit the page.'),
++                        'cancreatepages' => new external_value(PARAM_BOOL, 'True if user can create pages in the subwiki.',
++                            VALUE_OPTIONAL),
+                         'version' => new external_value(PARAM_INT, 'Latest version of the page.', VALUE_OPTIONAL),
+                         'tags' => new external_multiple_structure(
+                             \core_tag\external\tag_item_exporter::get_read_structure(), 'Tags', VALUE_OPTIONAL
+@@ -1013,6 +1024,9 @@ class mod_wiki_external extends external_api {
+                 if (!wiki_user_can_edit($subwiki)) {
+                     throw new moodle_exception('cannoteditpage', 'wiki');
+                 }
++                if (!wiki_can_create_pages($context)) {
++                    throw new moodle_exception('nocreatepermission', 'wiki');
++                }
+ 
+                 // Subwiki does not exists and it can be created.
+                 $swid = wiki_add_subwiki($wiki->id, $groupid, $userid);
+@@ -1027,6 +1041,11 @@ class mod_wiki_external extends external_api {
+             throw new moodle_exception('cannoteditpage', 'wiki');
+         }
+ 
++        // The user also needs the capability to create new pages.
++        if (!wiki_can_create_pages($context)) {
++            throw new moodle_exception('nocreatepermission', 'wiki');
++        }
++
+         if ($page = wiki_get_page_by_title($subwiki->id, $params['title'])) {
+             throw new moodle_exception('pageexists', 'wiki');
+         }
+diff --git a/public/mod/wiki/tests/externallib_test.php b/public/mod/wiki/tests/externallib_test.php
+index 93ba3f73af1..8303396fb7f 100644
+--- a/public/mod/wiki/tests/externallib_test.php
++++ b/public/mod/wiki/tests/externallib_test.php
+@@ -540,7 +540,8 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+                 'wikiid' => $this->wiki->id,
+                 'groupid' => 0,
+                 'userid' => 0,
+-                'canedit' => true
++                'canedit' => true,
++                'cancreatepages' => true,
+             );
+         $expectedsubwikis[] = $expectedsubwiki;
+ 
+@@ -710,6 +711,7 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+         $expectedpages = array();
+         $expectedfirstpage = (array) $this->firstpage;
+         $expectedfirstpage['caneditpage'] = true; // No groups and students have 'mod/wiki:editpage' capability.
++        $expectedfirstpage['cancreatepages'] = true;
+         $expectedfirstpage['firstpage'] = true;
+         $expectedfirstpage['contentformat'] = 1;
+         $expectedfirstpage['tags'] = \core_tag\external\util::get_item_tags('mod_wiki', 'wiki_pages', $this->firstpage->id);
+@@ -738,6 +740,7 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+ 
+         $expectednewpage = (array) $newpage;
+         $expectednewpage['caneditpage'] = true; // No groups and students have 'mod/wiki:editpage' capability.
++        $expectednewpage['cancreatepages'] = true;
+         $expectednewpage['firstpage'] = false;
+         $expectednewpage['contentformat'] = 1;
+         $expectednewpage['tags'] = array();
+@@ -787,6 +790,7 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+         // Check that teacher can get his pages.
+         $expectedteacherpage = (array) $indfirstpageteacher;
+         $expectedteacherpage['caneditpage'] = true;
++        $expectedteacherpage['cancreatepages'] = true;
+         $expectedteacherpage['firstpage'] = true;
+         $expectedteacherpage['contentformat'] = 1;
+         $expectedteacherpage['tags'] = array();
+@@ -799,6 +803,7 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+         // Check that the teacher can see the student's pages.
+         $expectedstudentpage = (array) $indfirstpagestudent;
+         $expectedstudentpage['caneditpage'] = true;
++        $expectedstudentpage['cancreatepages'] = true;
+         $expectedstudentpage['firstpage'] = true;
+         $expectedstudentpage['contentformat'] = 1;
+         $expectedstudentpage['tags'] = array();
+@@ -835,6 +840,7 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+ 
+         $expectedpage = (array) $this->fpsepg1;
+         $expectedpage['caneditpage'] = true; // User belongs to group and has 'mod/wiki:editpage' capability.
++        $expectedpage['cancreatepages'] = true;
+         $expectedpage['firstpage'] = true;
+         $expectedpage['contentformat'] = 1;
+         $expectedpage['tags'] = array();
+@@ -858,6 +864,7 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+         // Check that teacher can get the pages from all participants.
+         $expectedpage = (array) $this->fpsepall;
+         $expectedpage['caneditpage'] = true;
++        $expectedpage['cancreatepages'] = true;
+         $expectedpage['firstpage'] = true;
+         $expectedpage['contentformat'] = 1;
+         $expectedpage['tags'] = array();
+@@ -882,6 +889,7 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+ 
+         $expectedpage = (array) $this->fpvisg1;
+         $expectedpage['caneditpage'] = true; // User belongs to group and has 'mod/wiki:editpage' capability.
++        $expectedpage['cancreatepages'] = true;
+         $expectedpage['firstpage'] = true;
+         $expectedpage['contentformat'] = 1;
+         $expectedpage['tags'] = array();
+@@ -894,6 +902,7 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+         // Check that with visible groups a student can get the pages of groups he doesn't belong to.
+         $expectedpage = (array) $this->fpvisg2;
+         $expectedpage['caneditpage'] = false; // User doesn't belong to group so he can't edit the page.
++        $expectedpage['cancreatepages'] = false;
+         $expectedpage['firstpage'] = true;
+         $expectedpage['contentformat'] = 1;
+         $expectedpage['tags'] = array();
+@@ -906,6 +915,7 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+         // Check that with visible groups a student can get the pages of all participants.
+         $expectedpage = (array) $this->fpvisall;
+         $expectedpage['caneditpage'] = false;
++        $expectedpage['cancreatepages'] = false;
+         $expectedpage['firstpage'] = true;
+         $expectedpage['contentformat'] = 1;
+         $expectedpage['tags'] = array();
+@@ -929,6 +939,7 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+         // Check that student can retrieve his pages from separate wiki.
+         $expectedpage = (array) $this->fpsepg1indstu;
+         $expectedpage['caneditpage'] = true;
++        $expectedpage['cancreatepages'] = true;
+         $expectedpage['firstpage'] = true;
+         $expectedpage['contentformat'] = 1;
+         $expectedpage['tags'] = array();
+@@ -953,6 +964,7 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+         $this->setUser($this->student);
+         $expectedpage = (array) $this->fpsepg1indstu2;
+         $expectedpage['caneditpage'] = false;
++        $expectedpage['cancreatepages'] = false;
+         $expectedpage['firstpage'] = true;
+         $expectedpage['contentformat'] = 1;
+         $expectedpage['tags'] = array();
+@@ -976,6 +988,7 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+         // Check that student can retrieve his pages from visible wiki.
+         $expectedpage = (array) $this->fpvisg1indstu;
+         $expectedpage['caneditpage'] = true;
++        $expectedpage['cancreatepages'] = true;
+         $expectedpage['firstpage'] = true;
+         $expectedpage['contentformat'] = 1;
+         $expectedpage['tags'] = array();
+@@ -988,6 +1001,7 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+         // Check that student can see teacher pages in visible groups, even if the user doesn't belong to the group.
+         $expectedpage = (array) $this->fpvisg2indt;
+         $expectedpage['caneditpage'] = false;
++        $expectedpage['cancreatepages'] = false;
+         $expectedpage['firstpage'] = true;
+         $expectedpage['contentformat'] = 1;
+         $expectedpage['tags'] = array();
+@@ -1000,6 +1014,7 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+         // Check that with visible groups a student can get the pages of all participants.
+         $expectedpage = (array) $this->fpvisallindt;
+         $expectedpage['caneditpage'] = false;
++        $expectedpage['cancreatepages'] = false;
+         $expectedpage['firstpage'] = true;
+         $expectedpage['contentformat'] = 1;
+         $expectedpage['tags'] = array();
+@@ -1091,6 +1106,7 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+             'cachedcontent' => $this->firstpage->cachedcontent,
+             'contentformat' => 1,
+             'caneditpage' => true,
++            'cancreatepages' => true,
+             'version' => 1,
+             'tags' => \core_tag\external\util::get_item_tags('mod_wiki', 'wiki_pages', $this->firstpage->id),
+         );
+@@ -1137,6 +1153,7 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+             'cachedcontent' => $this->fpsepg1indstu->cachedcontent,
+             'contentformat' => 1,
+             'caneditpage' => true,
++            'cancreatepages' => true,
+             'version' => 1,
+             'tags' => array(),
+         );
+@@ -1442,6 +1459,72 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+ 
+     }
+ 
++    /**
++     * Test new_page when the user has mod/wiki:editpage but not mod/wiki:createpage.
++     */
++    public function test_new_page_without_createpage_capability(): void {
++        global $DB;
++
++        $this->create_individual_wikis_with_groups();
++        // Add student to group2 so a new subwiki could be created for it.
++        $this->getDataGenerator()->create_group_member(['userid' => $this->student->id, 'groupid' => $this->group2->id]);
++        $this->setUser($this->student);
++
++        $pagetitle = 'Page Title';
++        $pagecontent = '<h1>Title1</h1>Text inside section';
++
++        // Prohibit page creation for the student role in the wiki context (students have it by default).
++        $wikicontext = \context_module::instance($this->wikisepind->cmid);
++        assign_capability('mod/wiki:createpage', CAP_PROHIBIT, $this->studentrole->id, $wikicontext->id);
++        accesslib_clear_all_caches_for_unit_testing();
++
++        // The student can still edit pages.
++        $this->assertTrue(has_capability('mod/wiki:editpage', $wikicontext));
++        $this->assertFalse(has_capability('mod/wiki:createpage', $wikicontext));
++
++        // The WS must report the user cannot create pages.
++        $result = mod_wiki_external::get_page_contents($this->fpsepg1indstu->id);
++        $result = external_api::clean_returnvalue(mod_wiki_external::get_page_contents_returns(), $result);
++        $this->assertTrue($result['page']['caneditpage']);
++        $this->assertFalse($result['page']['cancreatepages']);
++
++        $result = mod_wiki_external::get_subwiki_pages($this->wikisepind->id, $this->group1->id, $this->student->id);
++        $result = external_api::clean_returnvalue(mod_wiki_external::get_subwiki_pages_returns(), $result);
++        $this->assertTrue($result['pages'][0]['caneditpage']);
++        $this->assertFalse($result['pages'][0]['cancreatepages']);
++
++        $result = mod_wiki_external::get_subwikis($this->wikisepind->id);
++        $result = external_api::clean_returnvalue(mod_wiki_external::get_subwikis_returns(), $result);
++        foreach ($result['subwikis'] as $subwiki) {
++            $this->assertFalse($subwiki['cancreatepages']);
++        }
++
++        // Creating a page on an existing subwiki must be denied.
++        try {
++            mod_wiki_external::new_page($pagetitle, $pagecontent, 'html', $this->fpsepg1indstu->subwikiid);
++            $this->fail('Exception expected due to missing createpage capability.');
++        } catch (\moodle_exception $e) {
++            $this->assertEquals('nocreatepermission', $e->errorcode);
++        }
++        $this->assertFalse($DB->record_exists('wiki_pages', ['title' => $pagetitle]));
++
++        // Creating a page on a subwiki that does not exist yet must be denied too (and no subwiki created).
++        $subwikicount = $DB->count_records('wiki_subwikis');
++        try {
++            mod_wiki_external::new_page($pagetitle, $pagecontent, 'html', null, $this->wikisepind->id, $this->student->id,
++                $this->group2->id);
++            $this->fail('Exception expected due to missing createpage capability.');
++        } catch (\moodle_exception $e) {
++            $this->assertEquals('nocreatepermission', $e->errorcode);
++        }
++        $this->assertEquals($subwikicount, $DB->count_records('wiki_subwikis'));
++
++        // Editing an existing page is still allowed.
++        $result = mod_wiki_external::edit_page($this->fpsepg1indstu->id, 'New content');
++        $result = external_api::clean_returnvalue(mod_wiki_external::edit_page_returns(), $result);
++        $this->assertEquals($this->fpsepg1indstu->id, $result['pageid']);
++    }
++
+     /**
+      * Test edit_page. We won't test all the possible cases because that's already
+      * done in the tests for wiki_save_section / wiki_save_page.

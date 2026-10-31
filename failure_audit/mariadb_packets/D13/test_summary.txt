@@ -1,0 +1,124 @@
+Evaluation: the agent's diff (without its own mysql-test changes) was applied on the parent commit, the developers' mysql-test files from the fix were added, the server was built (debug) and the fix's mtr tests were run: ['main.select_into_row']
+On the parent commit these tests FAIL; with the human fix they PASS.
+
+AGENT RESULT: FAIL
+main.select_into_row                     w4 [ fail ]
+        Test ended at 2026-10-29 01:09:47
+
+CURRENT_TEST: main.select_into_row
+mysqltest: At line 48: query 'CREATE PROCEDURE p1()
+BEGIN
+DECLARE r0 ROW (a INT, b VARCHAR(10));
+SELECT a,b INTO r0.a,r0.b1_non_existing FROM t1;
+END;
+' failed with wrong errno <Unknown> (2013): 'Lost connection to server during query', instead of ER_ROW_VARIABLE_DOES_NOT_HAVE_FIELD (4082)...
+
+The result from queries just before the failure was:
+< snip >
+BEGIN
+DECLARE r0 ROW (a INT, b VARCHAR(10));
+SELECT a,b INTO r0.a,r0.b FROM t1;
+SELECT r0.a, r0.b;
+END;
+$$
+CALL p1;
+r0.a	r0.b
+10	b10
+DROP PROCEDURE p1;
+DROP TABLE t1;
+# Into an explicit ROW field variable - non-existing field
+CREATE TABLE t1 (a INT,b VARCHAR(10));
+INSERT INTO t1 VALUES (10,'b10');
+CREATE PROCEDURE p1()
+BEGIN
+DECLARE r0 ROW (a INT, b VARCHAR(10));
+SELECT a,b INTO r0.a,r0.b1_non_existing FROM t1;
+END;
+$$
+
+More results from queries before failure can be found in /home/mtr/var/t/4/log/select_into_row.log
+
+
+Server [mysqld.1 - pid: 27898, winpid: 27898, exit: 256] failed during test run
+Server log from this test:
+----------SERVER LOG START-----------
+$ /home/user/mdb_build_dbg/sql/mariadbd --defaults-group-suffix=.1 --defaults-file=/home/mtr/var/t/4/my.cnf --log-output=file --core-file --loose-debug-sync-timeout=300
+2026-10-29  1:09:25 0 [Warning] Could not increase number of max_open_files to more than 1024 (request: 32186)
+2026-10-29  1:09:25 0 [Warning] Changed limits: max_open_files: 1024  max_connections: 151 (was 151)  table_cache: 421 (was 2000)
+2026-10-29  1:09:25 0 [Note] Starting MariaDB 12.3.3-MariaDB-debug-log source revision 3ad0455a2651a993b3cd8dfceeb893bfb1218a0e server_uid mbTPi4QZ8mGXQx/0OS3RvMWBj24= as process 27899
+2026-10-29  1:09:25 0 [Note] Plugin 'partition' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'InnoDB' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'SEQUENCE' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'INNODB_FT_CONFIG' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'INNODB_SYS_TABLESTATS' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'INNODB_CMP_PER_INDEX' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'INNODB_FT_DELETED' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'INNODB_CMP' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'THREAD_POOL_WAITS' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'INNODB_CMP_RESET' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'THREAD_POOL_QUEUES' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'INNODB_SYS_FIELDS' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'INNODB_BUFFER_PAGE_LRU' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'FEEDBACK' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'INNODB_FT_INDEX_TABLE' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'INNODB_CMPMEM' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'THREAD_POOL_GROUPS' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'INNODB_CMP_PER_INDEX_RESET' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'INNODB_SYS_FOREIGN_COLS' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'INNODB_FT_INDEX_CACHE' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'INNODB_BUFFER_POOL_STATS' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'INNODB_FT_BEING_DELETED' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'INNODB_SYS_FOREIGN' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'INNODB_CMPMEM_RESET' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'INNODB_FT_DEFAULT_STOPWORD' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'INNODB_SYS_TABLES' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'INNODB_SYS_COLUMNS' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'INNODB_SYS_TABLESPACES' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'INNODB_SYS_INDEXES' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'INNODB_SYS_VIRTUAL' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'user_variables' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'INNODB_TABLESPACES_ENCRYPTION' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'THREAD_POOL_STATS' is disabled.
+2026-10-29  1:09:25 0 [Note] Plugin 'unix_socket' is disabled.
+2026-10-29  1:09:25 0 [Warning] /home/user/mdb_build_dbg/sql/mariadbd: unknown option '--loose-pam-debug'
+2026-10-29  1:09:25 0 [Warning] /home/user/mdb_build_dbg/sql/mariadbd: unknown option '--loose-aria'
+2026-10-29  1:09:25 0 [Note] Server socket created on IP: '127.0.0.1', port: '19090'.
+2026-10-29  1:09:25 0 [Note] mariadbd: Event Scheduler: Loaded 0 events
+2026-10-29  1:09:25 0 [Note] /home/user/mdb_build_dbg/sql/mariadbd: ready for connections.
+Version: '12.3.3-MariaDB-debug-log'  socket: '/home/mtr/var/t/tmp/4/mysqld.1.sock'  port: 19090  Source distribution
+mariadbd: /home/user/mdb_src/sql/sql_type_row.cc:212: virtual my_var* Type_handler_row::make_outvar_field(THD*, const Lex_ident_sys_st&, const sp_rcontext_addr&, const Lex_ident_sys_st&, sp_head*, bool) const: Assertion `0' failed.
+261029  1:09:25 [ERROR] /home/user/mdb_build_dbg/sql/mariadbd got signal 6 ;
+Sorry, we probably made a mistake, and this is a bug.
+
+Your assistance in bug reporting will enable us to fix this for the next release.
+To report this bug, see https://mariadb.com/docs/general-resources/community/community/bug-tracking/reporting-bugs about how to report
+a bug on https://jira.mariadb.org/.
+
+Please include the information from the server start above, to the end of the
+information below.
+
+Server version: 12.3.3-MariaDB-debug-log source revision: 3ad0455a2651a993b3cd8dfceeb893bfb1218a0e
+
+The information page at https://mariadb.com/docs/server/reference/product-development/mariadb-fault-finding/how-to-produce-a-full-stack-trace-for-mariadbdcontains instructions to obtain a better version of the backtrace below.
+Following these instructions will help MariaDB developers provide a fix quicker.
+
+Attempting backtrace. Include this in the bug report.
+(note: Retrieving this information may fail)
+
+Thread pointer: 0x7fbaac000dd0
+stack_bottom = 0x7fbac9baa000 thread_stack 0x49000
+/home/user/mdb_build_dbg/sql/mariadbd(my_print_stacktrace+0x44)[0x55ccdf0dc02a]
+/home/user/mdb_build_dbg/sql/mariadbd(handle_fatal_signal+0x260)[0x55ccde65dc4b]
+libc_sigaction.c:0(__restore_rt)[0x7fbad0245330]
+nptl/pthread_kill.c:44(__pthread_kill_implementation)[0x7fbad029ec0c]
+posix/raise.c:27(__GI_raise)[0x7fbad024527e]
+stdlib/abort.c:81(__GI_abort)[0x7fbad02288ff]
+intl/loadmsgcat.c:1177(_nl_load_domain)[0x7fbad022881b]
+/lib/x86_64-linux-gnu/libc.so.6(+0x3b517)[0x7fbad023b517]
+sql/sql_type_row.cc:213(Type_handler_row::make_outvar_field(THD*, Lex_ident_sys_st const&, sp_rcontext_addr const&, Lex_ident_sys_st const&, sp_head*, bool) const)[0x55ccde570595]
+sql/sql_lex.cc:9067(LEX::create_outvar(THD*, Lex_ident_sys_st const&, Lex_ident_sys_st const&))[0x55ccde14251f]
+sql/sql_yacc.yy:13773(MYSQLparse(THD*))[0x55ccde59cf5e]
+sql/sql_parse.cc:10369(parse_sql(THD*, Parser_state*, Object_creation_ctx*, bool))[0x55ccde18b2a8]
+sql/sql_parse.cc:7897(mysql_parse(THD*, char*, unsigned int, Parser_state*))[0x55ccde185787]
+sql/sql_parse.cc:1905(dispatch_command(enum_server_command, THD*, char*, unsigned int, bool))[0x55ccde174794]
+sql/sql_parse.cc:1437(do_command(THD*, bool))[0x55ccde1734d7]

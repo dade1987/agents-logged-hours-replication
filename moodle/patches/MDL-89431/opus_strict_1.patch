@@ -1,0 +1,719 @@
+diff --git a/.upgradenotes/MDL-89431-2026102400000000.yml b/.upgradenotes/MDL-89431-2026102400000000.yml
+new file mode 100644
+index 00000000000..c03999c71a1
+--- /dev/null
++++ b/.upgradenotes/MDL-89431-2026102400000000.yml
+@@ -0,0 +1,12 @@
++issueNumber: MDL-89431
++notes:
++  aiprovider_gemini:
++    - message: >-
++        A new `aiprovider_gemini\aimodel\gemini_image_base` interface has been
++        added. Image models implement `get_api_method()` to declare whether they
++        use the Imagen `:predict` protocol or the Gemini native
++        `:generateContent` protocol. New image models `gemini-3.1-flash-image`
++        (now the default), `gemini-3.1-flash-lite-image` and
++        `gemini-3-pro-image` have been added, as Google retires the Imagen 4
++        models on 17 August 2026.
++      type: improved
+diff --git a/public/ai/provider/gemini/classes/aimodel/gemini31flashimage.php b/public/ai/provider/gemini/classes/aimodel/gemini31flashimage.php
+new file mode 100644
+index 00000000000..62a9331c190
+--- /dev/null
++++ b/public/ai/provider/gemini/classes/aimodel/gemini31flashimage.php
+@@ -0,0 +1,58 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace aiprovider_gemini\aimodel;
++
++use core_ai\aimodel\base;
++
++/**
++ * Gemini 3.1 Flash Image AI model (Gemini native image generation).
++ *
++ * @package    aiprovider_gemini
++ * @copyright  2026 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class gemini31flashimage extends base implements gemini_base, gemini_image_base {
++    #[\Override]
++    public function get_model_name(): string {
++        return 'gemini-3.1-flash-image';
++    }
++
++    #[\Override]
++    public function get_model_display_name(): string {
++        return 'Gemini 3.1 Flash Image';
++    }
++
++    #[\Override]
++    public function has_model_settings(): bool {
++        return false;
++    }
++
++    #[\Override]
++    public function model_type(): array {
++        return [self::MODEL_TYPE_IMAGE];
++    }
++
++    #[\Override]
++    public function get_model_endpoint(): string {
++        return 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:generateContent';
++    }
++
++    #[\Override]
++    public function get_api_method(): string {
++        return self::API_METHOD_GENERATE_CONTENT;
++    }
++}
+diff --git a/public/ai/provider/gemini/classes/aimodel/gemini31flashliteimage.php b/public/ai/provider/gemini/classes/aimodel/gemini31flashliteimage.php
+new file mode 100644
+index 00000000000..5066e1489c7
+--- /dev/null
++++ b/public/ai/provider/gemini/classes/aimodel/gemini31flashliteimage.php
+@@ -0,0 +1,58 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace aiprovider_gemini\aimodel;
++
++use core_ai\aimodel\base;
++
++/**
++ * Gemini 3.1 Flash Lite Image AI model (Gemini native image generation).
++ *
++ * @package    aiprovider_gemini
++ * @copyright  2026 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class gemini31flashliteimage extends base implements gemini_base, gemini_image_base {
++    #[\Override]
++    public function get_model_name(): string {
++        return 'gemini-3.1-flash-lite-image';
++    }
++
++    #[\Override]
++    public function get_model_display_name(): string {
++        return 'Gemini 3.1 Flash Lite Image';
++    }
++
++    #[\Override]
++    public function has_model_settings(): bool {
++        return false;
++    }
++
++    #[\Override]
++    public function model_type(): array {
++        return [self::MODEL_TYPE_IMAGE];
++    }
++
++    #[\Override]
++    public function get_model_endpoint(): string {
++        return 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-image:generateContent';
++    }
++
++    #[\Override]
++    public function get_api_method(): string {
++        return self::API_METHOD_GENERATE_CONTENT;
++    }
++}
+diff --git a/public/ai/provider/gemini/classes/aimodel/gemini3proimage.php b/public/ai/provider/gemini/classes/aimodel/gemini3proimage.php
+new file mode 100644
+index 00000000000..a7c5dfb183b
+--- /dev/null
++++ b/public/ai/provider/gemini/classes/aimodel/gemini3proimage.php
+@@ -0,0 +1,58 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace aiprovider_gemini\aimodel;
++
++use core_ai\aimodel\base;
++
++/**
++ * Gemini 3 Pro Image AI model (Gemini native image generation).
++ *
++ * @package    aiprovider_gemini
++ * @copyright  2026 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class gemini3proimage extends base implements gemini_base, gemini_image_base {
++    #[\Override]
++    public function get_model_name(): string {
++        return 'gemini-3-pro-image';
++    }
++
++    #[\Override]
++    public function get_model_display_name(): string {
++        return 'Gemini 3 Pro Image';
++    }
++
++    #[\Override]
++    public function has_model_settings(): bool {
++        return false;
++    }
++
++    #[\Override]
++    public function model_type(): array {
++        return [self::MODEL_TYPE_IMAGE];
++    }
++
++    #[\Override]
++    public function get_model_endpoint(): string {
++        return 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image:generateContent';
++    }
++
++    #[\Override]
++    public function get_api_method(): string {
++        return self::API_METHOD_GENERATE_CONTENT;
++    }
++}
+diff --git a/public/ai/provider/gemini/classes/aimodel/gemini_image_base.php b/public/ai/provider/gemini/classes/aimodel/gemini_image_base.php
+new file mode 100644
+index 00000000000..90a67d98ef6
+--- /dev/null
++++ b/public/ai/provider/gemini/classes/aimodel/gemini_image_base.php
+@@ -0,0 +1,41 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace aiprovider_gemini\aimodel;
++
++/**
++ * Gemini base AI image generation model interface.
++ *
++ * Imagen models and Gemini native image models use different API protocols
++ * (request and response schemas), so each image model must declare which one it speaks.
++ *
++ * @package    aiprovider_gemini
++ * @copyright  2026 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++interface gemini_image_base {
++    /** @var string API_METHOD_PREDICT Imagen ":predict" protocol (instances/parameters, predictions response). */
++    public const API_METHOD_PREDICT = 'predict';
++    /** @var string API_METHOD_GENERATE_CONTENT Gemini ":generateContent" protocol (contents/generationConfig, candidates). */
++    public const API_METHOD_GENERATE_CONTENT = 'generateContent';
++
++    /**
++     * Get the API method (protocol) used by this model.
++     *
++     * @return string One of the API_METHOD_* constants.
++     */
++    public function get_api_method(): string;
++}
+diff --git a/public/ai/provider/gemini/classes/aimodel/imagen40generate001.php b/public/ai/provider/gemini/classes/aimodel/imagen40generate001.php
+index cfed8df996a..6d371c5834f 100644
+--- a/public/ai/provider/gemini/classes/aimodel/imagen40generate001.php
++++ b/public/ai/provider/gemini/classes/aimodel/imagen40generate001.php
+@@ -21,11 +21,13 @@ use core_ai\aimodel\base;
+ /**
+  * Imagen 4.0 Generate 001 AI model.
+  *
++ * Google retires this model on 17 August 2026. Use one of the Gemini image models instead.
++ *
+  * @package    aiprovider_gemini
+  * @copyright  2026 Anupama Sarjoshi <anupama.sarjoshi@moodle.com>
+  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+  */
+-class imagen40generate001 extends base implements gemini_base {
++class imagen40generate001 extends base implements gemini_base, gemini_image_base {
+     #[\Override]
+     public function get_model_name(): string {
+         return 'imagen-4.0-generate-001';
+@@ -50,4 +52,9 @@ class imagen40generate001 extends base implements gemini_base {
+     public function get_model_endpoint(): string {
+         return 'https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict';
+     }
++
++    #[\Override]
++    public function get_api_method(): string {
++        return self::API_METHOD_PREDICT;
++    }
+ }
+diff --git a/public/ai/provider/gemini/classes/form/action_form.php b/public/ai/provider/gemini/classes/form/action_form.php
+index fbf3188d890..8a3739e3c12 100644
+--- a/public/ai/provider/gemini/classes/form/action_form.php
++++ b/public/ai/provider/gemini/classes/form/action_form.php
+@@ -173,7 +173,7 @@ class action_form extends action_settings_form {
+         ) {
+             $defaultmodel = 'custom';
+         } else if (empty($this->actionconfig['model'])) {
+-            $defaultmodel = ($actionname === 'generate_image') ? 'imagen-4.0-generate-001' : 'gemini-2.5-flash';
++            $defaultmodel = ($actionname === 'generate_image') ? 'gemini-3.1-flash-image' : 'gemini-2.5-flash';
+         } else {
+             $defaultmodel = $this->actionconfig['model'];
+         }
+diff --git a/public/ai/provider/gemini/classes/form/action_generate_image_form.php b/public/ai/provider/gemini/classes/form/action_generate_image_form.php
+index 8bf1d884691..fe9487aea6d 100644
+--- a/public/ai/provider/gemini/classes/form/action_generate_image_form.php
++++ b/public/ai/provider/gemini/classes/form/action_generate_image_form.php
+@@ -35,7 +35,7 @@ class action_generate_image_form extends action_form {
+ 
+         // API endpoint.
+         $defaultendpoint = $this->actionconfig['endpoint']
+-                ?? 'https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict';
++                ?? 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:generateContent';
+         $mform->addElement(
+             'text',
+             'endpoint',
+diff --git a/public/ai/provider/gemini/classes/process_generate_image.php b/public/ai/provider/gemini/classes/process_generate_image.php
+index 199d11ea338..31377f61a06 100644
+--- a/public/ai/provider/gemini/classes/process_generate_image.php
++++ b/public/ai/provider/gemini/classes/process_generate_image.php
+@@ -16,6 +16,7 @@
+ 
+ namespace aiprovider_gemini;
+ 
++use aiprovider_gemini\aimodel\gemini_image_base;
+ use core_ai\ai_image;
+ use GuzzleHttp\Psr7\Request;
+ use Psr\Http\Message\RequestInterface;
+@@ -33,18 +34,72 @@ class process_generate_image extends abstract_processor {
+     /** @var int The number of images to generate. */
+     private int $numberimages = 1;
+ 
++    /**
++     * Get the API method (protocol) to use for the configured model.
++     *
++     * Known models declare their protocol through {@see gemini_image_base}. For custom models, the
++     * endpoint method suffix (":predict" or ":generateContent") is used, then the model name as a hint
++     * (Imagen models use "predict", Gemini image models use "generateContent").
++     *
++     * @return string One of the gemini_image_base::API_METHOD_* constants.
++     */
++    protected function get_api_method(): string {
++        $settings = $this->provider->actionconfig[$this->action::class]['settings'] ?? [];
++
++        $model = (string) ($settings['model'] ?? '');
++        $modelclass = helper::get_model_class($model);
++        if ($modelclass instanceof gemini_image_base) {
++            return $modelclass->get_api_method();
++        }
++
++        $path = (string) parse_url((string) ($settings['endpoint'] ?? ''), PHP_URL_PATH);
++        if (preg_match('/:predict$/i', $path)) {
++            return gemini_image_base::API_METHOD_PREDICT;
++        }
++        if (preg_match('/:generateContent$/i', $path)) {
++            return gemini_image_base::API_METHOD_GENERATE_CONTENT;
++        }
++
++        if (str_starts_with(strtolower($model), 'imagen')) {
++            return gemini_image_base::API_METHOD_PREDICT;
++        }
++        return gemini_image_base::API_METHOD_GENERATE_CONTENT;
++    }
++
+     #[\Override]
+     /**
+      * Create the request object for the Google Gemini API.
+      *
+      * API reference:
+-     * (https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/imagen-api)
++     * - Imagen (predict): https://ai.google.dev/gemini-api/docs/imagen
++     * - Gemini native image generation (generateContent): https://ai.google.dev/gemini-api/docs/image-generation
+      *
+      * @param string $userid User identifier.
+      * @return RequestInterface The request object to send to the Gemini API.
+      */
+     protected function create_request_object(string $userid): RequestInterface {
+-        // Create the request object.
++        if ($this->get_api_method() === gemini_image_base::API_METHOD_PREDICT) {
++            $requestobj = $this->create_predict_request_body();
++        } else {
++            $requestobj = $this->create_generate_content_request_body();
++        }
++
++        return new Request(
++            method: 'POST',
++            uri: '',
++            body: json_encode($requestobj),
++            headers: [
++                'Content-Type' => 'application/json',
++            ],
++        );
++    }
++
++    /**
++     * Create the request body for Imagen models (":predict" method).
++     *
++     * @return \stdClass The request body.
++     */
++    private function create_predict_request_body(): \stdClass {
+         $requestobj = new \stdClass();
+ 
+         $requestobj->instances = [
+@@ -60,30 +115,65 @@ class process_generate_image extends abstract_processor {
+             'languageCode' => 'en', // Force English for best results.
+         ];
+ 
+-        return new Request(
+-            method: 'POST',
+-            uri: '',
+-            body: json_encode($requestobj),
+-            headers: [
+-                'Content-Type' => 'application/json',
++        return $requestobj;
++    }
++
++    /**
++     * Create the request body for Gemini native image models (":generateContent" method).
++     *
++     * Gemini image models return a single image per call, so no sample count is sent.
++     *
++     * @return \stdClass The request body.
++     */
++    private function create_generate_content_request_body(): \stdClass {
++        $requestobj = new \stdClass();
++
++        $requestobj->contents = [
++            (object) [
++                'role' => 'user',
++                'parts' => [
++                    (object) [
++                        'text' => $this->action->get_configuration('prompttext'),
++                    ],
++                ],
+             ],
+-        );
++        ];
++
++        $requestobj->generationConfig = (object) [
++            'responseModalities' => ['IMAGE'],
++            'imageConfig' => (object) [
++                'aspectRatio' => $this->calculate_aspect_ratio($this->action->get_configuration('aspectratio')),
++                'imageSize' => strtoupper($this->calculate_image_quality($this->action->get_configuration('quality'))),
++            ],
++        ];
++
++        // Append any extra (custom) model settings to the generation config.
++        foreach ($this->get_model_settings() as $setting => $value) {
++            $requestobj->generationConfig->$setting = $value;
++        }
++
++        return $requestobj;
+     }
+ 
+     #[\Override]
+     protected function handle_api_success(ResponseInterface $response): array {
+-        $responsebody = $response->getBody();
++        $responsebody = (string) $response->getBody();
+         $bodyobj = json_decode($responsebody);
+ 
+-        $predictions = $bodyobj->predictions;
++        if ($this->get_api_method() === gemini_image_base::API_METHOD_PREDICT) {
++            // Imagen response: only one image is requested.
++            $imagebase64 = $bodyobj->predictions[0]->bytesBase64Encoded ?? null;
++        } else {
++            $imagebase64 = $this->extract_generate_content_image($bodyobj);
++        }
+ 
+-        // I have only one image.
+-        $imagebase64 = $predictions[0]->bytesBase64Encoded;
+-        $model = $this->get_model();
++        if (empty($imagebase64)) {
++            return $this->get_no_image_error($bodyobj);
++        }
+ 
+         return [
+             'success' => true,
+-            'model' => $model,
++            'model' => $bodyobj->modelVersion ?? $this->get_model(),
+             'draftfile' => $this->base64_to_file(
+                 $this->action->get_configuration('userid'),
+                 $imagebase64,
+@@ -91,6 +181,71 @@ class process_generate_image extends abstract_processor {
+         ];
+     }
+ 
++    /**
++     * Extract the base64 encoded image from a Gemini "generateContent" response.
++     *
++     * @param mixed $bodyobj The decoded response body.
++     * @return string|null The base64 encoded image, or null if there is none.
++     */
++    private function extract_generate_content_image(mixed $bodyobj): ?string {
++        $parts = $bodyobj->candidates[0]->content->parts ?? [];
++        foreach ($parts as $part) {
++            // The REST API uses camelCase, but accept snake_case too.
++            $inlinedata = $part->inlineData ?? $part->inline_data ?? null;
++            if (!empty($inlinedata->data)) {
++                $mimetype = $inlinedata->mimeType ?? $inlinedata->mime_type ?? 'image/png';
++                if (str_starts_with($mimetype, 'image/')) {
++                    return $inlinedata->data;
++                }
++            }
++        }
++        return null;
++    }
++
++    /**
++     * Build an error response when the API returned no image (for example, blocked by safety filters).
++     *
++     * @param mixed $bodyobj The decoded response body.
++     * @return array The error response.
++     */
++    private function get_no_image_error(mixed $bodyobj): array {
++        $reasons = [];
++        if (!empty($bodyobj->promptFeedback->blockReason)) {
++            $reasons[] = 'blockReason: ' . $bodyobj->promptFeedback->blockReason;
++            if (!empty($bodyobj->promptFeedback->blockReasonMessage)) {
++                $reasons[] = $bodyobj->promptFeedback->blockReasonMessage;
++            }
++        }
++        $candidate = $bodyobj->candidates[0] ?? null;
++        if (!empty($candidate->finishReason) && $candidate->finishReason !== 'STOP') {
++            $reasons[] = 'finishReason: ' . $candidate->finishReason;
++            if (!empty($candidate->finishMessage)) {
++                $reasons[] = $candidate->finishMessage;
++            }
++        }
++        // Include any text the model returned instead of an image, as it usually explains why.
++        foreach ($candidate->content->parts ?? [] as $part) {
++            if (!empty($part->text)) {
++                $reasons[] = trim($part->text);
++            }
++        }
++        if (!empty($bodyobj->predictions[0]->raiFilteredReason)) {
++            $reasons[] = $bodyobj->predictions[0]->raiFilteredReason;
++        }
++
++        $message = 'No image was returned by the AI model.';
++        if (!empty($reasons)) {
++            $message .= ' ' . implode(' ', $reasons);
++        }
++
++        return [
++            'success' => false,
++            'errorcode' => 400,
++            'error' => $bodyobj->promptFeedback->blockReason ?? 'NO_IMAGE',
++            'errormessage' => $message,
++        ];
++    }
++
+     /**
+      * Convert a base64 image to a stored_file object.
+      * Google Gemini returns images as base64 encoded strings.
+diff --git a/public/ai/provider/gemini/tests/fixtures/image_request_gemini_success.json b/public/ai/provider/gemini/tests/fixtures/image_request_gemini_success.json
+new file mode 100644
+index 00000000000..150ee6069fc
+--- /dev/null
++++ b/public/ai/provider/gemini/tests/fixtures/image_request_gemini_success.json
+@@ -0,0 +1,29 @@
++{
++  "candidates": [
++    {
++      "content": {
++        "parts": [
++          {
++            "text": "Here is the image you requested."
++          },
++          {
++            "inlineData": {
++              "mimeType": "image/png",
++              "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
++            }
++          }
++        ],
++        "role": "model"
++      },
++      "finishReason": "STOP",
++      "index": 0
++    }
++  ],
++  "usageMetadata": {
++    "promptTokenCount": 6,
++    "candidatesTokenCount": 1290,
++    "totalTokenCount": 1296
++  },
++  "modelVersion": "gemini-3.1-flash-image",
++  "responseId": "abc123"
++}
+diff --git a/public/ai/provider/gemini/tests/process_generate_image_test.php b/public/ai/provider/gemini/tests/process_generate_image_test.php
+index 35533bd257e..b1281a0a4af 100644
+--- a/public/ai/provider/gemini/tests/process_generate_image_test.php
++++ b/public/ai/provider/gemini/tests/process_generate_image_test.php
+@@ -183,6 +183,129 @@ final class process_generate_image_test extends \advanced_testcase {
+         $this->assertEquals('1:1', $requestdata->parameters->aspectRatio);
+     }
+ 
++    /**
++     * Test create_request_object for Gemini native image models (generateContent).
++     */
++    public function test_create_request_object_generate_content(): void {
++        $provider = $this->create_provider(
++            actionclass: \core_ai\aiactions\generate_image::class,
++            actionconfig: [
++                'model' => 'gemini-3.1-flash-image',
++                'endpoint' => 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:generateContent',
++            ],
++        );
++        $processor = new process_generate_image($provider, $this->action);
++
++        $method = new \ReflectionMethod($processor, 'create_request_object');
++        $request = $method->invoke($processor, 1);
++
++        $requestdata = json_decode($request->getBody()->getContents());
++
++        $this->assertObjectNotHasProperty('instances', $requestdata);
++        $this->assertObjectNotHasProperty('parameters', $requestdata);
++        $this->assertEquals('This is a test prompt', $requestdata->contents[0]->parts[0]->text);
++        $this->assertEquals(['IMAGE'], $requestdata->generationConfig->responseModalities);
++        $this->assertEquals('1:1', $requestdata->generationConfig->imageConfig->aspectRatio);
++        $this->assertEquals('2K', $requestdata->generationConfig->imageConfig->imageSize);
++    }
++
++    /**
++     * Test get_api_method for known and custom models.
++     */
++    public function test_get_api_method(): void {
++        $cases = [
++            ['imagen-4.0-generate-001', 'https://example.com/v1beta/models/imagen-4.0-generate-001:predict', 'predict'],
++            ['gemini-3.1-flash-image', 'https://example.com/v1beta/models/gemini-3.1-flash-image:generateContent',
++                'generateContent'],
++            ['gemini-3.1-flash-lite-image', 'https://example.com/a', 'generateContent'],
++            ['gemini-3-pro-image', 'https://example.com/a', 'generateContent'],
++            ['my-custom-model', 'https://example.com/v1beta/models/my-custom-model:predict', 'predict'],
++            ['my-custom-model', 'https://example.com/v1beta/models/my-custom-model:generateContent', 'generateContent'],
++            ['imagen-custom', 'https://example.com/proxy', 'predict'],
++            ['my-custom-model', 'https://example.com/proxy', 'generateContent'],
++        ];
++        foreach ($cases as [$model, $endpoint, $expected]) {
++            $provider = $this->create_provider(
++                actionclass: \core_ai\aiactions\generate_image::class,
++                actionconfig: ['model' => $model, 'endpoint' => $endpoint],
++            );
++            $processor = new process_generate_image($provider, $this->action);
++            $method = new \ReflectionMethod($processor, 'get_api_method');
++            $this->assertEquals($expected, $method->invoke($processor), "{$model} {$endpoint}");
++        }
++    }
++
++    /**
++     * Test handle_api_success for Gemini native image models (generateContent).
++     */
++    public function test_handle_api_success_generate_content(): void {
++        $provider = $this->create_provider(
++            actionclass: \core_ai\aiactions\generate_image::class,
++            actionconfig: [
++                'model' => 'gemini-3.1-flash-image',
++                'endpoint' => 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:generateContent',
++            ],
++        );
++        $response = new Response(
++            200,
++            ['Content-Type' => 'application/json'],
++            Utils::streamFor(
++                file_get_contents(self::get_fixture_path('aiprovider_gemini', 'image_request_gemini_success.json')),
++            ),
++        );
++
++        $this->setAdminUser();
++
++        $processor = new process_generate_image($provider, $this->action);
++        $method = new \ReflectionMethod($processor, 'handle_api_success');
++        $result = $method->invoke($processor, $response);
++
++        $this->assertTrue($result['success']);
++        $this->assertEquals('gemini-3.1-flash-image', $result['model']);
++        $this->assertEquals('7cc6025f8a6ce71a.png', $result['draftfile']->get_filename());
++    }
++
++    /**
++     * Test handle_api_success for a Gemini response blocked by safety filters.
++     */
++    public function test_handle_api_success_generate_content_blocked(): void {
++        $provider = $this->create_provider(
++            actionclass: \core_ai\aiactions\generate_image::class,
++            actionconfig: [
++                'model' => 'gemini-3.1-flash-image',
++                'endpoint' => 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:generateContent',
++            ],
++        );
++        $response = new Response(
++            200,
++            ['Content-Type' => 'application/json'],
++            json_encode([
++                'promptFeedback' => ['blockReason' => 'SAFETY'],
++            ]),
++        );
++
++        $processor = new process_generate_image($provider, $this->action);
++        $method = new \ReflectionMethod($processor, 'handle_api_success');
++        $result = $method->invoke($processor, $response);
++
++        $this->assertFalse($result['success']);
++        $this->assertEquals(400, $result['errorcode']);
++        $this->assertEquals('SAFETY', $result['error']);
++        $this->assertStringContainsString('SAFETY', $result['errormessage']);
++
++        // No image and a non-STOP finish reason.
++        $response = new Response(
++            200,
++            ['Content-Type' => 'application/json'],
++            json_encode([
++                'candidates' => [['finishReason' => 'IMAGE_SAFETY', 'content' => ['parts' => []]]],
++            ]),
++        );
++        $result = $method->invoke($processor, $response);
++        $this->assertFalse($result['success']);
++        $this->assertStringContainsString('IMAGE_SAFETY', $result['errormessage']);
++    }
++
+     /**
+      * Test the API error response handler method.
+      */

@@ -1,0 +1,154 @@
+diff --git a/mysql-test/main/set_authorization.result b/mysql-test/main/set_authorization.result
+index 71194c22..d55f90fd 100644
+--- a/mysql-test/main/set_authorization.result
++++ b/mysql-test/main/set_authorization.result
+@@ -149,3 +149,42 @@ set session authorization root@localhost;
+ -- 
+ 
+ # End of 12.0 tests
++
++#
++# MDEV-40336 SET AUTHORIZATION un-expired passwords
++#
++create user u1@localhost;
++alter user u1@localhost password expire;
++connect con1,localhost,u1;
++select 1;
++ERROR HY000: You must SET PASSWORD before executing this statement
++set session authorization u1@localhost;
++select 2;
++ERROR HY000: You must SET PASSWORD before executing this statement
++set session authorization root@localhost;
++ERROR HY000: You must SET PASSWORD before executing this statement
++set password=password('');
++select 3;
++3
++3
++set session authorization u1@localhost;
++select 4;
++4
++4
++disconnect con1;
++connection default;
++alter user u1@localhost password expire;
++connect con1,localhost,root;
++set session authorization u1@localhost;
++select 5;
++ERROR HY000: You must SET PASSWORD before executing this statement
++set session authorization root@localhost;
++ERROR HY000: You must SET PASSWORD before executing this statement
++set password=password('');
++select 6;
++6
++6
++disconnect con1;
++connection default;
++drop user u1@localhost;
++# End of 12.1 tests
+diff --git a/mysql-test/main/set_authorization.test b/mysql-test/main/set_authorization.test
+index d13ee4aa..88f09eb4 100644
+--- a/mysql-test/main/set_authorization.test
++++ b/mysql-test/main/set_authorization.test
+@@ -144,3 +144,39 @@ set session authorization root@localhost;
+ disable_session_track_info;
+ 
+ --echo # End of 12.0 tests
++
++--echo #
++--echo # MDEV-40336 SET AUTHORIZATION un-expired passwords
++--echo #
++create user u1@localhost;
++alter user u1@localhost password expire;
++connect con1,localhost,u1;
++--error ER_MUST_CHANGE_PASSWORD
++select 1;
++set session authorization u1@localhost;
++--error ER_MUST_CHANGE_PASSWORD
++select 2;
++--error ER_MUST_CHANGE_PASSWORD
++set session authorization root@localhost;
++set password=password('');
++select 3;
++# password is not expired anymore, after re-authorization too
++set session authorization u1@localhost;
++select 4;
++disconnect con1;
++connection default;
++# switching to a user with an expired password expires the session
++alter user u1@localhost password expire;
++connect con1,localhost,root;
++set session authorization u1@localhost;
++--error ER_MUST_CHANGE_PASSWORD
++select 5;
++--error ER_MUST_CHANGE_PASSWORD
++set session authorization root@localhost;
++set password=password('');
++select 6;
++disconnect con1;
++connection default;
++drop user u1@localhost;
++
++--echo # End of 12.1 tests
+diff --git a/sql/sql_acl.cc b/sql/sql_acl.cc
+index de8a27c9..d20ce39b 100644
+--- a/sql/sql_acl.cc
++++ b/sql/sql_acl.cc
+@@ -12818,6 +12818,8 @@ bool Sql_cmd_grant_table::execute(THD *thd)
+ }
+ 
+ 
++static bool check_password_lifetime(THD *thd, const ACL_USER &acl_user);
++
+ int acl_setauthorization(THD *thd, const LEX_USER *user)
+ {
+   if (!initialized)
+@@ -12856,12 +12858,27 @@ int acl_setauthorization(THD *thd, const LEX_USER *user)
+     return 1;
+   }
+ 
+-  if (!(sctx->master_access & PRIV_SUDO_CHANGE_USER) &&
+-      (strcmp(user->user.str, sctx->user) ||
+-       strcmp(user->host.str, sctx->host_or_ip) ||
+-       strcmp(acl_user->user.str, sctx->priv_user) ||
+-       strcmp(acl_user->host.hostname, sctx->priv_host)))
+-    goto access_denied;
++  {
++    bool is_self= !strcmp(user->user.str, sctx->user) &&
++                  !strcmp(user->host.str, sctx->host_or_ip) &&
++                  !strcmp(acl_user->user.str, sctx->priv_user) &&
++                  !strcmp(acl_user->host.hostname, sctx->priv_host);
++    if (!is_self)
++    {
++      if (!(sctx->master_access & PRIV_SUDO_CHANGE_USER))
++        goto access_denied;
++      /*
++        A session with an expired password may only re-authorize as
++        itself, otherwise it would be a way to bypass the password
++        expiration (the only statement allowed is SET PASSWORD).
++      */
++      if (sctx->password_expired)
++      {
++        my_error(ER_MUST_CHANGE_PASSWORD, MYF(0));
++        return 1;
++      }
++    }
++  }
+ 
+   thd->change_user();
+   thd->clear_error();                         // if errors from rollback
+@@ -12888,6 +12905,15 @@ int acl_setauthorization(THD *thd, const LEX_USER *user)
+     return 1;
+   }
+ 
++  /*
++    Just like on login, the new user's password might be expired.
++    Note, that unlike login, we cannot disconnect here, so the
++    session is simply restricted to SET PASSWORD until the password
++    is changed.
++  */
++  sctx->password_expired= acl_user->password_expired ||
++                          check_password_lifetime(thd, *acl_user);
++
+   mysql_audit_notify_connection_change_user(thd, &save_security_ctx);
+   save_security_ctx.destroy();
+   return 0;

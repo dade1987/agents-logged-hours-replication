@@ -1,0 +1,43 @@
+diff --git a/mysql-test/main/spatial_utility_function_collect.result b/mysql-test/main/spatial_utility_function_collect.result
+index cd3b3885..7353caf1 100644
+--- a/mysql-test/main/spatial_utility_function_collect.result
++++ b/mysql-test/main/spatial_utility_function_collect.result
+@@ -260,3 +260,12 @@ DROP TABLE t1;
+ #
+ SELECT 1 FROM dual WHERE group_concat(1, 1);
+ ERROR HY000: Invalid use of group function
++#
++# MDEV-38755 ST_COLLECT(1) IS NULL is false
++#
++select st_collect(1), st_collect(1) is null;
++st_collect(1)	st_collect(1) is null
++NULL	1
++select st_collect(NULL) is null, st_collect(ST_GEOMFROMTEXT('POINT(0 0)')) is null;
++st_collect(NULL) is null	st_collect(ST_GEOMFROMTEXT('POINT(0 0)')) is null
++1	0
+diff --git a/mysql-test/main/spatial_utility_function_collect.test b/mysql-test/main/spatial_utility_function_collect.test
+index e288a153..8dafc594 100644
+--- a/mysql-test/main/spatial_utility_function_collect.test
++++ b/mysql-test/main/spatial_utility_function_collect.test
+@@ -220,3 +220,9 @@ DROP TABLE t1;
+ --echo #
+ --error ER_INVALID_GROUP_FUNC_USE
+ SELECT 1 FROM dual WHERE group_concat(1, 1);
++
++--echo #
++--echo # MDEV-38755 ST_COLLECT(1) IS NULL is false
++--echo #
++select st_collect(1), st_collect(1) is null;
++select st_collect(NULL) is null, st_collect(ST_GEOMFROMTEXT('POINT(0 0)')) is null;
+diff --git a/sql/item_sum.h b/sql/item_sum.h
+index 540d0a37..d21b1b62 100644
+--- a/sql/item_sum.h
++++ b/sql/item_sum.h
+@@ -2214,6 +2214,7 @@ class Item_func_collect : public Item_sum_str
+   }
+   const Type_handler *type_handler() const override;
+   String *val_str(String*str) override;
++  bool is_null() override { update_null_value(); return null_value; }
+   LEX_CSTRING func_name_cstring() const override
+   {
+     return { STRING_WITH_LEN("st_collect(") };

@@ -1,0 +1,59 @@
+diff --git a/mysql-test/suite/csv/csv.result b/mysql-test/suite/csv/csv.result
+index de5025be..c7098146 100644
+--- a/mysql-test/suite/csv/csv.result
++++ b/mysql-test/suite/csv/csv.result
+@@ -5558,3 +5558,18 @@ a",	e
+ e	"
+ ,	f
+ DROP TABLE t1;
++
++#
++# MDEV-40636: DELETE of many non-adjacent rows overflowed the chain of
++# deleted positions (realloc was given an element count instead of bytes)
++#
++create table t1 (id int not null, pad char(10) not null) engine=csv;
++insert t1 select seq,'AAAAAAAAAA' from seq_1_to_2048;
++select count(*) from t1;
++count(*)
++2048
++delete from t1 where id % 2 = 0;
++select count(*) from t1;
++count(*)
++1024
++drop table t1;
+diff --git a/mysql-test/suite/csv/csv.test b/mysql-test/suite/csv/csv.test
+index 3da9aca7..750a0921 100644
+--- a/mysql-test/suite/csv/csv.test
++++ b/mysql-test/suite/csv/csv.test
+@@ -1970,3 +1970,17 @@ ALTER TABLE t1 IETF_QUOTES=no;
+ SELECT * FROM t1;
+ 
+ DROP TABLE t1;
++
++#
++# MDEV-40636: DELETE of many non-adjacent rows overflowed the chain of
++# deleted positions (realloc was given an element count instead of bytes)
++#
++
++--source include/have_sequence.inc
++
++create table t1 (id int not null, pad char(10) not null) engine=csv;
++insert t1 select seq,'AAAAAAAAAA' from seq_1_to_2048;
++select count(*) from t1;
++delete from t1 where id % 2 = 0;
++select count(*) from t1;
++drop table t1;
+diff --git a/storage/csv/ha_tina.cc b/storage/csv/ha_tina.cc
+index 71c06776..83f23055 100644
+--- a/storage/csv/ha_tina.cc
++++ b/storage/csv/ha_tina.cc
+@@ -646,7 +646,8 @@ int ha_tina::chain_append()
+       if (chain_alloced)
+       {
+         if ((chain= (tina_set *) my_realloc(csv_key_memory_tina_set,
+-                                            (uchar*)chain, chain_size,
++                                            (uchar*)chain,
++                                            chain_size * sizeof(tina_set),
+                                             MYF(MY_WME))) == NULL)
+           return -1;
+       }

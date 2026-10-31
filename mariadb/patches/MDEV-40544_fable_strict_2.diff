@@ -1,0 +1,98 @@
+diff --git a/mysql-test/suite/binlog/r/binlog_mysqlbinlog_force_read_checksum.result b/mysql-test/suite/binlog/r/binlog_mysqlbinlog_force_read_checksum.result
+new file mode 100644
+index 00000000..21a3c0d1
+--- /dev/null
++++ b/mysql-test/suite/binlog/r/binlog_mysqlbinlog_force_read_checksum.result
+@@ -0,0 +1,8 @@
++RESET MASTER;
++FLUSH BINARY LOGS;
++#MYSQL_BINLOG --verify-binlog-checksum --force-read --debug=d,simulate_checksum_test_failure #MYSQLD_DATADIR/master-bin.000001 > #SEARCH_FILE 2>&1
++# The checksum failure is reported as a warning, not an error
++FOUND 1 /WARNING: Event crc check failed/ in binlog_mysqlbinlog_force_read_checksum.out
++NOT FOUND /ERROR: .*Event crc check failed/ in binlog_mysqlbinlog_force_read_checksum.out
++# The corrupt event is output as an Unknown event
++FOUND 1 /# [Uu]nknown [Ee]vent/ in binlog_mysqlbinlog_force_read_checksum.out
+diff --git a/mysql-test/suite/binlog/t/binlog_mysqlbinlog_force_read_checksum.test b/mysql-test/suite/binlog/t/binlog_mysqlbinlog_force_read_checksum.test
+new file mode 100644
+index 00000000..343b2c5e
+--- /dev/null
++++ b/mysql-test/suite/binlog/t/binlog_mysqlbinlog_force_read_checksum.test
+@@ -0,0 +1,31 @@
++# MDEV-40544: Assertion fail / Memory leak in `mariadb-binlog --force-read`
++#
++# With --force-read, an event that fails the checksum verification (or is
++# explicitly refused, like MySQL 8.0 TRANSACTION_PAYLOAD_EVENT) must be output
++# as an Unknown event with a warning, not reported as an error together with
++# the substitute event (which asserted in debug builds and leaked the event in
++# release builds).
++
++--source include/have_debug.inc
++--source include/have_binlog_format_mixed.inc # format-agnostic
++
++RESET MASTER;
++FLUSH BINARY LOGS;
++
++--let SEARCH_FILE= $MYSQLTEST_VARDIR/tmp/binlog_mysqlbinlog_force_read_checksum.out
++--let $MYSQLD_DATADIR= `SELECT @@datadir`
++
++--echo #MYSQL_BINLOG --verify-binlog-checksum --force-read --debug=d,simulate_checksum_test_failure #MYSQLD_DATADIR/master-bin.000001 > #SEARCH_FILE 2>&1
++--exec $MYSQL_BINLOG --verify-binlog-checksum --force-read --debug=d,simulate_checksum_test_failure $MYSQLD_DATADIR/master-bin.000001 > $SEARCH_FILE 2>&1
++
++--echo # The checksum failure is reported as a warning, not an error
++--let SEARCH_PATTERN= WARNING: Event crc check failed
++--source include/search_pattern_in_file.inc
++--let SEARCH_PATTERN= ERROR: .*Event crc check failed
++--source include/search_pattern_in_file.inc
++
++--echo # The corrupt event is output as an Unknown event
++--let SEARCH_PATTERN= # [Uu]nknown [Ee]vent
++--source include/search_pattern_in_file.inc
++
++--remove_file $SEARCH_FILE
+diff --git a/sql/log_event.cc b/sql/log_event.cc
+index 5039c21c..fbf33d73 100644
+--- a/sql/log_event.cc
++++ b/sql/log_event.cc
+@@ -1110,15 +1110,21 @@ Log_event* Log_event::read_log_event(const uchar *buf, uint event_len,
+   if (crc_check && event_checksum_test(const_cast<uchar*>(buf), event_len, alg))
+   {
+ #ifdef MYSQL_CLIENT
+-    *error= "Event crc check failed! Most likely there is event corruption.";
+     if (force_opt)
+     {
++      /*
++        --force-read: substitute an Unknown event for the corrupt one and
++        carry on. Only warn; do not report an error, as the callers treat an
++        error together with a returned event as a contradiction (and would
++        leak the substitute event).
++      */
++      warning("Event crc check failed! Most likely there is event corruption.");
+       event_len-= BINLOG_CHECKSUM_LEN;
+       ev= new Unknown_log_event(buf, fdle);
+       goto exit;
+     }
+-    else
+-      DBUG_RETURN(NULL);
++    *error= "Event crc check failed! Most likely there is event corruption.";
++    DBUG_RETURN(NULL);
+ #else
+     *error= ER_THD_OR_DEFAULT(current_thd, ER_BINLOG_READ_EVENT_CHECKSUM_FAILURE);
+     if (print_errors)
+@@ -1358,6 +1364,17 @@ Log_event* Log_event::read_log_event(const uchar *buf, uint event_len,
+         *error= "Found invalid event in binary log";
+       DBUG_RETURN(0);
+     }
++    /*
++      --force-read: output the invalid event as an Unknown event rather than
++      an error. An explicit refusal (e.g. of a MySQL 8.0-only event type) is
++      downgraded to a warning, so that the caller does not get both an error
++      and an event (which would trigger an assertion or leak the event).
++    */
++    if (*error)
++    {
++      warning("%s", *error);
++      *error= 0;
++    }
+     ev= new Unknown_log_event(buf, fdle);
+ #else
+     if (!*error)

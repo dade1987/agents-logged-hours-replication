@@ -1,0 +1,322 @@
+diff --git a/public/admin/tool/uploadcourse/classes/course.php b/public/admin/tool/uploadcourse/classes/course.php
+index b4a35053d3a..eee79bb03d6 100644
+--- a/public/admin/tool/uploadcourse/classes/course.php
++++ b/public/admin/tool/uploadcourse/classes/course.php
+@@ -100,6 +100,9 @@ class tool_uploadcourse_course {
+     /** @var int update mode. Matches tool_uploadcourse_processor::UPDATE_* */
+     protected $updatemode;
+ 
++    /** @var array Fields provided in the CSV that should not be overwritten from the template course. */
++    protected $skiptemplatefields = [];
++
+     /** @var array fields allowed as course data. */
+     static protected $validfields = array('fullname', 'shortname', 'idnumber', 'category', 'visible', 'startdate', 'enddate',
+         'summary', 'format', 'theme', 'lang', 'newsitems', 'showgrades', 'showreports', 'legacyfiles', 'maxbytes',
+@@ -485,7 +488,10 @@ class tool_uploadcourse_course {
+         foreach ($this->rawdata as $field => $value) {
+             if (!in_array($field, self::$validfields)) {
+                 continue;
+-            } else if ($field == 'shortname') {
++            }
++            // Track fields provided in the CSV so they are not overwritten by template course values.
++            $this->skiptemplatefields[] = $field;
++            if ($field == 'shortname') {
+                 // Let's leave it apart from now, use $this->shortname only.
+                 continue;
+             }
+@@ -911,8 +917,18 @@ class tool_uploadcourse_course {
+ 
+         // Restore a course.
+         if (!empty($this->restoredata)) {
+-            $rc = new restore_controller($this->restoredata, $course->id, backup::INTERACTIVE_NO,
+-                backup::MODE_IMPORT, $USER->id, backup::TARGET_CURRENT_ADDING);
++            $rc = new restore_controller(
++                $this->restoredata,
++                $course->id,
++                backup::INTERACTIVE_NO,
++                backup::MODE_IMPORT,
++                $USER->id,
++                backup::TARGET_CURRENT_ADDING,
++                null,
++                null,
++                null,
++                $this->skiptemplatefields
++            );
+ 
+             // Check if the format conversion must happen first.
+             if ($rc->get_status() == backup::STATUS_REQUIRE_CONV) {
+diff --git a/public/admin/tool/uploadcourse/classes/processor.php b/public/admin/tool/uploadcourse/classes/processor.php
+index bbd2ddaec23..309d7551d54 100644
+--- a/public/admin/tool/uploadcourse/classes/processor.php
++++ b/public/admin/tool/uploadcourse/classes/processor.php
+@@ -246,7 +246,7 @@ class tool_uploadcourse_processor {
+             'canreset' => $this->allowresets,
+             'reset' => $this->reset,
+             'restoredir' => $this->get_restore_content_dir(),
+-            'shortnametemplate' => $this->shortnametemplate
++            'shortnametemplate' => $this->shortnametemplate,
+         );
+         return new tool_uploadcourse_course($this->mode, $this->updatemode, $data, $this->defaults, $importoptions);
+     }
+diff --git a/public/backup/controller/restore_controller.class.php b/public/backup/controller/restore_controller.class.php
+index a4fefc426b7..b43603f4eb3 100644
+--- a/public/backup/controller/restore_controller.class.php
++++ b/public/backup/controller/restore_controller.class.php
+@@ -53,6 +53,9 @@ class restore_controller extends base_controller {
+     /** @var restore_plan */
+     protected $plan;   // Restore execution plan
+ 
++    /** @var array|null Fields provided in the CSV that should not be overwritten from the template course. */
++    protected $skiptemplatefields = null;
++
+     /**
+      * Immediate/delayed execution type.
+      * @var integer
+@@ -88,9 +91,20 @@ class restore_controller extends base_controller {
+      * @param \core\progress\base $progress Optional progress monitor
+      * @param \stdClass $copydata Course copy data, required when in MODE_COPY
+      * @param bool $releasesession Should release the session? backup::RELEASESESSION_YES or backup::RELEASESESSION_NO
++     * @param ?array $skiptemplatefields Course fields to exclude when restoring from a template course.
+      */
+-    public function __construct($tempdir, $courseid, $interactive, $mode, $userid, $target,
+-            ?\core\progress\base $progress = null, $releasesession = backup::RELEASESESSION_NO, ?\stdClass $copydata = null) {
++    public function __construct(
++        $tempdir,
++        $courseid,
++        $interactive,
++        $mode,
++        $userid,
++        $target,
++        ?\core\progress\base $progress = null,
++        $releasesession = backup::RELEASESESSION_NO,
++        ?\stdClass $copydata = null,
++        $skiptemplatefields = null
++    ) {
+ 
+         if ($mode == backup::MODE_COPY && is_null($copydata)) {
+             throw new restore_controller_exception('cannot_instantiate_missing_copydata');
+@@ -113,6 +127,7 @@ class restore_controller extends base_controller {
+         $this->samesite = false;
+         $this->checksum = '';
+         $this->precheck = null;
++        $this->skiptemplatefields = $skiptemplatefields;
+ 
+         // Apply current backup version and release if necessary
+         backup_controller_dbops::apply_version_and_release();
+@@ -341,6 +356,14 @@ class restore_controller extends base_controller {
+         return $this->executiontime;
+     }
+ 
++    /**
++     * Returns fields that we want to skip importing
++     * @return array|null
++     */
++    public function get_skiptemplatefields(): ?array {
++        return $this->skiptemplatefields;
++    }
++
+     /**
+      * Returns the restore plan
+      * @return restore_plan
+diff --git a/public/backup/moodle2/restore_course_task.class.php b/public/backup/moodle2/restore_course_task.class.php
+index d8a99b05edb..f8365b5a3fc 100644
+--- a/public/backup/moodle2/restore_course_task.class.php
++++ b/public/backup/moodle2/restore_course_task.class.php
+@@ -66,9 +66,20 @@ class restore_course_task extends restore_task {
+         // Define the task contextid (the course one)
+         $this->contextid = context_course::instance($this->get_courseid())->id;
+ 
+-        // Executed conditionally if restoring to new course or if overwrite_conf setting is enabled
+-        if ($this->get_target() == backup::TARGET_NEW_COURSE || $this->get_setting_value('overwrite_conf') == true) {
+-            $this->add_step(new restore_course_structure_step('course_info', 'course.xml'));
++        // Fields that should be excluded when restoring the template.
++        $skiptemplatefields = $this->get_skiptemplatefields();
++
++        if (
++            $this->get_target() == backup::TARGET_NEW_COURSE ||
++            $this->get_setting_value('overwrite_conf') == true ||
++            !is_null($skiptemplatefields)
++        ) {
++            $this->add_step(new restore_course_structure_step(
++                'course_info',
++                'course.xml',
++                null,
++                $skiptemplatefields
++            ));
+ 
+             // Search reindexing (if enabled).
+             if (\core_search\manager::is_indexing_enabled()) {
+diff --git a/public/backup/moodle2/restore_stepslib.php b/public/backup/moodle2/restore_stepslib.php
+index 981e26797fb..4c47ed02d2c 100644
+--- a/public/backup/moodle2/restore_stepslib.php
++++ b/public/backup/moodle2/restore_stepslib.php
+@@ -1929,6 +1929,35 @@ class restore_course_structure_step extends restore_structure_step {
+      */
+     protected $legacyallowedmodules = array();
+ 
++    /** @var array|null Fields provided in the CSV that should not be overwritten from the template course. */
++    protected $skiptemplatefields = [];
++
++    /**
++     * Step constructor.
++     * @param string $name Step's name.
++     * @param string $filename Step's file name.
++     * @param restore_task|null $task Restore task.
++     * @param ?array $skiptemplatefields Course fields provided in the CSV that should not be overwritten by the template course.
++     * @throws restore_step_exception
++     */
++    public function __construct($name, $filename, $task = null, $skiptemplatefields = []) {
++        parent::__construct($name, $filename, $task);
++        $this->skiptemplatefields = $skiptemplatefields;
++    }
++
++    /**
++     * Check whether the template course field should be restored.
++     *
++     * Fields explicitly provided in the CSV should not be overwritten by values
++     * from the template course.
++     *
++     * @param string $field the course field name to check.
++     * @return bool
++     */
++    protected function should_restore_template_field(string $field): bool {
++        return !in_array($field, $this->skiptemplatefields ?? []);
++    }
++
+     protected function define_structure() {
+ 
+         $paths = [];
+@@ -1936,31 +1965,38 @@ class restore_course_structure_step extends restore_structure_step {
+         $course = new restore_path_element('course', '/course');
+         $paths[] = $course;
+         $paths[] = new restore_path_element('category', '/course/category');
+-        $paths[] = new restore_path_element('tag', '/course/tags/tag');
+-        $paths[] = new restore_path_element('course_format_option', '/course/courseformatoptions/courseformatoption');
++        if ($this->should_restore_template_field('tags')) {
++            $paths[] = new restore_path_element('tag', '/course/tags/tag');
++        }
++        if ($this->should_restore_template_field('format')) {
++            $paths[] = new restore_path_element('course_format_option', '/course/courseformatoptions/courseformatoption');
++        }
+         $paths[] = new restore_path_element('allowed_module', '/course/allowed_modules/module');
+ 
+         // Custom fields.
+         if ($this->get_setting_value('customfield')) {
+             $paths[] = new restore_path_element('customfield', '/course/customfields/customfield');
+         }
++        if ($this->should_restore_template_field('format')) {
++            // Apply for 'format' plugins optional paths at course level.
++            $this->add_plugin_structure('format', $course);
++        }
+ 
+-        // Apply for 'format' plugins optional paths at course level
+-        $this->add_plugin_structure('format', $course);
+-
+-        // Apply for 'theme' plugins optional paths at course level
+-        $this->add_plugin_structure('theme', $course);
++        if ($this->should_restore_template_field('theme')) {
++            // Apply for 'theme' plugins optional paths at course level.
++            $this->add_plugin_structure('theme', $course);
++        }
+ 
+-        // Apply for 'report' plugins optional paths at course level
++        // Apply for 'report' plugins optional paths at course level.
+         $this->add_plugin_structure('report', $course);
+ 
+-        // Apply for 'course report' plugins optional paths at course level
++        // Apply for 'course report' plugins optional paths at course level.
+         $this->add_plugin_structure('coursereport', $course);
+ 
+-        // Apply for plagiarism plugins optional paths at course level
++        // Apply for plagiarism plugins optional paths at course level.
+         $this->add_plugin_structure('plagiarism', $course);
+ 
+-        // Apply for local plugins optional paths at course level
++        // Apply for local plugins optional paths at course level.
+         $this->add_plugin_structure('local', $course);
+ 
+         // Apply for admin tool plugins optional paths at course level.
+@@ -2088,7 +2124,33 @@ class restore_course_structure_step extends restore_structure_step {
+             $data->activitytype = 'scorm';
+         }
+ 
+-        // Course record ready, update it
++        // Remove fields explicitly provided via CSV upload so template values do not overwrite them.
++        foreach ($this->skiptemplatefields ?? [] as $field) {
++            // Keep the CSV-provided format instead of the template format.
++            // The format cannot be unset because it is required by the restore process.
++            if ($field == 'format') {
++                $data->format = $DB->get_field('course', 'format', ['id' => $this->get_courseid()]);
++
++                // Activity type only applies to the single activity format.
++                if ($data->format != 'singleactivity') {
++                    unset($data->activitytype);
++                }
++
++                continue;
++            }
++
++            if (!isset($data->{$field})) {
++                continue;
++            }
++
++            // Some fields have dependent properties that must be removed alongside them.
++            if ($field == 'summary' && isset($data->summaryformat)) {
++                unset($data->summaryformat);
++            }
++
++            unset($data->{$field});
++        }
++        // Course record ready, update it.
+         $DB->update_record('course', $data);
+ 
+         // Apply any course format options that may be saved against the course
+@@ -2166,7 +2228,9 @@ class restore_course_structure_step extends restore_structure_step {
+         global $DB;
+ 
+         // Add course related files, without itemid to match
+-        $this->add_related_files('course', 'summary', null);
++        if ($this->should_restore_template_field('summary')) {
++            $this->add_related_files('course', 'summary', null);
++        }
+         $this->add_related_files('course', 'overviewfiles', null);
+ 
+         // Deal with legacy allowed modules.
+diff --git a/public/backup/util/plan/restore_plan.class.php b/public/backup/util/plan/restore_plan.class.php
+index 0bb682b5d53..ace92d58710 100644
+--- a/public/backup/util/plan/restore_plan.class.php
++++ b/public/backup/util/plan/restore_plan.class.php
+@@ -95,6 +95,14 @@ class restore_plan extends base_plan implements loggable {
+         return $this->controller->get_logger();
+     }
+ 
++    /**
++     * Returns fields that we want to skip importing
++     * @return array|null
++     */
++    public function get_skiptemplatefields(): ?array {
++        return $this->controller->get_skiptemplatefields();
++    }
++
+     /**
+      * Gets the progress reporter, which can be used to report progress within
+      * the backup or restore process.
+diff --git a/public/backup/util/plan/restore_task.class.php b/public/backup/util/plan/restore_task.class.php
+index cfddcdf20ec..9a7b27ee58c 100644
+--- a/public/backup/util/plan/restore_task.class.php
++++ b/public/backup/util/plan/restore_task.class.php
+@@ -95,6 +95,14 @@ abstract class restore_task extends base_task {
+         return $this->plan->get_info()->original_system_contextid;
+     }
+ 
++    /**
++     * Returns fields that we want to skip importing.
++     * @return array|null
++     */
++    public function get_skiptemplatefields(): ?array {
++        return $this->plan->get_skiptemplatefields();
++    }
++
+     /**
+      * Given a commment area, return the itemname that contains the itemid mappings
+      *

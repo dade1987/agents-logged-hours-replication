@@ -1,0 +1,49 @@
+diff --git a/public/lib/classes/task/scheduled_task.php b/public/lib/classes/task/scheduled_task.php
+index 7d9071e5deb..efbaf3c26c4 100644
+--- a/public/lib/classes/task/scheduled_task.php
++++ b/public/lib/classes/task/scheduled_task.php
+@@ -526,12 +526,12 @@ abstract class scheduled_task extends task_base {
+     /**
+      * Calculate when this task should next be run based on the schedule.
+      *
+-     * @param int $now Current time, for testing (leave 0 to use default time)
++     * @param int $now Current time, for testing (leave 0 to use the time from the \core\clock)
+      * @return int $nextruntime.
+      */
+     public function get_next_scheduled_time(int $now = 0): int {
+         if (!$now) {
+-            $now = time();
++            $now = \core\di::get(\core\clock::class)->time();
+         }
+ 
+         // We need to change to the server timezone before using php date() functions.
+diff --git a/public/lib/tests/task/manager_test.php b/public/lib/tests/task/manager_test.php
+index 062fa842bdd..760419380bd 100644
+--- a/public/lib/tests/task/manager_test.php
++++ b/public/lib/tests/task/manager_test.php
+@@ -680,7 +680,9 @@ final class manager_test extends \advanced_testcase {
+ 
+         $task = new scheduled_test_task();
+         $task->set_month('*');
+-        $task->set_hour('0');
++        // Schedule the task to run at an hour that is well away from the current (frozen) hour, so that the
++        // next scheduled time calculated on completion is never within a few seconds of the frozen clock.
++        $task->set_hour((string) (((int) $clock->now()->format('G') + 12) % 24));
+         $task->set_next_run_time($clock->time() - HOURSECS);
+         $DB->insert_record('task_scheduled', manager::record_from_scheduled_task($task));
+ 
+diff --git a/public/lib/tests/task/scheduled_task_test.php b/public/lib/tests/task/scheduled_task_test.php
+index 24b8a7a0502..e83036b1499 100644
+--- a/public/lib/tests/task/scheduled_task_test.php
++++ b/public/lib/tests/task/scheduled_task_test.php
+@@ -609,7 +609,9 @@ final class scheduled_task_test extends \advanced_testcase {
+         $record->disabled = 1;
+         $DB->insert_record('task_scheduled', $record);
+ 
+-        $now = time();
++        // Freeze the clock so that the times used by the task manager match the ones used in this test.
++        $clock = $this->mock_clock_with_frozen();
++        $now = $clock->time();
+ 
+         // Should get handed the first task.
+         $task = manager::get_next_scheduled_task($now);

@@ -1,0 +1,302 @@
+diff --git a/public/search/engine/simpledb/classes/engine.php b/public/search/engine/simpledb/classes/engine.php
+index e2ab53558c2..b096984848d 100644
+--- a/public/search/engine/simpledb/classes/engine.php
++++ b/public/search/engine/simpledb/classes/engine.php
+@@ -128,56 +128,40 @@ class engine extends \core_search\engine {
+ 
+         // And finally the main query after applying all AND filters.
+         if (!empty($filters->q)) {
++            // Each of the search terms must match (AND), and each term is matched against the start of
++            // the words in the indexed fields (prefix matching), so 'Cat 10' matches 'Cats 101'.
+             switch ($DB->get_dbfamily()) {
+                 case 'postgres':
+-                    $ands[] = "(" .
+-                        "to_tsvector('simple', title) @@ plainto_tsquery('simple', ?) OR ".
+-                        "to_tsvector('simple', content) @@ plainto_tsquery('simple', ?) OR ".
+-                        "to_tsvector('simple', description1) @@ plainto_tsquery('simple', ?) OR ".
+-                        "to_tsvector('simple', description2) @@ plainto_tsquery('simple', ?)".
+-                        ")";
+-                    $params[] = $filters->q;
+-                    $params[] = $filters->q;
+-                    $params[] = $filters->q;
+-                    $params[] = $filters->q;
++                    list($queryand, $queryparams) = $this->get_postgres_query($filters->q);
+                     break;
+                 case 'mysql':
+                     if ($DB->is_fulltext_search_supported()) {
+-                        $ands[] = "MATCH (title, content, description1, description2) AGAINST (?)";
+-                        $params[] = $filters->q;
+-
+-                        // Sorry for the hack, but it does not seem that we will have a solution for
+-                        // this soon (https://bugs.mysql.com/bug.php?id=78485).
+-                        if ($filters->q === '*') {
+-                            return array();
+-                        }
++                        list($queryand, $queryparams) = $this->get_mysql_query($filters->q);
+                     } else {
+                         // Clumsy version for mysql versions with no fulltext support.
+                         list($queryand, $queryparams) = $this->get_simple_query($filters->q);
+-                        $ands[] = $queryand;
+-                        $params = array_merge($params, $queryparams);
+                     }
+                     break;
+                 case 'mssql':
+                     if ($DB->is_fulltext_search_supported()) {
+-                        $ands[] = "CONTAINS ((title, content, description1, description2), ?)";
+-                        // Special treatment for double quotes:
+-                        // - Puntuation is ignored so we can get rid of them.
+-                        // - Phrases should be enclosed in double quotation marks.
+-                        $params[] = '"' . str_replace('"', '', $filters->q) . '"';
++                        list($queryand, $queryparams) = $this->get_mssql_query($filters->q);
+                     } else {
+-                        // Clumsy version for mysql versions with no fulltext support.
++                        // Clumsy version for mssql versions with no fulltext support.
+                         list($queryand, $queryparams) = $this->get_simple_query($filters->q);
+-                        $ands[] = $queryand;
+-                        $params = array_merge($params, $queryparams);
+                     }
+                     break;
+                 default:
+                     list($queryand, $queryparams) = $this->get_simple_query($filters->q);
+-                    $ands[] = $queryand;
+-                    $params = array_merge($params, $queryparams);
+                     break;
+             }
++
++            if ($queryand === null) {
++                // There is nothing searchable in the query, so there can not be any results.
++                $this->totalresults = 0;
++                return [];
++            }
++            $ands[] = $queryand;
++            $params = array_merge($params, $queryparams);
+         }
+ 
+         // It is limited to $limit, no need to use recordsets.
+@@ -331,32 +315,153 @@ class engine extends \core_search\engine {
+         return $this->totalresults;
+     }
+ 
++    /**
++     * Splits the search query into the list of terms to search for.
++     *
++     * Double quotes are removed (phrases are not supported) and the query is split by white spaces.
++     *
++     * @param string $q The query string
++     * @return string[] List of unique, non-empty terms
++     */
++    protected function get_query_terms(string $q): array {
++        $q = str_replace('"', ' ', $q);
++        $terms = preg_split('/\s+/u', trim($q), -1, PREG_SPLIT_NO_EMPTY);
++        if ($terms === false) {
++            // Invalid UTF-8, fallback to a non unicode-aware split.
++            $terms = preg_split('/\s+/', trim($q), -1, PREG_SPLIT_NO_EMPTY);
++        }
++        $unique = [];
++        foreach ($terms as $term) {
++            $unique[\core_text::strtolower($term)] = $term;
++        }
++        return array_values($unique);
++    }
++
++    /**
++     * Whether the term contains at least one letter or number.
++     *
++     * @param string $term
++     * @return bool
++     */
++    protected function term_has_word_characters(string $term): bool {
++        return (bool)preg_match('/[\p{L}\p{N}]/u', $term);
++    }
++
++    /**
++     * Returns the query for PostgreSQL, using full text search with prefix matching.
++     *
++     * @param string $q The query string
++     * @return array SQL string (null if there is nothing to search for) and params list
++     */
++    protected function get_postgres_query(string $q): array {
++        $fields = ['title', 'content', 'description1', 'description2'];
++
++        $termsql = [];
++        $params = [];
++        foreach ($this->get_query_terms($q) as $term) {
++            if (!$this->term_has_word_characters($term)) {
++                continue;
++            }
++            // Quote the term as a tsquery lexeme (so operators are not interpreted) and use prefix matching.
++            $lexeme = "'" . str_replace(['\\', "'"], ['\\\\', "''"], $term) . "':*";
++
++            $fieldsql = [];
++            foreach ($fields as $field) {
++                $fieldsql[] = "to_tsvector('simple', {$field}) @@ to_tsquery('simple', ?)";
++                $params[] = $lexeme;
++            }
++            $termsql[] = '(' . implode(' OR ', $fieldsql) . ')';
++        }
++
++        if (empty($termsql)) {
++            return [null, []];
++        }
++        return ['(' . implode(' AND ', $termsql) . ')', $params];
++    }
++
++    /**
++     * Returns the query for MySQL with fulltext support, using boolean mode with prefix matching.
++     *
++     * @param string $q The query string
++     * @return array SQL string (null if there is nothing to search for) and params list
++     */
++    protected function get_mysql_query(string $q): array {
++        $words = [];
++        foreach ($this->get_query_terms($q) as $term) {
++            // Boolean mode operators and other non-word characters act as word separators.
++            $termwords = preg_split('/[^\p{L}\p{N}_]+/u', $term, -1, PREG_SPLIT_NO_EMPTY);
++            if (!$termwords) {
++                continue;
++            }
++            foreach ($termwords as $word) {
++                $words[\core_text::strtolower($word)] = '+' . $word . '*';
++            }
++        }
++
++        if (empty($words)) {
++            return [null, []];
++        }
++        return ["MATCH (title, content, description1, description2) AGAINST (? IN BOOLEAN MODE)", [implode(' ', $words)]];
++    }
++
++    /**
++     * Returns the query for SQL Server with fulltext support, using prefix terms.
++     *
++     * @param string $q The query string
++     * @return array SQL string (null if there is nothing to search for) and params list
++     */
++    protected function get_mssql_query(string $q): array {
++        $terms = [];
++        foreach ($this->get_query_terms($q) as $term) {
++            // Asterisks are only allowed at the end of prefix terms.
++            $term = trim(str_replace('*', ' ', $term));
++            if ($term === '' || !$this->term_has_word_characters($term)) {
++                continue;
++            }
++            $terms[] = '"' . $term . '*"';
++        }
++
++        if (empty($terms)) {
++            return [null, []];
++        }
++        return ["CONTAINS ((title, content, description1, description2), ?)", [implode(' AND ', $terms)]];
++    }
++
+     /**
+      * Returns the default query for db engines.
+      *
++     * Each term must match the start of a word in any of the fields.
++     *
+      * @param string $q The query string
+-     * @return array SQL string and params list
++     * @return array SQL string (null if there is nothing to search for) and params list
+      */
+     protected function get_simple_query($q) {
+         global $DB;
+ 
+-        $sql = '(' .
+-            $DB->sql_like('title', '?', false, false) . ' OR ' .
+-            $DB->sql_like('content', '?', false, false) . ' OR ' .
+-            $DB->sql_like('description1', '?', false, false) . ' OR ' .
+-            $DB->sql_like('description2', '?', false, false) .
+-            ')';
+-
+-        // Remove single and double quotes from the query.
+-        $q = str_replace(['"', "'"], '', $q);
+-        $params = [
+-            '%' . $q . '%',
+-            '%' . $q . '%',
+-            '%' . $q . '%',
+-            '%' . $q . '%'
+-        ];
+-
+-        return array($sql, $params);
++        $fields = ['title', 'content', 'description1', 'description2'];
++
++        // Remove single quotes from the query (double quotes are removed when splitting it into terms).
++        $q = str_replace("'", '', $q);
++
++        $termsql = [];
++        $params = [];
++        foreach ($this->get_query_terms($q) as $term) {
++            $escaped = $DB->sql_like_escape($term);
++            $fieldsql = [];
++            foreach ($fields as $field) {
++                // Start of the field or start of a word within the field.
++                $fieldsql[] = $DB->sql_like($field, '?', false, false);
++                $params[] = $escaped . '%';
++                $fieldsql[] = $DB->sql_like($field, '?', false, false);
++                $params[] = '% ' . $escaped . '%';
++            }
++            $termsql[] = '(' . implode(' OR ', $fieldsql) . ')';
++        }
++
++        if (empty($termsql)) {
++            return [null, []];
++        }
++        return ['(' . implode(' AND ', $termsql) . ')', $params];
+     }
+ 
+     /**
+diff --git a/public/search/engine/simpledb/tests/engine_test.php b/public/search/engine/simpledb/tests/engine_test.php
+index ea67f63d6aa..3d224f3c951 100644
+--- a/public/search/engine/simpledb/tests/engine_test.php
++++ b/public/search/engine/simpledb/tests/engine_test.php
+@@ -204,6 +204,50 @@ final class engine_test extends \advanced_testcase {
+         $this->assertCount(0, $this->search->search($querydata));
+     }
+ 
++    /**
++     * Data provider for {@see test_search_partial_words}.
++     *
++     * @return array
++     */
++    public static function search_partial_words_provider(): array {
++        return [
++            'Common word' => ['101', ['Cats 101', 'Dogs 101']],
++            'All terms must match' => ['Cats Dogs', []],
++            'Start of words' => ['Cat 10', ['Cats 101']],
++            'Start of word' => ['Dog', ['Dogs 101']],
++            'Case insensitive' => ['dOGS', ['Dogs 101']],
++            'Middle of word' => ['ogs', []],
++            'Prefix of code' => ['CU99999', ['Course CU99999', 'Course CU99999V20']],
++            'Full code' => ['CU99999V20', ['Course CU99999V20']],
++            'Terms in different fields' => ['Cats message', ['Cats 101']],
++            'Quoted terms' => ['"Cats"', ['Cats 101']],
++            'No match' => ['Birds', []],
++        ];
++    }
++
++    /**
++     * Test searching matches the start of words, and that all terms must match.
++     *
++     * @dataProvider search_partial_words_provider
++     * @param string $query
++     * @param string[] $expected Expected titles
++     */
++    public function test_search_partial_words(string $query, array $expected): void {
++        $this->add_mock_search_area();
++
++        foreach (['Cats 101', 'Dogs 101', 'Course CU99999', 'Course CU99999V20'] as $title) {
++            $this->generator->create_record((object) ['title' => $title]);
++        }
++
++        $this->search->index();
++        $this->update_index();
++
++        $results = $this->search->search((object) ['q' => $query]);
++        $titles = array_map(fn($result) => $result->get('title'), $results);
++        sort($titles);
++        $this->assertEquals($expected, $titles);
++    }
++
+     /**
+      * Test delete function
+      *

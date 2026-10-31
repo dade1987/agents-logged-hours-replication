@@ -1,0 +1,128 @@
+diff --git a/public/completion/classes/progress.php b/public/completion/classes/progress.php
+index 48c8c2bf63f..cbd131f7019 100644
+--- a/public/completion/classes/progress.php
++++ b/public/completion/classes/progress.php
+@@ -64,6 +64,55 @@ class progress {
+             return null;
+         }
+ 
++        // The percentage is memoised per request, as it is often requested several times for the same course and user
++        // (e.g. one course_summary_exporter per calendar event). The course cacherev in the key invalidates it when the
++        // course structure changes, and completion_info::internal_set_data() purges it when completion state changes.
++        $cache = self::get_request_cache();
++        $key = null;
++        if (isset($course->cacherev)) {
++            $key = $course->id . '_' . $userid . '_' . $course->cacherev;
++            $cached = $cache->get($key);
++            if ($cached !== false) {
++                return $cached['percentage'];
++            }
++        }
++
++        $percentage = self::calculate_course_progress_percentage($completion, $userid);
++
++        if ($key !== null) {
++            $cache->set($key, ['percentage' => $percentage]);
++        }
++
++        return $percentage;
++    }
++
++    /**
++     * Purges the per-request cache of course progress percentages.
++     *
++     * Called whenever completion data changes within a request.
++     */
++    public static function purge_request_cache(): void {
++        self::get_request_cache()->purge();
++    }
++
++    /**
++     * Returns the request cache used to memoise course progress percentages.
++     *
++     * @return \cache
++     */
++    protected static function get_request_cache(): \cache {
++        return \cache::make_from_params(\cache_store::MODE_REQUEST, 'core', 'completion_progress', [],
++            ['simplekeys' => true]);
++    }
++
++    /**
++     * Calculates the course progress percentage for a user, without using the cache.
++     *
++     * @param \completion_info $completion Completion information for the course
++     * @param int $userid The id of the user
++     * @return null|float The percentage, or null if there are no activities that support completion.
++     */
++    protected static function calculate_course_progress_percentage(\completion_info $completion, int $userid) {
+         // Before we check how many modules have been completed see if the course has.
+         if ($completion->is_course_complete($userid)) {
+             return 100;
+diff --git a/public/lib/completionlib.php b/public/lib/completionlib.php
+index 34405342e66..7bcd412748d 100644
+--- a/public/lib/completionlib.php
++++ b/public/lib/completionlib.php
+@@ -894,6 +894,7 @@ class completion_info {
+         // Difficult to find affected users, just purge all completion cache.
+         cache::make('core', 'completion')->purge();
+         cache::make('core', 'coursecompletion')->purge();
++        \core_completion\progress::purge_request_cache();
+     }
+ 
+     /**
+@@ -948,6 +949,7 @@ class completion_info {
+         // Difficult to find affected users, just purge all completion cache.
+         cache::make('core', 'completion')->purge();
+         cache::make('core', 'coursecompletion')->purge();
++        \core_completion\progress::purge_request_cache();
+     }
+ 
+     /**
+@@ -1270,6 +1272,9 @@ class completion_info {
+         }
+         $transaction->allow_commit();
+ 
++        // Course progress percentages memoised in this request are no longer valid.
++        \core_completion\progress::purge_request_cache();
++
+         $cmcontext = context_module::instance($data->coursemoduleid);
+ 
+         $completioncache = cache::make('core', 'completion');
+@@ -1379,6 +1384,13 @@ class completion_info {
+                 continue;
+             }
+ 
++            // Fast path: a module with no availability, group or grouping restrictions (on the module or its section)
++            // is accessible to every enrolled user, so the availability and capability checks can be skipped.
++            if ($this->is_unrestricted_for_users($cm)) {
++                $visible[$cm->id] = 1;
++                continue;
++            }
++
+             // Step 2: Check if the user is excluded by group or grouping style restrictions.
+             $info = new \core_availability\info_module($cm);
+ 
+@@ -1397,6 +1409,23 @@ class completion_info {
+         return $visible;
+     }
+ 
++    /**
++     * Whether a course module has no restrictions that could exclude a user from it.
++     *
++     * Used to skip the (expensive) availability and capability checks for the common case of unrestricted activities.
++     *
++     * @param cm_info $cm The course module to check
++     * @return bool True if every enrolled user can access the module (subject to the other checks made by the caller)
++     */
++    protected function is_unrestricted_for_users(cm_info $cm): bool {
++        if (!empty($cm->availability) || (int)$cm->groupmode === SEPARATEGROUPS || !empty($cm->groupingid)) {
++            return false;
++        }
++        // Section-level availability also filters users in the slow path, so it has to be unrestricted too.
++        $section = $cm->get_modinfo()->get_section_info($cm->sectionnum, MUST_EXIST);
++        return empty($section->availability);
++    }
++
+     /**
+      * Checks to see if the userid supplied has a tracked role in
+      * this course

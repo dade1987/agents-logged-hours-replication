@@ -1,0 +1,24 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot run Moodle's test suite. You may run `php -l <file>` and read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-88849: Stop using @runInSeparateProcess for externallib.php
+
+The phpunit tag @runInSeparateProcess is a performance nightmare to the extent that it incurs noticeable, demoralizing delays and - in its current incarnation within Moodle - leads to the destruction of data created by Moodle's debug profiling tool by immediately deleting data created by other processes.
+
+In Moodle 4.2, [https://moodle.atlassian.net/browse/MDL-76583|https://moodle.atlassian.net/browse/MDL-76583|smart-link]  moved the external classes in the core_external namespace and externallib.php - as a whole - was documented as being formally deprecated as of Moodle 4.6.
+
+In Moodle 4.3, [https://moodle.atlassian.net/browse/MDL-72321|https://moodle.atlassian.net/browse/MDL-72321|smart-link]  added two new files that anachronistically made use of externallib.php. [https://moodle.atlassian.net/browse/MDL-82639|https://moodle.atlassian.net/browse/MDL-82639|smart-link]  applied most of the changes needed for update_filter_condition, but left behind the externallib.php include.
+
+In [https://moodle.atlassian.net/browse/MDL-81225|https://moodle.atlassian.net/browse/MDL-81225|smart-link] , both externallib.php includes were removed and add_random_questions was modernized. The @runInSeparateProcess tags that are required whenever externallib.php is included were left behind. With MDL-81225, all of the class aliases (and effectively, all "side effects") were removed from externallib.php. As a result, require_phpunit_isolation() should be removed which allows significant cleanup of @runInSeparateProcess tags that were added because of externallib.php inclusions.
+
+Most importantly, this changeset removes the @runInSeparateProcess tag from test_all_external_info. This single change reduces the total duration of the plugin_checks test group from ~8 minutes, 40 seconds to ~2 minutes, 40 seconds (a 225% overall performance _increase_).
+
+
+The developers' tests for this issue use these new or changed classes, functions or web services (names and signatures only; you must implement them):
+(nessuna interfaccia nuova usata dai test)

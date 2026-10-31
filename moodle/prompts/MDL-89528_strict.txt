@@ -1,0 +1,57 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot run Moodle's test suite. You may run `php -l <file>` and read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-89528: Enable Container Injection via PHP Attributes
+
+PHP-DI supports property injection via PHP attributes:
+
+{code:php}class UserController
+{
+    #[\DI\Attribute\Inject]
+    private FormFactoryInterface $formFactory;
+
+    public function createForm($type, $data, $options)
+    {
+        // $this->formFactory->...
+    }
+}{code}
+
+
+
+This is the recommended approach for DI in _Controllers_, and allows for use of the {{injectOn}} approach to [inject on to an existing instance|https://php-di.org/doc/inject-on-instance.html].
+
+{code:php}class Usercontroller
+{
+    #[\DI\Attribute\Inject]
+    private FormFactoryInterface $formFactory;
+
+    public function __construct()
+    {
+        \core\di::get_container()->injectOn($this);
+    }
+}
+
+$controller = new UserController();{code}
+
+When I wrote the initial PHP-DI implementation I did not enable this for several reasons:
+
+# The Inject attribute is implementation-specific, meaning that we are vendor-locked to PHP-DI rather than PSR-11 more generally.
+## It uses the {{\DI\Attribute\Inject}} attribute, which is namespaced within the PHP-DI packages;
+## The {{injectOn}} is a vendor-specific implementation, which is not a part of the PSR-11 spec
+# Future changes to the non-PSR parts of the API
+## If PHP-DI deprecates the attributem, or renames it, or changes it in some way, if we have it littered throughout the codebase then it will become problematic to update.
+
+
+
+As it stands we do not currently enable attribute-based autowiring, but I now feel that we _should_ enable it to help support better migration of legacy classes (using {{injectOn}}), and as we start to roll out more routed controller code.
+
+To address my original concerns:
+
+# There are only a handful of players in the PSR-11 game and PHP-DI is the most prominent. They Symfony and Laraval containers do not really suit our needs. It is unlikely that we will move away from PHP-DI anyway
+# This is a risk whatever we do. There may be things that we can do in the future to help with such changes, but their likelihood at this time is low.

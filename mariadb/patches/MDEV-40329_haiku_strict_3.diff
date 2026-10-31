@@ -1,0 +1,36 @@
+diff --git a/sql/spatial.cc b/sql/spatial.cc
+index e3ce5786..744d4942 100644
+--- a/sql/spatial.cc
++++ b/sql/spatial.cc
+@@ -349,8 +349,9 @@ int Geometry::as_wkt(String *wkt, const char **end)
+     wkt->qs_append('(');
+   if (get_data_as_wkt(wkt, end))
+     return 1;
+-  if (get_class_info() != &geometrycollection_class)
+-    wkt->qs_append(')');
++  if (get_class_info() != &geometrycollection_class &&
++      wkt->append(')'))
++    return 1;
+   return 0;
+ }
+ 
+@@ -3494,7 +3495,8 @@ bool Gis_geometry_collection::get_data_as_wkt(String *txt,
+     goto exit;
+   }
+ 
+-  txt->qs_append('(');
++  if (txt->append('('))
++    return 1;
+   while (n_objects--)
+   {
+     uint32 wkb_type;
+@@ -3512,7 +3514,8 @@ bool Gis_geometry_collection::get_data_as_wkt(String *txt,
+     if (n_objects && txt->append(STRING_WITH_LEN(","), 512))
+       return 1;
+   }
+-  txt->qs_append(')');
++  if (txt->append(')'))
++    return 1;
+ exit:
+   *end= data;
+   return 0;

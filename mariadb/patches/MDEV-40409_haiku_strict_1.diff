@@ -1,0 +1,32 @@
+diff --git a/sql/spatial.cc b/sql/spatial.cc
+index d1ed5bb8..9afa1800 100644
+--- a/sql/spatial.cc
++++ b/sql/spatial.cc
+@@ -3320,14 +3320,23 @@ bool Gis_geometry_collection::init_from_wkt(Gis_read_stream *trs, String *wkb)
+     {
+       for (;;)
+       {
+-        if (!(g= create_from_wkt(&buffer, trs, wkb)))
+-          return 1;
+-
+-        if (g->get_class_info()->m_type_id == wkb_geometrycollection)
++        /*
++          Reject a nested GEOMETRYCOLLECTION before recursing into it,
++          so that deeply nested input cannot exhaust the stack.
++        */
++        LEX_STRING next_word;
++        if (!trs->lookup_next_word(&next_word) &&
++            next_word.length == 18 &&
++            my_charset_latin1.strnncoll("geometrycollection", 18,
++                                        next_word.str, 18) == 0)
+         {
+           trs->set_error_msg("Unexpected GEOMETRYCOLLECTION");
+           return 1;
+         }
++
++        if (!(g= create_from_wkt(&buffer, trs, wkb)))
++          return 1;
++
+         n_objects++;
+         if (trs->skip_char(','))			// Didn't find ','
+           break;

@@ -1,0 +1,96 @@
+diff --git a/client/mysqltest.cc b/client/mysqltest.cc
+index d43b1c79..6f3519db 100644
+--- a/client/mysqltest.cc
++++ b/client/mysqltest.cc
+@@ -676,6 +676,8 @@ void free_replace_regex();
+ 
+ /* Used by sleep */
+ void check_eol_junk_line(const char *eol);
++/* Used by sync_with_master */
++void check_eol_junk(const char *eol);
+ 
+ void free_all_replace(){
+   free_replace();
+@@ -5335,14 +5337,32 @@ void do_sync_with_master2(struct st_command *command, long offset,
+   return;
+ }
+ 
++/*
++  sync_with_master [offset [, connection_name]]
++
++  Both the offset and the connection name may be given as $variables
++  (e.g. "--sync_with_master 0, $connection"), so the arguments are
++  evaluated (variables expanded) before they are parsed.
++*/
++
+ void do_sync_with_master(struct st_command *command)
+ {
+   long offset= 0;
+-  char *p= command->first_argument;
+-  const char *offset_start= p;
++  DYNAMIC_STRING ds_args;
++  char *p;
++  const char *offset_start;
+   char *start, *buff= 0;
+   start= const_cast<char*>("");
+ 
++  /* Expand $variables in the arguments */
++  init_dynamic_string(&ds_args, "", 256, 256);
++  do_eval(&ds_args, command->first_argument, command->end, FALSE);
++  p= ds_args.str;
++
++  while (*p && my_isspace(charset_info, *p))
++    p++;
++  offset_start= p;
++
+   if (*offset_start)
+   {
+     for (; my_isdigit(charset_info, *p); p++)
+@@ -5362,11 +5382,14 @@ void do_sync_with_master(struct st_command *command)
+                                     MYF(MY_WME|MY_FAE));
+       get_string(&buff, &p, command);
+     }
+-    command->last_argument= p;
++    /* Everything left must be whitespace or a trailing comment */
++    check_eol_junk(p);
+   }
++  command->last_argument= command->end;
+   do_sync_with_master2(command, offset, start);
+   if (buff)
+     my_free(start);
++  dynstr_free(&ds_args);
+   return;
+ }
+ 
+diff --git a/mysql-test/main/mysqltest.result b/mysql-test/main/mysqltest.result
+index 747d6f2e..92360fb3 100644
+--- a/mysql-test/main/mysqltest.result
++++ b/mysql-test/main/mysqltest.result
+@@ -554,6 +554,9 @@ LONG_STRING
+ dog
+ mysqltest: At line 1: Invalid integer argument "10!"
+ mysqltest: At line 1: Invalid integer argument "a"
++mysqltest: At line 1: Invalid integer argument "b"
++mysqltest: At line 1: Calling 'sync_with_master' without calling 'save_master_pos'
++mysqltest: At line 1: End of line junk detected: "junk"
+ mysqltest: At line 1: Missing required argument 'connection name' to command 'connect'
+ mysqltest: At line 1: Missing required argument 'connection name' to command 'connect'
+ mysqltest: At line 1: Missing required argument 'host' to command 'connect'
+diff --git a/mysql-test/main/mysqltest.test b/mysql-test/main/mysqltest.test
+index 8932b061..35d4cb2b 100644
+--- a/mysql-test/main/mysqltest.test
++++ b/mysql-test/main/mysqltest.test
+@@ -1753,6 +1753,13 @@ eval select "$long_rep" as x;
+ --exec echo "sync_with_master 10!;" | $MYSQL_TEST 2>&1
+ --error 1
+ --exec echo "sync_with_master a;" | $MYSQL_TEST 2>&1
++# MDEV-40996: arguments may be given as $variables
++--error 1
++--exec echo "let \$off= b; sync_with_master \$off;" | $MYSQL_TEST 2>&1
++--error 1
++--exec echo "let \$con= master2; sync_with_master 0, \$con;" | $MYSQL_TEST 2>&1
++--error 1
++--exec echo "let \$con= master2; sync_with_master 0, '\$con' junk;" | $MYSQL_TEST 2>&1
+ 
+ # ----------------------------------------------------------------------------
+ # Test connect

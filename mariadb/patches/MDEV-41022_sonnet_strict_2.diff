@@ -1,0 +1,31 @@
+diff --git a/storage/innobase/fts/fts0que.cc b/storage/innobase/fts/fts0que.cc
+index b8f22076..dae00dc6 100644
+--- a/storage/innobase/fts/fts0que.cc
++++ b/storage/innobase/fts/fts0que.cc
+@@ -2981,6 +2981,7 @@ fts_query_visitor(
+ 	byte*		ptr;
+ 	fts_string_t	token;
+ 	fts_query_t*	query = static_cast<fts_query_t*>(arg);
++	ulint		saved_flags = 0;
+ 
+ 	ut_a(node);
+ 	DBUG_ENTER("fts_query_visitor");
+@@ -2993,6 +2994,7 @@ fts_query_visitor(
+ 	switch (node->type) {
+ 	case FTS_AST_TEXT:
+ 	case FTS_AST_PARSER_PHRASE_LIST:
++		saved_flags = query->flags;
+ 
+ 		if (query->oper == FTS_EXIST) {
+ 			ut_ad(query->intersection == NULL);
+@@ -3011,6 +3013,10 @@ fts_query_visitor(
+ 
+ 		query->error = fts_query_phrase_search(query, node);
+ 
++		/* Phrase search sets FTS_PHRASE/FTS_PROXIMITY; do not let
++		it leak into subsequent term (wildcard) lookups. */
++		query->flags = saved_flags;
++
+ 		query->collect_positions = FALSE;
+ 
+ 		if (query->oper == FTS_EXIST) {

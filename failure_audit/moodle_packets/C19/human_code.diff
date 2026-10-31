@@ -1,0 +1,165 @@
+diff --git a/public/mod/quiz/report/statistics/classes/hook_callbacks.php b/public/mod/quiz/report/statistics/classes/hook_callbacks.php
+index da441d415f7..19817e7e3bb 100644
+--- a/public/mod/quiz/report/statistics/classes/hook_callbacks.php
++++ b/public/mod/quiz/report/statistics/classes/hook_callbacks.php
+@@ -62,7 +62,8 @@ class hook_callbacks {
+         $updatedattempt = $hook->get_updated_attempt();
+         if (is_null($updatedattempt) || $updatedattempt->state === quiz_attempt::FINISHED) {
+             // Only recalculate on deletion or submission.
+-            return recalculate::queue_future_run($originalattempt->quiz);
++            recalculate::queue_future_run($originalattempt->quiz);
++            return true;
+         }
+         return false;
+     }
+diff --git a/public/mod/quiz/report/statistics/classes/task/recalculate.php b/public/mod/quiz/report/statistics/classes/task/recalculate.php
+index 5d4f3c5a214..efd36e50155 100644
+--- a/public/mod/quiz/report/statistics/classes/task/recalculate.php
++++ b/public/mod/quiz/report/statistics/classes/task/recalculate.php
+@@ -19,6 +19,7 @@ namespace quiz_statistics\task;
+ use core\dml\sql_join;
+ use mod_quiz\quiz_attempt;
+ use quiz_statistics_report;
++use core\task\manager;
+ 
+ defined('MOODLE_INTERNAL') || die();
+ 
+@@ -37,9 +38,15 @@ require_once($CFG->dirroot . '/mod/quiz/report/statistics/report.php');
+  */
+ class recalculate extends \core\task\adhoc_task {
+     /**
+-     * The time to delay queued runs by, to prevent repeated recalculations.
++     * Get the time to delay queued runs by, to prevent repeated recalculations.
++     *
++     * @return int Delay in seconds.
+      */
+-    const DELAY = HOURSECS;
++    protected static function get_delay(): int {
++        $delay = get_config('quiz_statistics', 'recalculatedebounce');
++        return is_numeric($delay) ? (int)$delay : HOURSECS;
++    }
++
+ 
+     /**
+      * Create a new instance of the task.
+@@ -107,11 +114,37 @@ class recalculate extends \core\task\adhoc_task {
+      * within the delay period.
+      *
+      * @param int $quizid The quiz to run the recalculation for.
+-     * @return bool true of the task was queued.
++     * @param bool $now If true, the task will be queued to run immediately, ignoring the delay.
++     * @return void
++     */
++    public static function queue_future_run(int $quizid, bool $now = false): void {
++        $delay = self::get_delay();
++        if ($delay === 0 && !$now) {
++            return;
++        }
++        $nextrun = \core\di::get(\core\clock::class)->time();
++        if (!$now) {
++            $nextrun += $delay;
++        }
++
++        $task = self::instance($quizid);
++        $task->set_next_run_time($nextrun);
++        manager::reschedule_or_queue_adhoc_task($task);
++    }
++
++    /**
++     * Check if there is a pending task for a given quiz.
++     *
++     * @param int $quizid
++     * @return ?int Null for no task, or number of seconds until the task is scheduled to run.
+      */
+-    public static function queue_future_run(int $quizid): bool {
++    public static function task_due_in(int $quizid): ?int {
+         $task = self::instance($quizid);
+-        $task->set_next_run_time(time() + self::DELAY);
+-        return \core\task\manager::queue_adhoc_task($task, true);
++        $scheduledtask = manager::get_queued_adhoc_task_record($task);
++        if (!$scheduledtask) {
++            return null;
++        }
++        return (int)$scheduledtask->nextruntime - \core\di::get(\core\clock::class)->time();
+     }
++
+ }
+diff --git a/public/mod/quiz/report/statistics/lang/en/quiz_statistics.php b/public/mod/quiz/report/statistics/lang/en/quiz_statistics.php
+index c66d34cbb7a..b40f7280c98 100644
+--- a/public/mod/quiz/report/statistics/lang/en/quiz_statistics.php
++++ b/public/mod/quiz/report/statistics/lang/en/quiz_statistics.php
+@@ -106,7 +106,12 @@ $string['quizstructureanalysis'] = 'Quiz structure analysis';
+ $string['random_guess_score'] = 'Random guess score';
+ $string['rangeofvalues'] = 'Range of statistics for these questions';
+ $string['rangebetween'] = '{$a->min} − {$a->max}';
++$string['recalculatedebounce'] = 'Statistics recalculation debounce delay';
++$string['recalculatedebouncedesc'] = 'How long to debounce queued statistics recalculation tasks to prevent repeated recalculations. Set to 0 to prevent automatic recalculation.';
+ $string['recalculatenow'] = 'Recalculate now';
++$string['recalculatenowadded'] = 'Recalculation is added to the queue.';
++$string['recalculatepending'] = 'A recalculation is pending. It is scheduled to run in {$a} seconds.';
++$string['recalculatependingpast'] = 'A recalculation is scheduled and should be running as soon as possible.';
+ $string['recalculatetask'] = 'Recalculate question statistics';
+ $string['reportsettings'] = 'Statistics calculation settings';
+ $string['response'] = 'Response';
+diff --git a/public/mod/quiz/report/statistics/report.php b/public/mod/quiz/report/statistics/report.php
+index 5ecfb1b646d..bed470ae44b 100644
+--- a/public/mod/quiz/report/statistics/report.php
++++ b/public/mod/quiz/report/statistics/report.php
+@@ -28,6 +28,7 @@ defined('MOODLE_INTERNAL') || die();
+ use core_question\statistics\responses\analyser;
+ use mod_quiz\local\reports\report_base;
+ use core_question\statistics\questions\all_calculated_for_qubaid_condition;
++use quiz_statistics\task\recalculate;
+ 
+ require_once($CFG->dirroot . '/mod/quiz/report/reportlib.php');
+ require_once($CFG->dirroot . '/mod/quiz/report/statistics/statistics_form.php');
+@@ -129,7 +130,7 @@ class quiz_statistics_report extends report_base {
+ 
+         // If recalculate was requested, handle that.
+         if ($recalculate && confirm_sesskey()) {
+-            $this->clear_cached_data($qubaids);
++            recalculate::queue_future_run($quiz->id, true);
+             redirect($reporturl);
+         }
+ 
+@@ -859,10 +860,21 @@ class quiz_statistics_report extends report_base {
+         $output .= $OUTPUT->box_start(
+                 'boxaligncenter generalbox boxwidthnormal mdl-align', 'cachingnotice');
+         $output .= get_string('lastcalculated', 'quiz_statistics', $a);
+-        $output .= $OUTPUT->single_button($recalcualteurl,
+-                get_string('recalculatenow', 'quiz_statistics'));
+-        $output .= $OUTPUT->box_end(true);
++        $pending = recalculate::task_due_in($quizid);
++
++        if ($pending > 0 || $pending === null) {
++            $output .= $OUTPUT->single_button(
++                $recalcualteurl,
++                get_string('recalculatenow', 'quiz_statistics')
++            );
++        }
+ 
++        if ($pending !== null) {
++            $string = $pending > 0 ? 'recalculatepending' : 'recalculatependingpast';
++            $output .= $OUTPUT->notification(get_string($string, 'quiz_statistics', $pending), 'info');
++        }
++
++        $output .= $OUTPUT->box_end(true);
+         return $output;
+     }
+ 
+diff --git a/public/mod/quiz/report/statistics/settings.php b/public/mod/quiz/report/statistics/settings.php
+index 7aafb20b625..66845dbcc3e 100644
+--- a/public/mod/quiz/report/statistics/settings.php
++++ b/public/mod/quiz/report/statistics/settings.php
+@@ -32,4 +32,11 @@ if ($ADMIN->fulltree) {
+         get_string('getstatslocktimeoutdesc', 'quiz_statistics'),
+         MINSECS * 15
+     ));
++
++    $settings->add(new admin_setting_configduration(
++        'quiz_statistics/recalculatedebounce',
++        new lang_string('recalculatedebounce', 'quiz_statistics'),
++        new lang_string('recalculatedebouncedesc', 'quiz_statistics'),
++        HOURSECS
++    ));
+ }

@@ -1,0 +1,40 @@
+diff --git a/public/mod/wiki/classes/external.php b/public/mod/wiki/classes/external.php
+index ec0f9e72a74..93e6a815b0d 100644
+--- a/public/mod/wiki/classes/external.php
++++ b/public/mod/wiki/classes/external.php
+@@ -355,6 +355,7 @@ class mod_wiki_external extends external_api {
+         $returnedsubwikis = wiki_get_visible_subwikis($wiki, $cm, $context);
+         foreach ($returnedsubwikis as $subwiki) {
+             $subwiki->canedit = wiki_user_can_edit($subwiki);
++            $subwiki->cancreatepages = wiki_can_create_pages($context);
+         }
+ 
+         $result = array();
+@@ -380,6 +381,8 @@ class mod_wiki_external extends external_api {
+                             'groupid' => new external_value(PARAM_RAW, 'Group ID.'),
+                             'userid' => new external_value(PARAM_INT, 'User ID.'),
+                             'canedit' => new external_value(PARAM_BOOL, 'True if user can edit the subwiki.'),
++                            'cancreatepages' => new external_value(PARAM_BOOL, 'True if user can create pages.',
++                                VALUE_OPTIONAL),
+                         ), 'Subwikis'
+                     )
+                 ),
+@@ -1009,6 +1012,8 @@ class mod_wiki_external extends external_api {
+                 // User cannot view page.
+                 throw new moodle_exception('cannoteditpage', 'wiki');
+             } else if ($subwiki->id < 0) {
++                require_capability('mod/wiki:createpage', $context);
++
+                 // Subwiki needed to check edit permissions.
+                 if (!wiki_user_can_edit($subwiki)) {
+                     throw new moodle_exception('cannoteditpage', 'wiki');
+@@ -1022,6 +1027,9 @@ class mod_wiki_external extends external_api {
+             }
+         }
+ 
++        // Check the user can create pages.
++        require_capability('mod/wiki:createpage', $context);
++
+         // Subwiki needed to check edit permissions.
+         if (!wiki_user_can_edit($subwiki)) {
+             throw new moodle_exception('cannoteditpage', 'wiki');

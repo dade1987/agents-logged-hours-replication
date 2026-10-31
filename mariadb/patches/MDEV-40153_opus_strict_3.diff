@@ -1,0 +1,77 @@
+diff --git a/mysql-test/suite/compat/oracle/r/sp-record.result b/mysql-test/suite/compat/oracle/r/sp-record.result
+index 5b66c6fa..2bc62024 100644
+--- a/mysql-test/suite/compat/oracle/r/sp-record.result
++++ b/mysql-test/suite/compat/oracle/r/sp-record.result
+@@ -895,3 +895,20 @@ NULL;
+ END;
+ $$
+ ERROR HY000: Data type 'rec0_t' doesn't support CHARACTER SET attribute.
++#
++# MDEV-40153 Assertion `rec->field->head()->charset == nullptr' failed in Type_handler_row::Column_definition_prepare_stage1
++#
++CREATE PACKAGE pk_crash AS TYPE r IS RECORD (b BLOB); FUNCTION f RETURN r; END;
++$$
++DROP PACKAGE pk_crash;
++CREATE FUNCTION f1 RETURN INT AS
++TYPE r_t IS RECORD (b VARBINARY(10), c VARCHAR(10) CHARACTER SET latin1);
++r r_t;
++BEGIN
++r.b:= 'b'; r.c:= 'c';
++RETURN LENGTH(r.b) + LENGTH(r.c);
++END;
++$$
++SELECT f1();
++f1()
++2
+diff --git a/mysql-test/suite/compat/oracle/t/sp-record.test b/mysql-test/suite/compat/oracle/t/sp-record.test
+index b75a739d..a421c295 100644
+--- a/mysql-test/suite/compat/oracle/t/sp-record.test
++++ b/mysql-test/suite/compat/oracle/t/sp-record.test
+@@ -975,3 +975,26 @@ BEGIN
+ END;
+ $$
+ DELIMITER ;$$
++
++--echo #
++--echo # MDEV-40153 Assertion `rec->field->head()->charset == nullptr' failed in Type_handler_row::Column_definition_prepare_stage1
++--echo #
++
++DELIMITER $$;
++CREATE PACKAGE pk_crash AS TYPE r IS RECORD (b BLOB); FUNCTION f RETURN r; END;
++$$
++DELIMITER ;$$
++DROP PACKAGE pk_crash;
++
++DELIMITER $$;
++CREATE FUNCTION f1 RETURN INT AS
++  TYPE r_t IS RECORD (b VARBINARY(10), c VARCHAR(10) CHARACTER SET latin1);
++  r r_t;
++BEGIN
++  r.b:= 'b'; r.c:= 'c';
++  RETURN LENGTH(r.b) + LENGTH(r.c);
++END;
++$$
++DELIMITER ;$$
++SELECT f1();
++DROP FUNCTION f1;
+diff --git a/sql/sql_type_row.cc b/sql/sql_type_row.cc
+index 97d48ed3..829c1ca8 100644
+--- a/sql/sql_type_row.cc
++++ b/sql/sql_type_row.cc
+@@ -252,7 +252,15 @@ bool Type_handler_row::
+   {
+     DBUG_ASSERT(rec->field);
+     DBUG_ASSERT(rec->field->elements);
+-    DBUG_ASSERT(rec->field->head()->charset == nullptr); // Not prepared
++    /*
++      Make sure the record structure has not been prepared yet.
++      Note, we cannot test charset==nullptr here: data types like
++      BLOB, BINARY, VARBINARY, or data types with an explicit
++      CHARACTER SET/COLLATE clause, get a non-NULL charset at parse time.
++      FIELDFLAG_MAYBE_NULL is set by sp_head::fill_spvar_definition()
++      on prepared definitions only.
++    */
++    DBUG_ASSERT(!f_maybe_null(rec->field->head()->pack_flag)); // Not prepared
+     Row_definition_list *row= rec->field->deep_copy(thd);
+     if (!row || thd->lex->sphead->row_fill_field_definitions(thd, row))
+       return true; // Error

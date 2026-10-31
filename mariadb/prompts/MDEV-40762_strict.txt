@@ -1,0 +1,105 @@
+You are a software engineer fixing an issue in MariaDB Server (C/C++). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot build MariaDB or run its test suite. Read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update mysql-test tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDEV-40762: Wrong MAX() result with GROUP BY when loose index scan uses DESC key part
+
+h2. Summary
+
+MariaDB 12.3.2 returns the lowest/first DATETIME value for MAX() in a grouped derived table when the optimizer uses a composite index whose MAX key part is DESC. Dropping the DESC indexes makes the same SQL return the correct maximum.
+
+This appears to be a wrong-result regression related to MDEV-32732 ("Loose Index Scan / Using index for group-by can use indexes with DESC key parts").
+
+h2. Environment
+
+{code}
+MariaDB 12.3.2-MariaDB-ubu2404-log
+Ubuntu 24.04
+InnoDB
+utf8mb4_bin
+{code}
+
+h2. Relevant table/index shape
+
+{code:sql}
+CREATE TABLE t (
+  interval_id CHAR(4) NOT NULL,
+  exchange_id VARCHAR(32) NOT NULL,
+  base_asset VARCHAR(15) NOT NULL,
+  quote_asset VARCHAR(15) NOT NULL,
+  open_time DATETIME NOT NULL,
+  symbol VARCHAR(30) NOT NULL,
+  final CHAR(1) NOT NULL DEFAULT 'Y',
+  PRIMARY KEY (interval_id, exchange_id, base_asset, quote_asset, open_time, symbol),
+  KEY idx_asc
+    (interval_id, exchange_id, base_asset, quote_asset, open_time, final),
+  KEY idx_desc
+    (interval_id, exchange_id, base_asset, quote_asset, open_time DESC),
+  KEY idx_desc_final
+    (interval_id, exchange_id, base_asset, quote_asset, open_time DESC, final)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+{code}
+
+The production table contains multiple dates for each
+(interval_id, exchange_id, base_asset, quote_asset) group.
+
+h2. Query
+
+{code:sql}
+SELECT a.interval_id,
+       a.exchange_id,
+       a.base_asset,
+       a.quote_asset,
+       a.open_time,
+       b.open_time_max
+FROM t AS a
+JOIN (
+    SELECT interval_id,
+           exchange_id,
+           base_asset,
+           quote_asset,
+           MAX(open_time) AS open_time_max
+    FROM t
+    WHERE exchange_id = 'binance'
+    GROUP BY interval_id, exchange_id, base_asset, quote_asset
+) AS b
+  ON a.interval_id = b.interval_id
+ AND a.exchange_id = b.exchange_id
+ AND a.base_asset = b.base_asset
+ AND a.quote_asset = b.quote_asset
+ AND a.open_time = b.open_time_max;
+{code}
+
+For an affected monthly group, the available records include dates after
+2026-03-01, but the query returns:
+
+{code}
+open_time             open_time_max
+2026-03-01 00:00:00   2026-03-01 00:00:00
+{code}
+
+2026-03-01 is the first/lowest record, not the maximum.
+
+h2. Expected result
+
+Both columns should contain the latest/highest open_time in the group.
+
+h2. Observations
+
+* A normal non-grouped MAX(open_time) returns the correct result.
+* The grouped query/derived-table join returns the first date.
+* The query plan uses the loose index scan ("Using index for group-by") path.
+* Dropping idx_desc and idx_desc_final immediately makes the unchanged query return the correct latest date.
+* Recreating/using the DESC indexes makes the wrong-result path available again.
+* Disabling split_materialized did not correct the result.
+* The wrong result is especially dangerous when the derived table is joined into an UPDATE: the oldest row is updated instead of the newest row.
+
+h2. Workaround
+
+Drop/avoid the DESC indexes so the optimizer uses an ascending index, or prevent the loose MIN/MAX optimization by using a non-simple expression. Both approaches make the result correct.
+

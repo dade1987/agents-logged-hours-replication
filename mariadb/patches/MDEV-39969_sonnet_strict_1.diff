@@ -1,0 +1,34 @@
+diff --git a/sql/json_table.cc b/sql/json_table.cc
+index e5ac6008..ec8035c7 100644
+--- a/sql/json_table.cc
++++ b/sql/json_table.cc
+@@ -384,6 +384,29 @@ static void store_json_in_field(Field *f, const json_engine_t *je)
+     }
+     break;
+   }
++  case JSON_VALUE_NUMBER:
++  case JSON_VALUE_STRING:
++    if (f->type() == MYSQL_TYPE_BIT)
++    {
++      /*
++        Field_bit::store(const char*) treats the string as a binary string,
++        so convert the textual value to a number first.
++      */
++      int err;
++      const char *end;
++      const char *str= (const char *) je->value;
++      size_t len= je->value_len;
++      if (je->value_type == JSON_VALUE_STRING && je->value_escaped)
++        break;
++      ulonglong nr= (ulonglong) je->s.cs->strntoull10rnd(str, len, true,
++                                                        &end, &err);
++      if (!err && end == str + len)
++      {
++        f->store((longlong) nr, true);
++        return;
++      }
++    }
++    break;
+   default:
+     break;
+   };

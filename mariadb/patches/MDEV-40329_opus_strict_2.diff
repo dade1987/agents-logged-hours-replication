@@ -1,0 +1,67 @@
+diff --git a/mysql-test/main/gis.result b/mysql-test/main/gis.result
+index 171803ec..0615cc4f 100644
+--- a/mysql-test/main/gis.result
++++ b/mysql-test/main/gis.result
+@@ -5613,4 +5613,12 @@ NULL
+ select  glength(x'0000000001050000000100000001020000');
+ glength(x'0000000001050000000100000001020000')
+ NULL
++#
++# MDEV-40329 Binary_string::qs_append(char): Assertion failed in AsText
++#
++SET @g= ST_AsText(UNHEX(CONCAT('000000000', REPEAT('107000000010000000', 200), '10100000000000000000000000000000000000000')));
++SELECT LENGTH(@g) AS len, LEFT(@g, 38) AS l, RIGHT(@g, 15) AS r;
++len	l	r
++4010	GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(	(0 0)))))))))))
++SET @g= NULL;
+ # End of 10.6 tests
+diff --git a/mysql-test/main/gis.test b/mysql-test/main/gis.test
+index 4cb51fdc..17deff1d 100644
+--- a/mysql-test/main/gis.test
++++ b/mysql-test/main/gis.test
+@@ -3583,4 +3583,11 @@ select st_centroid(x'0000000001060000000100000001030000');
+ select  glength(x'0000000001050000000100000001020000');
+ 
+ 
++--echo #
++--echo # MDEV-40329 Binary_string::qs_append(char): Assertion failed in AsText
++--echo #
++SET @g= ST_AsText(UNHEX(CONCAT('000000000', REPEAT('107000000010000000', 200), '10100000000000000000000000000000000000000')));
++SELECT LENGTH(@g) AS len, LEFT(@g, 38) AS l, RIGHT(@g, 15) AS r;
++SET @g= NULL;
++
+ --echo # End of 10.6 tests
+diff --git a/sql/spatial.cc b/sql/spatial.cc
+index e3ce5786..9ffcbda6 100644
+--- a/sql/spatial.cc
++++ b/sql/spatial.cc
+@@ -350,7 +350,11 @@ int Geometry::as_wkt(String *wkt, const char **end)
+   if (get_data_as_wkt(wkt, end))
+     return 1;
+   if (get_class_info() != &geometrycollection_class)
++  {
++    if (wkt->reserve(1, 512))
++      return 1;
+     wkt->qs_append(')');
++  }
+   return 0;
+ }
+ 
+@@ -3494,6 +3498,8 @@ bool Gis_geometry_collection::get_data_as_wkt(String *txt,
+     goto exit;
+   }
+ 
++  if (txt->reserve(1, 512))
++    return 1;
+   txt->qs_append('(');
+   while (n_objects--)
+   {
+@@ -3512,6 +3518,8 @@ bool Gis_geometry_collection::get_data_as_wkt(String *txt,
+     if (n_objects && txt->append(STRING_WITH_LEN(","), 512))
+       return 1;
+   }
++  if (txt->reserve(1, 512))
++    return 1;
+   txt->qs_append(')');
+ exit:
+   *end= data;

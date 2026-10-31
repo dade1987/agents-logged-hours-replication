@@ -1,0 +1,204 @@
+diff --git a/public/course/classes/route/controller/course_navigation.php b/public/course/classes/route/controller/course_navigation.php
+index 120a6c99b6e..530fdf65032 100644
+--- a/public/course/classes/route/controller/course_navigation.php
++++ b/public/course/classes/route/controller/course_navigation.php
+@@ -156,9 +156,9 @@ class course_navigation {
+      * Get the section of a course module; if the section is delegated, get the parent section.
+      *
+      * @param cm_info $cm
+-     * @return \section_info
++     * @return section_info|null
+      */
+-    private function get_section(cm_info $cm): section_info {
++    public function get_section(cm_info $cm): ?section_info {
+         $section = $cm->get_section_info();
+         if (!$section->is_delegated()) {
+             return $section;
+@@ -175,7 +175,7 @@ class course_navigation {
+      * @param section_info $section
+      * @return cm_info[]
+      */
+-    private function get_all_section_cms(modinfo $modinfo, section_info $section): array {
++    public function get_all_section_cms(modinfo $modinfo, section_info $section): array {
+         $sectioncms = [];
+         foreach ($section->get_sequence_cm_infos() as $cm) {
+             $delegatedsection = $cm->get_delegated_section_info();
+@@ -191,6 +191,113 @@ class course_navigation {
+         return $sectioncms;
+     }
+ 
++    /**
++     * Get the adjacent navigable (non delegated, available) section.
++     *
++     * @param modinfo $modinfo
++     * @param section_info $currentsection
++     * @param string $direction 'next' or 'previous'.
++     * @return section_info|null The section, or null if there are no more sections in that direction.
++     */
++    public function get_adjacent_section(
++        modinfo $modinfo,
++        section_info $currentsection,
++        string $direction,
++    ): ?section_info {
++        $step = ($direction === 'previous') ? -1 : 1;
++        $sectionnum = $currentsection->sectionnum + $step;
++        while ($sectionnum >= 0) {
++            $section = $modinfo->get_section_info($sectionnum);
++            if ($section === null) {
++                return null;
++            }
++            $hidden = !$section->uservisible && (!$section->visible || !$section->availableinfo);
++            if (!$hidden && !$section->is_delegated()) {
++                return $section;
++            }
++            $sectionnum += $step;
++        }
++        return null;
++    }
++
++    /**
++     * Check if there is any navigable activity in the given direction, starting from a position.
++     *
++     * @param cm_info $cm
++     * @param modinfo $modinfo
++     * @param cm_info[] $allsectioncms
++     * @param string $direction 'next' or 'previous'.
++     * @return bool
++     */
++    private function has_navigable_in_direction(
++        cm_info $cm,
++        modinfo $modinfo,
++        array $allsectioncms,
++        string $direction,
++    ): bool {
++        $allsectioncms = array_values($allsectioncms);
++        $cmindex = array_search($cm, $allsectioncms, true);
++        if ($cmindex === false) {
++            foreach ($allsectioncms as $index => $candidate) {
++                if ($candidate->id == $cm->id) {
++                    $cmindex = $index;
++                    break;
++                }
++            }
++        }
++        $step = ($direction === 'previous') ? -1 : 1;
++        if ($cmindex !== false) {
++            $count = count($allsectioncms);
++            for ($i = $cmindex + $step; $i >= 0 && $i < $count; $i += $step) {
++                if ($this->is_valid_cm($allsectioncms[$i])) {
++                    return true;
++                }
++            }
++        }
++
++        $section = $this->get_section($cm);
++        while ($section = ($section ? $this->get_adjacent_section($modinfo, $section, $direction) : null)) {
++            foreach ($this->get_all_section_cms($modinfo, $section) as $othercm) {
++                if ($this->is_valid_cm($othercm)) {
++                    return true;
++                }
++            }
++        }
++        return false;
++    }
++
++    /**
++     * Check if the course module is the first navigable activity of the course.
++     *
++     * @param cm_info $cm
++     * @param modinfo $modinfo
++     * @param cm_info[] $allsectioncms All the course modules of the cm section.
++     * @return bool
++     */
++    public function is_first_navigable(
++        cm_info $cm,
++        modinfo $modinfo,
++        array $allsectioncms,
++    ): bool {
++        return !$this->has_navigable_in_direction($cm, $modinfo, $allsectioncms, 'previous');
++    }
++
++    /**
++     * Check if the course module is the last navigable activity of the course.
++     *
++     * @param cm_info $cm
++     * @param modinfo $modinfo
++     * @param cm_info[] $allsectioncms All the course modules of the cm section.
++     * @return bool
++     */
++    public function is_last_navigable(
++        cm_info $cm,
++        modinfo $modinfo,
++        array $allsectioncms,
++    ): bool {
++        return !$this->has_navigable_in_direction($cm, $modinfo, $allsectioncms, 'next');
++    }
++
+     /**
+      * Redirect to the next/previous section view page.
+      *
+diff --git a/public/course/format/classes/output/local/linearnavigation/footer_content.php b/public/course/format/classes/output/local/linearnavigation/footer_content.php
+index f90a7ff41c5..098bd163984 100644
+--- a/public/course/format/classes/output/local/linearnavigation/footer_content.php
++++ b/public/course/format/classes/output/local/linearnavigation/footer_content.php
+@@ -47,6 +47,13 @@ class footer_content implements named_templatable, renderable {
+ 
+     #[\Override]
+     public function export_for_template(renderer_base $output) {
++        $controller = new course_navigation();
++        $modinfo = $this->cminfo->get_modinfo();
++        $section = $controller->get_section($this->cminfo);
++        $allsectioncms = $section ? $controller->get_all_section_cms($modinfo, $section) : [];
++        $isfirst = $controller->is_first_navigable($this->cminfo, $modinfo, $allsectioncms);
++        $islast = $controller->is_last_navigable($this->cminfo, $modinfo, $allsectioncms);
++
+         // Get previous and next URLs for the current course module.
+         $previousurl = util::get_path_for_callable(
+             [course_navigation::class, 'cm_previous_element'],
+@@ -58,8 +65,9 @@ class footer_content implements named_templatable, renderable {
+         );
+ 
+         return [
+-            'previousurl' => $previousurl->out(false),
+-            'nexturl' => $nexturl->out(false),
++            'previousurl' => $isfirst ? null : $previousurl->out(false),
++            'nexturl' => $islast ? null : $nexturl->out(false),
++            'courseurl' => $islast ? course_get_url($this->cminfo->course)->out(false) : null,
+             'completion' => $this->export_completion($output),
+         ];
+     }
+diff --git a/public/course/format/templates/local/linearnavigation/footer_content.mustache b/public/course/format/templates/local/linearnavigation/footer_content.mustache
+index a916bc770f4..892ae023808 100644
+--- a/public/course/format/templates/local/linearnavigation/footer_content.mustache
++++ b/public/course/format/templates/local/linearnavigation/footer_content.mustache
+@@ -23,6 +23,7 @@
+     {
+         "previousurl": "http://moodle.com/course/cms/42/previous",
+         "nexturl": "http://moodle.com/course/cms/42/next",
++        "courseurl": "",
+         "completion": "<span class=\"completion-status text-success\"><i class=\"fa fa-check\"></i> <span>Done</span></span>"
+     }
+ }}
+@@ -50,5 +51,10 @@
+             <span class="dir-ltr-hide" aria-hidden="true">{{#pix}} e/backward, core {{/pix}}</span>
+         </a>
+         {{/nexturl}}
++        {{#courseurl}}
++        <a href="{{.}}" class="course-linear-navigation-link text-decoration-none d-inline-flex align-items-center gap-1 ms-auto">
++            <span>{{#str}} gotocourse, core {{/str}}</span>
++        </a>
++        {{/courseurl}}
+     </div>
+ </div>
+diff --git a/public/lang/en/moodle.php b/public/lang/en/moodle.php
+index 83436c136be..d7363ad2462 100644
+--- a/public/lang/en/moodle.php
++++ b/public/lang/en/moodle.php
+@@ -968,6 +968,7 @@ $string['geolocation'] = 'latitude - longitude';
+ $string['gettheselogs'] = 'Get these logs';
+ $string['go'] = 'Go';
+ $string['gobacktosite'] = 'Go back to site';
++$string['gotocourse'] = 'Go to course';
+ $string['gpl'] = 'Copyright (C) 1999 onwards Martin Dougiamas (https://moodle.com)
+ 
+ This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation; either version 2 of the License, or (at your option) any later version.

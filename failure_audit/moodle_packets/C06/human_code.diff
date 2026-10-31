@@ -1,0 +1,125 @@
+diff --git a/.upgradenotes/MDL-89200-2026072407170088.yml b/.upgradenotes/MDL-89200-2026072407170088.yml
+new file mode 100644
+index 00000000000..b75f5304039
+--- /dev/null
++++ b/.upgradenotes/MDL-89200-2026072407170088.yml
+@@ -0,0 +1,8 @@
++issueNumber: MDL-89200
++notes:
++  core:
++    - message: >-
++        The `\core\task\manager::set_scheduled_task_nextruntime()` method now
++        returns a boolean indicating whether the next run time was updated. It
++        returns `false` when the scheduled task is already running.
++      type: changed
+diff --git a/public/admin/tool/task/lang/en/tool_task.php b/public/admin/tool/task/lang/en/tool_task.php
+index 7ccee87463e..d444b3f83ce 100644
+--- a/public/admin/tool/task/lang/en/tool_task.php
++++ b/public/admin/tool/task/lang/en/tool_task.php
+@@ -84,10 +84,12 @@ $string['runadhoctasksfailed'] = 'Run failed \'{$a}\' tasks';
+ $string['runagain'] = 'Run again';
+ $string['runasap'] = 'Run ASAP';
+ $string['runasap_confirm'] = 'Are you sure you want to run this task \'{$a}\' ASAP? The task will run via cron at the next available time.';
++$string['runasaperrorrunning'] = 'This task \'{$a}\' is already running and cannot be scheduled to run ASAP.';
+ $string['runasapsuccess'] = 'This task \'{$a}\' has been scheduled to run ASAP.';
+ $string['runclassname'] = 'Run all';
+ $string['runclassnamedueonly'] = 'Run due only';
+ $string['runclassnamefailedonly'] = 'Run all failed';
++$string['running'] = 'Running';
+ $string['runningalltasks'] = 'Running all tasks';
+ $string['runningfailedtasks'] = 'Running failed tasks';
+ $string['runningtasks'] = 'Tasks running now';
+diff --git a/public/admin/tool/task/renderer.php b/public/admin/tool/task/renderer.php
+index 583a4ef428b..eabb1019d66 100644
+--- a/public/admin/tool/task/renderer.php
++++ b/public/admin/tool/task/renderer.php
+@@ -435,7 +435,7 @@ class tool_task_renderer extends plugin_renderer_base {
+ 
+             $runnow = '';
+             $canrunthistask = $canruntasks && $task->can_run();
+-            if ($canrunthistask) {
++            if ($canrunthistask && !$task->get_timestarted()) {
+                 $runnow .= html_writer::div(
+                     html_writer::link(
+                         new moodle_url('/admin/tool/task/schedule_task.php', [
+@@ -583,7 +583,9 @@ class tool_task_renderer extends plugin_renderer_base {
+     public function next_run_time(scheduled_task $task): string {
+         $nextrun = $task->get_next_run_time();
+ 
+-        if (!$task->is_component_enabled() && !$task->get_run_if_component_disabled()) {
++        if ($task->get_timestarted()) {
++            $nextrun = get_string('running', 'tool_task');
++        } else if (!$task->is_component_enabled() && !$task->get_run_if_component_disabled()) {
+             $nextrun = get_string('plugindisabled', 'tool_task');
+         } else if ($task->get_disabled()) {
+             $nextrun = get_string('taskdisabled', 'tool_task');
+diff --git a/public/admin/tool/task/schedule_task.php b/public/admin/tool/task/schedule_task.php
+index 2824cea75be..786a0b01dfa 100644
+--- a/public/admin/tool/task/schedule_task.php
++++ b/public/admin/tool/task/schedule_task.php
+@@ -80,8 +80,14 @@ if ($action == 'asap') {
+         );
+     }
+     // Set nextruntime to the past so cron picks it up on its very next run.
+-    \core\task\manager::set_scheduled_task_nextruntime($task, time() - HOURSECS);
+-    echo $OUTPUT->notification(get_string('runasapsuccess', 'tool_task', $task->get_name()), 'success');
++    if (\core\task\manager::set_scheduled_task_nextruntime($task, time() - HOURSECS)) {
++        echo $OUTPUT->notification(get_string('runasapsuccess', 'tool_task', $task->get_name()), 'success');
++    } else {
++        echo $OUTPUT->notification(
++            get_string('runasaperrorrunning', 'tool_task', $task->get_name()),
++            \core\output\notification::NOTIFY_ERROR,
++        );
++    }
+     echo $output->link_back(get_class($task));
+     echo $OUTPUT->footer();
+     exit;
+diff --git a/public/lib/classes/task/manager.php b/public/lib/classes/task/manager.php
+index 1bd67857f72..931090e8236 100644
+--- a/public/lib/classes/task/manager.php
++++ b/public/lib/classes/task/manager.php
+@@ -1393,17 +1393,37 @@ class manager {
+      *
+      * @param scheduled_task $task Task to modify
+      * @param int $nextruntime timestamp
++     * @return bool Whether the next run time was updated
+      * @throws \dml_exception If there is a database error
+      * @since Moodle 5.3
+      */
+-    public static function set_scheduled_task_nextruntime(scheduled_task $task, int $nextruntime): void {
++    public static function set_scheduled_task_nextruntime(scheduled_task $task, int $nextruntime): bool {
+         global $DB;
+-        $DB->set_field(
+-            'task_scheduled',
+-            'nextruntime',
+-            $nextruntime,
+-            ['classname' => self::get_canonical_class_name($task)]
+-        );
++
++        $classname = self::get_canonical_class_name($task);
++        $lockfactory = \core\lock\lock_config::get_lock_factory('cron');
++        $tasklock = $lockfactory->get_lock($classname, 0);
++        if (!$tasklock) {
++            return false;
++        }
++
++        try {
++            $record = $DB->get_record(
++                'task_scheduled',
++                ['classname' => $classname],
++                'id, timestarted',
++                MUST_EXIST,
++            );
++            if ($record->timestarted) {
++                return false;
++            }
++
++            $DB->set_field('task_scheduled', 'nextruntime', $nextruntime, ['id' => $record->id]);
++        } finally {
++            $tasklock->release();
++        }
++
++        return true;
+     }
+ 
+     /**

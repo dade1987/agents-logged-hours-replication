@@ -1,0 +1,118 @@
+diff --git a/public/admin/tool/recyclebin/tests/async_course_deletion_test.php b/public/admin/tool/recyclebin/tests/async_course_deletion_test.php
+new file mode 100644
+index 00000000000..972573832b2
+--- /dev/null
++++ b/public/admin/tool/recyclebin/tests/async_course_deletion_test.php
+@@ -0,0 +1,62 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace tool_recyclebin;
++
++/**
++ * Recycle bin tests for asynchronous course deletion.
++ *
++ * @package    tool_recyclebin
++ * @copyright  2026 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ * @covers     \tool_recyclebin\category_bin
++ */
++final class async_course_deletion_test extends \advanced_testcase {
++
++    /**
++     * A course deleted asynchronously must leave exactly one restorable copy in the category bin.
++     */
++    public function test_async_deletion_stores_a_single_item(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $this->setAdminUser();
++
++        set_config('categorybinenable', 1, 'tool_recyclebin');
++        set_config('enablecourseasyncdeletion', 1, 'moodlecourse');
++
++        $course = $this->getDataGenerator()->create_course();
++        $this->assertEquals(0, $DB->count_records('tool_recyclebin_category'));
++
++        // A manager deletes the course. Async is preferred, so this only queues the ad hoc task.
++        delete_course($course, false);
++        $this->assertTrue($DB->record_exists('course', ['id' => $course->id]));
++
++        // Cron runs the queued task, which calls delete_course() with $showfeedback = true.
++        ob_start();
++        $this->run_all_adhoc_tasks();
++        ob_end_clean();
++
++        // The course row is now really gone.
++        $this->assertFalse($DB->record_exists('course', ['id' => $course->id]));
++
++        // There must be exactly one restorable copy.
++        $this->assertEquals(1, $DB->count_records('tool_recyclebin_category'));
++
++        $recyclebin = new \tool_recyclebin\category_bin($course->category);
++        $this->assertCount(1, $recyclebin->get_items());
++    }
++}
+diff --git a/public/lib/moodlelib.php b/public/lib/moodlelib.php
+index e7c00f76baa..a217015ff4d 100644
+--- a/public/lib/moodlelib.php
++++ b/public/lib/moodlelib.php
+@@ -4489,6 +4489,22 @@ function delete_course($courseorid, $showfeedback = true, bool $asyncpreferred =
+         return false;
+     }
+ 
++    // Eventually delete the course asynchronously.
++    if ($asyncpreferred && !empty(get_config('moodlecourse', 'enablecourseasyncdeletion'))) {
++        // Mark the course for deletion, to prevent interference between backup/restore processes
++        // and to show it as queued for deletion.
++        \core_course\management\helper::action_course_mark_for_deletioninprogress($course);
++
++        // Trigger an adhoc task to delete the course asynchronously.
++        $task = new \core_course\task\course_async_deletion();
++        $task->set_custom_data(['courseid' => (int) $courseid]);
++        \core\task\manager::queue_adhoc_task($task, true);
++
++        // Early exit, because the course will be deleted later. The pre course delete plugin callbacks
++        // and the before_course_deleted hook are run only once, when the course is actually deleted by the task.
++        return true;
++    }
++
+     // Allow plugins to use this course before we completely delete it.
+     if ($pluginsfunction = get_plugins_with_function('pre_course_delete')) {
+         foreach ($pluginsfunction as $plugintype => $plugins) {
+@@ -4504,21 +4520,9 @@ function delete_course($courseorid, $showfeedback = true, bool $asyncpreferred =
+     );
+     \core\di::get(\core\hook\manager::class)->dispatch($hook);
+ 
+-    // Mark a course for deletion, regardless of whether synchronous or asynchronous deletion takes place,
+-    // to prevent interference between backup/restore processes.
++    // Mark a course for deletion (if not already done), to prevent interference between backup/restore processes.
+     \core_course\management\helper::action_course_mark_for_deletioninprogress($course);
+ 
+-    // Eventually delete the course asynchronously.
+-    if ($asyncpreferred && !empty(get_config('moodlecourse', 'enablecourseasyncdeletion'))) {
+-        // Trigger an adhoc task to delete the course asynchronously .
+-        $task = new \core_course\task\course_async_deletion();
+-        $task->set_custom_data(['courseid' => (int) $courseid]);
+-        \core\task\manager::queue_adhoc_task($task, true);
+-
+-        // Early exit, because the course will be deleted later.
+-        return true;
+-    }
+-
+     // Tell the search manager we are about to delete a course. This prevents us sending updates
+     // for each individual context being deleted.
+     \core_search\manager::course_deleting_start($courseid);

@@ -1,0 +1,184 @@
+diff --git a/public/search/engine/simpledb/classes/engine.php b/public/search/engine/simpledb/classes/engine.php
+index e2ab53558c2..b4ba7adb648 100644
+--- a/public/search/engine/simpledb/classes/engine.php
++++ b/public/search/engine/simpledb/classes/engine.php
+@@ -128,56 +128,11 @@ class engine extends \core_search\engine {
+ 
+         // And finally the main query after applying all AND filters.
+         if (!empty($filters->q)) {
+-            switch ($DB->get_dbfamily()) {
+-                case 'postgres':
+-                    $ands[] = "(" .
+-                        "to_tsvector('simple', title) @@ plainto_tsquery('simple', ?) OR ".
+-                        "to_tsvector('simple', content) @@ plainto_tsquery('simple', ?) OR ".
+-                        "to_tsvector('simple', description1) @@ plainto_tsquery('simple', ?) OR ".
+-                        "to_tsvector('simple', description2) @@ plainto_tsquery('simple', ?)".
+-                        ")";
+-                    $params[] = $filters->q;
+-                    $params[] = $filters->q;
+-                    $params[] = $filters->q;
+-                    $params[] = $filters->q;
+-                    break;
+-                case 'mysql':
+-                    if ($DB->is_fulltext_search_supported()) {
+-                        $ands[] = "MATCH (title, content, description1, description2) AGAINST (?)";
+-                        $params[] = $filters->q;
+-
+-                        // Sorry for the hack, but it does not seem that we will have a solution for
+-                        // this soon (https://bugs.mysql.com/bug.php?id=78485).
+-                        if ($filters->q === '*') {
+-                            return array();
+-                        }
+-                    } else {
+-                        // Clumsy version for mysql versions with no fulltext support.
+-                        list($queryand, $queryparams) = $this->get_simple_query($filters->q);
+-                        $ands[] = $queryand;
+-                        $params = array_merge($params, $queryparams);
+-                    }
+-                    break;
+-                case 'mssql':
+-                    if ($DB->is_fulltext_search_supported()) {
+-                        $ands[] = "CONTAINS ((title, content, description1, description2), ?)";
+-                        // Special treatment for double quotes:
+-                        // - Puntuation is ignored so we can get rid of them.
+-                        // - Phrases should be enclosed in double quotation marks.
+-                        $params[] = '"' . str_replace('"', '', $filters->q) . '"';
+-                    } else {
+-                        // Clumsy version for mysql versions with no fulltext support.
+-                        list($queryand, $queryparams) = $this->get_simple_query($filters->q);
+-                        $ands[] = $queryand;
+-                        $params = array_merge($params, $queryparams);
+-                    }
+-                    break;
+-                default:
+-                    list($queryand, $queryparams) = $this->get_simple_query($filters->q);
+-                    $ands[] = $queryand;
+-                    $params = array_merge($params, $queryparams);
+-                    break;
+-            }
++            // Every term must match the start of a word, on any of the searchable fields. The full text indexes
++            // only match whole tokens, so they are not used here.
++            list($queryand, $queryparams) = $this->get_simple_query($filters->q);
++            $ands[] = $queryand;
++            $params = array_merge($params, $queryparams);
+         }
+ 
+         // It is limited to $limit, no need to use recordsets.
+@@ -334,29 +289,45 @@ class engine extends \core_search\engine {
+     /**
+      * Returns the default query for db engines.
+      *
++     * The query is split into terms. Each term must match the start of a word (of any of the searched fields),
++     * so 'CU99999' matches 'Course CU99999V20' but 'ogs' does not match 'Dogs'. Terms are combined with AND.
++     *
+      * @param string $q The query string
+      * @return array SQL string and params list
+      */
+     protected function get_simple_query($q) {
+         global $DB;
+ 
+-        $sql = '(' .
+-            $DB->sql_like('title', '?', false, false) . ' OR ' .
+-            $DB->sql_like('content', '?', false, false) . ' OR ' .
+-            $DB->sql_like('description1', '?', false, false) . ' OR ' .
+-            $DB->sql_like('description2', '?', false, false) .
+-            ')';
+-
+-        // Remove single and double quotes from the query.
+-        $q = str_replace(['"', "'"], '', $q);
+-        $params = [
+-            '%' . $q . '%',
+-            '%' . $q . '%',
+-            '%' . $q . '%',
+-            '%' . $q . '%'
+-        ];
+-
+-        return array($sql, $params);
++        // Remove single and double quotes and backslashes from the query.
++        $q = str_replace(['"', "'", '\\'], '', $q);
++        $terms = preg_split('/\s+/u', trim($q), -1, PREG_SPLIT_NO_EMPTY);
++
++        if (empty($terms)) {
++            // Nothing searchable was left in the query.
++            return array('1=0', array());
++        }
++
++        $fields = array('title', 'content', 'description1', 'description2');
++
++        $ands = array();
++        $params = array();
++        foreach ($terms as $term) {
++            $escaped = $DB->sql_like_escape($term);
++
++            $ors = array();
++            foreach ($fields as $field) {
++                // At the start of the field, after a space or after a line break.
++                $ors[] = $DB->sql_like($field, '?', false, false);
++                $ors[] = $DB->sql_like($field, '?', false, false);
++                $ors[] = $DB->sql_like($field, '?', false, false);
++                $params[] = $escaped . '%';
++                $params[] = '% ' . $escaped . '%';
++                $params[] = '%' . "\n" . $escaped . '%';
++            }
++            $ands[] = '(' . implode(' OR ', $ors) . ')';
++        }
++
++        return array(implode(' AND ', $ands), $params);
+     }
+ 
+     /**
+diff --git a/public/search/engine/simpledb/tests/engine_test.php b/public/search/engine/simpledb/tests/engine_test.php
+index ea67f63d6aa..b24406dda5d 100644
+--- a/public/search/engine/simpledb/tests/engine_test.php
++++ b/public/search/engine/simpledb/tests/engine_test.php
+@@ -204,6 +204,50 @@ final class engine_test extends \advanced_testcase {
+         $this->assertCount(0, $this->search->search($querydata));
+     }
+ 
++    /**
++     * Test that queries match the start of words, with all terms required.
++     *
++     * @return void
++     */
++    public function test_search_word_start(): void {
++        $this->add_mock_search_area();
++
++        $record = new \stdClass();
++        $record->title = 'Cats 101';
++        $this->generator->create_record($record);
++
++        $record = new \stdClass();
++        $record->title = 'Dogs 101';
++        $this->generator->create_record($record);
++
++        $this->search->index();
++        $this->update_index();
++
++        $querydata = new \stdClass();
++
++        // Partial words at the start of a word match.
++        $querydata->q = '101';
++        $this->assertCount(2, $this->search->search($querydata));
++
++        $querydata->q = 'Dog';
++        $results = $this->search->search($querydata);
++        $this->assertCount(1, $results);
++        $this->assertEquals('Dogs 101', reset($results)->get('title'));
++
++        $querydata->q = 'cat 10';
++        $results = $this->search->search($querydata);
++        $this->assertCount(1, $results);
++        $this->assertEquals('Cats 101', reset($results)->get('title'));
++
++        // All the terms must match.
++        $querydata->q = 'Cats Dogs';
++        $this->assertCount(0, $this->search->search($querydata));
++
++        // Not the start of a word.
++        $querydata->q = 'ogs';
++        $this->assertCount(0, $this->search->search($querydata));
++    }
++
+     /**
+      * Test delete function
+      *

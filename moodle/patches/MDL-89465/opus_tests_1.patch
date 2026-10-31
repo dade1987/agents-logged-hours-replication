@@ -1,0 +1,219 @@
+diff --git a/public/lib/classes/check/manager.php b/public/lib/classes/check/manager.php
+index 417907106b4..63f49150bbc 100644
+--- a/public/lib/classes/check/manager.php
++++ b/public/lib/classes/check/manager.php
+@@ -132,6 +132,7 @@ class manager {
+             new security\crawlers(),
+             new security\passwordpolicy(),
+             new security\emailchangeconfirmation(),
++            new security\newloginnotifications(),
+             new security\webcron(),
+             new http\cookiesecure(),
+             new access\riskadmin(),
+diff --git a/public/lib/classes/check/security/newloginnotifications.php b/public/lib/classes/check/security/newloginnotifications.php
+new file mode 100644
+index 00000000000..6e787532630
+--- /dev/null
++++ b/public/lib/classes/check/security/newloginnotifications.php
+@@ -0,0 +1,89 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\check\security;
++
++use core\check\check;
++use core\check\result;
++
++/**
++ * Verifies that new login notifications are forced on.
++ *
++ * @package    core
++ * @category   check
++ * @copyright  2026 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class newloginnotifications extends check {
++    #[\Override]
++    public function get_name(): string {
++        return get_string('check_newloginnotifications_name', 'report_security');
++    }
++
++    #[\Override]
++    public function get_action_link(): ?\action_link {
++        return new \action_link(
++            new \moodle_url('/admin/message.php'),
++            get_string('managemessageoutputs', 'message'),
++        );
++    }
++
++    /**
++     * Whether new login notifications are forced on for at least one enabled processor.
++     *
++     * @return bool
++     */
++    public static function is_forced(): bool {
++        global $CFG;
++        require_once($CFG->dirroot . '/message/lib.php');
++
++        $preferences = get_message_output_default_preferences();
++        if (!empty($preferences->moodle_newlogin_disable)) {
++            return false;
++        }
++
++        $enabled = [];
++        if (!empty($preferences->message_provider_moodle_newlogin_enabled)) {
++            $enabled = explode(',', $preferences->message_provider_moodle_newlogin_enabled);
++        }
++
++        foreach (get_message_processors(true) as $processor) {
++            $locked = $processor->name . '_provider_moodle_newlogin_locked';
++            if (!empty($preferences->{$locked}) && in_array($processor->name, $enabled)) {
++                return true;
++            }
++        }
++        return false;
++    }
++
++    #[\Override]
++    public function get_result(): result {
++        $details = get_string('check_newloginnotifications_details', 'report_security');
++        $preferences = get_message_output_default_preferences();
++
++        if (!empty($preferences->moodle_newlogin_disable)) {
++            $status = result::WARNING;
++            $summary = get_string('check_newloginnotifications_disabled', 'report_security');
++        } else if (!self::is_forced()) {
++            $status = result::WARNING;
++            $summary = get_string('check_newloginnotifications_notforced', 'report_security');
++        } else {
++            $status = result::OK;
++            $summary = get_string('check_newloginnotifications_ok', 'report_security');
++        }
++        return new result($status, $summary, $details);
++    }
++}
+diff --git a/public/lib/db/messages.php b/public/lib/db/messages.php
+index bf803ce1d1c..3a909a7bc3c 100644
+--- a/public/lib/db/messages.php
++++ b/public/lib/db/messages.php
+@@ -35,10 +35,11 @@ defined('MOODLE_INTERNAL') || die();
+ 
+ $messageproviders = array (
+ 
++    // New login notifications are forced on by default (email), so that users are made aware of unauthorised logins.
+     'newlogin' => array (
+         'defaults' => [
+             'popup' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
+-            'email' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
++            'email' => MESSAGE_FORCED,
+             'airnotifier' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
+         ],
+     ),
+diff --git a/public/lib/moodlelib.php b/public/lib/moodlelib.php
+index e7c00f76baa..4609103183b 100644
+--- a/public/lib/moodlelib.php
++++ b/public/lib/moodlelib.php
+@@ -4123,7 +4123,10 @@ function complete_user_login($user, array $extrauserinfo = []) {
+         // Check if notification processor plugins (web, email, mobile) are enabled at system level.
+         $msgprocessorsready = !empty(get_message_processors(true));
+         // If new login notification is enabled at system level then go for other conditions check.
+-        $newloginenabled = $newlogindisabled ? 0 : ($userpreferences != 'none' && $msgproviderenabled);
++        // If the notification is forced on (locked) for any enabled processor, the user cannot opt out of it.
++        $newloginforced = \core\check\security\newloginnotifications::is_forced();
++        $newloginenabled = $newlogindisabled ? 0 :
++            ($newloginforced || ($userpreferences != 'none' && $msgproviderenabled));
+ 
+         if ($newloginenabled && $msgprocessorsready) {
+             // Schedule adhoc task to send a login notification to the user.
+diff --git a/public/lib/tests/check_test.php b/public/lib/tests/check_test.php
+index 4d2c12a26c7..19f99313d3a 100644
+--- a/public/lib/tests/check_test.php
++++ b/public/lib/tests/check_test.php
+@@ -17,6 +17,7 @@
+ namespace core;
+ 
+ use core\check\result;
++use core\check\security\newloginnotifications;
+ use core\check\security\passwordpolicy;
+ 
+ /**
+@@ -54,6 +55,50 @@ final class check_test extends \advanced_testcase {
+         $CFG->passwordpolicy = $prior;
+     }
+ 
++    /**
++     * Test the new login notifications check.
++     *
++     * @covers \core\check\security\newloginnotifications
++     */
++    public function test_newloginnotifications(): void {
++        $this->resetAfterTest();
++
++        $check = new newloginnotifications();
++
++        // Forced on for email.
++        set_config('moodle_newlogin_disable', 0, 'message');
++        set_config('email_provider_moodle_newlogin_locked', 1, 'message');
++        set_config('message_provider_moodle_newlogin_enabled', 'popup,email', 'message');
++        $this->assertTrue(newloginnotifications::is_forced());
++        $this->assertEquals(result::OK, $check->get_result()->get_status());
++
++        // Enabled but not forced.
++        set_config('email_provider_moodle_newlogin_locked', 0, 'message');
++        set_config('popup_provider_moodle_newlogin_locked', 0, 'message');
++        set_config('airnotifier_provider_moodle_newlogin_locked', 0, 'message');
++        $this->assertFalse(newloginnotifications::is_forced());
++        $this->assertEquals(result::WARNING, $check->get_result()->get_status());
++
++        // Locked but not enabled (i.e. disallowed).
++        set_config('email_provider_moodle_newlogin_locked', 1, 'message');
++        set_config('message_provider_moodle_newlogin_enabled', 'popup', 'message');
++        $this->assertFalse(newloginnotifications::is_forced());
++        $this->assertEquals(result::WARNING, $check->get_result()->get_status());
++
++        // Forced, but the notification type is disabled entirely.
++        set_config('message_provider_moodle_newlogin_enabled', 'popup,email', 'message');
++        set_config('moodle_newlogin_disable', 1, 'message');
++        $this->assertFalse(newloginnotifications::is_forced());
++        $this->assertEquals(result::WARNING, $check->get_result()->get_status());
++
++        // Forced, but the email processor is disabled.
++        set_config('moodle_newlogin_disable', 0, 'message');
++        \core\plugininfo\message::enable_plugin('email', 0);
++        get_message_processors(false, true, true);
++        $this->assertFalse(newloginnotifications::is_forced());
++        $this->assertEquals(result::WARNING, $check->get_result()->get_status());
++    }
++
+     /**
+      * Tests that the component is correctly set.
+      */
+diff --git a/public/report/security/lang/en/report_security.php b/public/report/security/lang/en/report_security.php
+index dbfc33d7607..63afd75bc5d 100644
+--- a/public/report/security/lang/en/report_security.php
++++ b/public/report/security/lang/en/report_security.php
+@@ -83,6 +83,11 @@ $string['check_guestrole_error'] = 'The guest role "{$a}" is incorrectly defined
+ $string['check_guestrole_name'] = 'Guest role';
+ $string['check_guestrole_notset'] = 'Guest role is not set.';
+ $string['check_guestrole_ok'] = 'Guest role definition is OK.';
++$string['check_newloginnotifications_details'] = '<p>New login notifications inform users when their account is signed in to from a new device or location, helping them notice unauthorised access to their account. It is recommended that new login notifications are enabled and forced (locked) for at least one enabled notification method, such as email, so that users cannot opt out of receiving them.</p>';
++$string['check_newloginnotifications_disabled'] = 'New login notifications are disabled.';
++$string['check_newloginnotifications_name'] = 'New login notifications';
++$string['check_newloginnotifications_notforced'] = 'New login notifications are not forced on for any enabled notification method. Users may not be notified of unauthorised logins.';
++$string['check_newloginnotifications_ok'] = 'New login notifications are forced on.';
+ $string['check_nodemodules_details'] = '<p>The directory <code>{$a->path}</code> contains Node.js modules and their dependencies, typically installed by the NPM utility. These modules may be needed for local Moodle development, such as for using the grunt framework. They are not needed to run a Moodle site in production and they can contain potentially dangerous code exposing your site to remote attacks.</p><p>It is strongly recommended to remove the directory if the site is available via a public URL, or at least prohibit web access to it in your webserver configuration.</p>';
+ $string['check_nodemodules_info'] = 'The node_modules directory should not be present on public sites.';
+ $string['check_nodemodules_name'] = 'Node.js modules directory';

@@ -1,0 +1,109 @@
+diff --git a/.upgradenotes/MDL-89765-2026090904480953.yml b/.upgradenotes/MDL-89765-2026090904480953.yml
+new file mode 100644
+index 00000000000..36b38acf58d
+--- /dev/null
++++ b/.upgradenotes/MDL-89765-2026090904480953.yml
+@@ -0,0 +1,9 @@
++issueNumber: MDL-89765
++notes:
++  mod_quiz:
++    - message: >-
++        The external function mod_quiz_get_users_in_report now also returns a
++        new 'extrafieldsdisplay' array, containing the resolved display name
++        label for each field listed in 'extrafields' (in the same order),
++        including custom user profile fields.
++      type: improved
+diff --git a/public/mod/quiz/amd/build/searchwidget/user.min.js b/public/mod/quiz/amd/build/searchwidget/user.min.js
+index 8e7ddee74a1..c3f59e83f57 100644
+Binary files a/public/mod/quiz/amd/build/searchwidget/user.min.js and b/public/mod/quiz/amd/build/searchwidget/user.min.js differ
+diff --git a/public/mod/quiz/amd/build/searchwidget/user.min.js.map b/public/mod/quiz/amd/build/searchwidget/user.min.js.map
+index 2a5d9ba6fe4..92b8dc4588a 100644
+Binary files a/public/mod/quiz/amd/build/searchwidget/user.min.js.map and b/public/mod/quiz/amd/build/searchwidget/user.min.js.map differ
+diff --git a/public/mod/quiz/amd/src/searchwidget/user.js b/public/mod/quiz/amd/src/searchwidget/user.js
+index 563c4f05ba5..7dba6b18ebd 100644
+--- a/public/mod/quiz/amd/src/searchwidget/user.js
++++ b/public/mod/quiz/amd/src/searchwidget/user.js
+@@ -23,7 +23,6 @@
+ import UserSearch from 'core_user/comboboxsearch/user';
+ import Url from 'core/url';
+ import * as Repository from 'mod_quiz/searchwidget/repository';
+-import {getStrings} from 'core/str';
+ 
+ export default class QuizUserSearch extends UserSearch {
+ 
+@@ -49,12 +48,10 @@ export default class QuizUserSearch extends UserSearch {
+         // Await the user fetch request
+         const r = await Repository.userFetch(params);
+ 
+-        // Await the result of getStrings
+-        const stringArray = await getStrings(r.extrafields.map((key) => ({key})));
+-
+-        // Map the extrafields to profilestringmap
++        // The server already resolves the human-readable label for each field (including
++        // custom profile fields), so map extrafields to their matching extrafieldsdisplay entry.
+         this.profilestringmap = new Map(
+-            r.extrafields.map((key, index) => ([key, stringArray[index]]))
++            r.extrafields.map((key, index) => ([key, r.extrafieldsdisplay[index]]))
+         );
+ 
+         // Return r.users as the final result
+diff --git a/public/mod/quiz/classes/external/get_users_in_report.php b/public/mod/quiz/classes/external/get_users_in_report.php
+index 74bf72596af..b121288774a 100644
+--- a/public/mod/quiz/classes/external/get_users_in_report.php
++++ b/public/mod/quiz/classes/external/get_users_in_report.php
+@@ -150,8 +150,14 @@ class get_users_in_report extends external_api {
+         // We don't want the filter to strip out the picture field and other name fields,
+         // since we already have the full name field.
+         $allowfields = array_merge(['fullname'], $userfieldsapi->get_required_fields([\core_user\fields::PURPOSE_IDENTITY]));
++        // Resolve the display name label for each field here.
++        $extrafieldsdisplay = array_map(
++            fn($field) => \core_user\fields::get_display_name($field),
++            $allowfields
++        );
+         return [
+             'extrafields' => $allowfields,
++            'extrafieldsdisplay' => $extrafieldsdisplay,
+             'users' => $users,
+             'warnings' => $warnings,
+         ];
+@@ -171,6 +177,9 @@ class get_users_in_report extends external_api {
+ 
+         return new external_single_structure([
+             'extrafields' => new external_multiple_structure(new external_value(PARAM_RAW, 'List of extra fields')),
++            'extrafieldsdisplay' => new external_multiple_structure(
++                new external_value(PARAM_RAW, 'Display name label for the extra field at the same index')
++            ),
+             'users' => new external_multiple_structure(core_user_external::user_description($additionalfields)),
+             'warnings' => new external_warnings(),
+         ]);
+diff --git a/public/mod/quiz/classes/local/reports/attempts_report_table.php b/public/mod/quiz/classes/local/reports/attempts_report_table.php
+index fd2ce765cae..1847c47edfc 100644
+--- a/public/mod/quiz/classes/local/reports/attempts_report_table.php
++++ b/public/mod/quiz/classes/local/reports/attempts_report_table.php
+@@ -529,20 +529,16 @@ abstract class attempts_report_table extends \table_sql {
+             $fields .= "\n(CASE WHEN $this->qmsubselect THEN 1 ELSE 0 END) AS gradedattempt,";
+         }
+ 
+-        $userfieldsapi = \core_user\fields::for_identity($this->context)->with_name()
+-                ->excluding('id', 'picture', 'imagealt', 'email');
+-        $userfields = $userfieldsapi->get_sql('u', true, '', '', false);
++        // Request idnumber, institution and department through the fields API rather than
++        // hard-coding them, so they are not selected twice when also configured as identity fields.
++        $userfieldsapi = \core_user\fields::for_identity($this->context)->with_name()->with_userpic()
++                ->including('idnumber', 'institution', 'department');
++        $userfields = $userfieldsapi->get_sql('u', true, '', 'userid', false);
+ 
+         $fields .= '
+                 quiza.uniqueid AS usageid,
+                 quiza.id AS attempt,
+-                u.id AS userid,
+-                u.idnumber,
+-                u.picture,
+-                u.imagealt,
+-                u.institution,
+-                u.department,
+-                u.email,' . $userfields->selects . ',
++                ' . $userfields->selects . ',
+                 quiza.state,
+                 quiza.sumgrades,
+                 quiza.timefinish,

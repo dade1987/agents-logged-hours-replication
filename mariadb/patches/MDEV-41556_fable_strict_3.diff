@@ -1,0 +1,88 @@
+diff --git a/plugin/type_assoc_array/mysql-test/type_assoc_array/sp-assoc-array.result b/plugin/type_assoc_array/mysql-test/type_assoc_array/sp-assoc-array.result
+index 180c5487..0e0689ef 100644
+--- a/plugin/type_assoc_array/mysql-test/type_assoc_array/sp-assoc-array.result
++++ b/plugin/type_assoc_array/mysql-test/type_assoc_array/sp-assoc-array.result
+@@ -1273,6 +1273,25 @@ marks(0) := 62;
+ END;
+ $$
+ #
++# MDEV-41556 Unexpected error: Incorrect ASSOCIATIVE ARRAY KEY value
++# BIGINT key, range (valid, LONGLONG_MIN and LONGLONG_MAX)
++#
++DECLARE
++TYPE marks_t IS TABLE OF INT INDEX BY BIGINT;
++marks marks_t;
++BEGIN
++marks(-9223372036854775807-1) := 10;
++marks(-9223372036854775808) := 11;
++marks(9223372036854775807) := 12;
++SELECT marks(-9223372036854775807-1) AS c1,
++marks(-9223372036854775808) AS c2,
++marks(9223372036854775807) AS c3,
++marks.FIRST AS f, marks.LAST AS l, marks.COUNT AS cnt;
++END;
++$$
++c1	c2	c3	f	l	cnt
++11	11	12	-9223372036854775808	9223372036854775807	2
++#
+ # BIGINT UNSIGNED key, range (min)
+ #
+ DECLARE
+diff --git a/plugin/type_assoc_array/mysql-test/type_assoc_array/sp-assoc-array.test b/plugin/type_assoc_array/mysql-test/type_assoc_array/sp-assoc-array.test
+index bf9ddfa5..f540e40c 100644
+--- a/plugin/type_assoc_array/mysql-test/type_assoc_array/sp-assoc-array.test
++++ b/plugin/type_assoc_array/mysql-test/type_assoc_array/sp-assoc-array.test
+@@ -1483,6 +1483,26 @@ END;
+ $$
+ DELIMITER ;$$
+ 
++--echo #
++--echo # MDEV-41556 Unexpected error: Incorrect ASSOCIATIVE ARRAY KEY value
++--echo # BIGINT key, range (valid, LONGLONG_MIN and LONGLONG_MAX)
++--echo #
++DELIMITER $$;
++DECLARE
++  TYPE marks_t IS TABLE OF INT INDEX BY BIGINT;
++  marks marks_t;
++BEGIN
++  marks(-9223372036854775807-1) := 10;
++  marks(-9223372036854775808) := 11;
++  marks(9223372036854775807) := 12;
++  SELECT marks(-9223372036854775807-1) AS c1,
++         marks(-9223372036854775808) AS c2,
++         marks(9223372036854775807) AS c3,
++         marks.FIRST AS f, marks.LAST AS l, marks.COUNT AS cnt;
++END;
++$$
++DELIMITER ;$$
++
+ --echo #
+ --echo # BIGINT UNSIGNED key, range (min)
+ --echo #
+diff --git a/plugin/type_assoc_array/sql_type_assoc_array.cc b/plugin/type_assoc_array/sql_type_assoc_array.cc
+index 7a6969a5..7bee05b6 100644
+--- a/plugin/type_assoc_array/sql_type_assoc_array.cc
++++ b/plugin/type_assoc_array/sql_type_assoc_array.cc
+@@ -1302,7 +1302,7 @@ bool Field_assoc_array::copy_and_convert_key(const String &key,
+       Convert the key to a number to perform range check
+     */
+     char *endptr;
+-    int error;
++    int error= 0;
+ 
+     longlong key_ll;
+     ulonglong key_ull;
+diff --git a/strings/ctype-simple.c b/strings/ctype-simple.c
+index 5d1313d8..9e533ec8 100644
+--- a/strings/ctype-simple.c
++++ b/strings/ctype-simple.c
+@@ -1893,8 +1893,7 @@ my_strntoull10rnd_8bit(CHARSET_INFO *cs __attribute__((unused)),
+     {
+       if (ull >= (ulonglong) LONGLONG_MIN)
+       {
+-        if (ull != (ulonglong) LONGLONG_MIN)
+-          *error= MY_ERRNO_ERANGE;
++        *error= (ull != (ulonglong) LONGLONG_MIN) ? MY_ERRNO_ERANGE : 0;
+         return (ulonglong) LONGLONG_MIN;
+       }
+       *error= 0;

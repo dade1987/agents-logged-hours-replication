@@ -1,0 +1,82 @@
+diff --git a/mysql-test/main/set_authorization.result b/mysql-test/main/set_authorization.result
+index 71194c22..b3b2f5d7 100644
+--- a/mysql-test/main/set_authorization.result
++++ b/mysql-test/main/set_authorization.result
+@@ -148,4 +148,27 @@ set session authorization root@localhost;
+ -- Tracker : SESSION_TRACK_SCHEMA
+ -- 
+ 
++#
++# MDEV-40336 SET AUTHORIZATION un-expired passwords
++#
++create user u1@localhost;
++alter user u1@localhost password expire;
++connect con1,localhost,u1;
++select 1;
++ERROR HY000: You must SET PASSWORD before executing this statement
++set session authorization u1@localhost;
++ERROR HY000: You must SET PASSWORD before executing this statement
++select 2;
++ERROR HY000: You must SET PASSWORD before executing this statement
++set password=password('');
++select 3;
++3
++3
++set session authorization u1@localhost;
++select 4;
++4
++4
++disconnect con1;
++connection default;
++drop user u1@localhost;
+ # End of 12.0 tests
+diff --git a/mysql-test/main/set_authorization.test b/mysql-test/main/set_authorization.test
+index d13ee4aa..7851ff78 100644
+--- a/mysql-test/main/set_authorization.test
++++ b/mysql-test/main/set_authorization.test
+@@ -143,4 +143,24 @@ enable_session_track_info;
+ set session authorization root@localhost;
+ disable_session_track_info;
+ 
++--echo #
++--echo # MDEV-40336 SET AUTHORIZATION un-expired passwords
++--echo #
++create user u1@localhost;
++alter user u1@localhost password expire;
++connect con1,localhost,u1;
++--error ER_MUST_CHANGE_PASSWORD
++select 1;
++--error ER_MUST_CHANGE_PASSWORD
++set session authorization u1@localhost;
++--error ER_MUST_CHANGE_PASSWORD
++select 2;
++set password=password('');
++select 3;
++set session authorization u1@localhost;
++select 4;
++disconnect con1;
++connection default;
++drop user u1@localhost;
++
+ --echo # End of 12.0 tests
+diff --git a/sql/set_var.cc b/sql/set_var.cc
+index 4fe16d54..a93c6cac 100644
+--- a/sql/set_var.cc
++++ b/sql/set_var.cc
+@@ -1031,6 +1031,16 @@ int set_var_authorization::check(THD *thd)
+   else
+   if (thd->in_active_multi_stmt_transaction())
+     my_error(ER_CANT_SET_IN_TRANSACTION, MYF(0), "SESSION AUTHORIZATION");
++  else
++  if (thd->security_ctx->password_expired)
++  {
++    /*
++      A user with an expired password must not be able to escape the
++      sandbox mode (and get a fresh, un-expired security context)
++      by re-authorizing as itself or as any other user.
++    */
++    my_error(ER_MUST_CHANGE_PASSWORD, MYF(0));
++  }
+   else
+     return 0;
+ 

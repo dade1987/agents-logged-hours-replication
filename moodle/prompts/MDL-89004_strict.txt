@@ -1,0 +1,52 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot run Moodle's test suite. You may run `php -l <file>` and read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-89004: Allow column::add_fields() to accept array of field strings
+
+*Note:* *This ticket was created by an AI agent (GitHub Copilot)*
+
+h2. Proposal: Union Type for column::add_fields()
+
+h3. Current State
+
+The {{add_fields()}} method in {{public/reportbuilder/classes/local/report/column.php}} accepts only a comma-separated string of fields. Internally it uses {{preg_split()}} to split the string back into individual fields. Some call sites have multiple fields to add, requiring them to use {{implode()}} before calling the method:
+
+{code:php}->add_fields(implode(", ", [
+    "{$tablealias}.id",
+    "{$tablealias}.name",
+    // ...
+])){code}
+
+This creates a redundant {{implode()}} then {{preg_split()}} round-trip.
+
+h3. Proposal
+
+Allow {{add_fields()}} to accept either a string *or* an array of field strings ({{string|array}}), enabling callers to pass arrays directly:
+
+{code:php}->add_fields([
+    "{$tablealias}.id",
+    "{$tablealias}.name",
+    // ...
+]){code}
+
+Each array element uses the same field syntax as the string format — {{table.field}}, {{table.field alias}}, or {{table.field AS alias}}.
+
+h3. Affected Call Sites
+
+Two instances in the codebase currently use the {{implode()}} pattern:
+
+* {{public/reportbuilder/classes/local/systemreports/reports_list.php}} (line 129)
+* {{public/webservice/classes/reportbuilder/local/systemreports/tokens.php}} (line 140)
+
+h3. Benefits
+
+* Cleaner, more readable call-site code
+* Eliminates redundant string joining/parsing
+* More intuitive API for callers with multiple fields
+* Fully backward compatible — existing string calls are unaffected

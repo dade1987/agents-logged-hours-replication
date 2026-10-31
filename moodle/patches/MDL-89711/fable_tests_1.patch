@@ -1,0 +1,90 @@
+diff --git a/.upgradenotes/MDL-89711-2026102600000000.yml b/.upgradenotes/MDL-89711-2026102600000000.yml
+new file mode 100644
+index 00000000000..79d9985a11e
+--- /dev/null
++++ b/.upgradenotes/MDL-89711-2026102600000000.yml
+@@ -0,0 +1,8 @@
++issueNumber: MDL-89711
++notes:
++  mod_quiz:
++    - message: >-
++        The `mod_quiz\local\override_manager::get_effective_open_close_times()` method has been deprecated.
++        Please use `mod_quiz\local\override_manager::get_effective_times()` instead, which returns the
++        effective `timeopen`, `timeclose` and `duedate` values.
++      type: deprecated
+diff --git a/public/mod/quiz/classes/local/override_manager.php b/public/mod/quiz/classes/local/override_manager.php
+index ea84b8e88de..0e47abc7272 100644
+--- a/public/mod/quiz/classes/local/override_manager.php
++++ b/public/mod/quiz/classes/local/override_manager.php
+@@ -638,6 +638,30 @@ class override_manager {
+         return $formdata;
+     }
+ 
++    /**
++     * Computes the effective overridden open and close times for a user for a given quiz.
++     *
++     * @param int $quizid The quiz ID.
++     * @param int $userid The user ID.
++     * @return array Array with optional keys 'timeopen' and 'timeclose'.
++     * @deprecated since Moodle 5.3 MDL-89711 - please use get_effective_times() instead.
++     * @todo Final deprecation in Moodle 6.0.
++     */
++    #[\core\attribute\deprecated(
++        replacement: 'mod_quiz\local\override_manager::get_effective_times',
++        since: '5.3',
++        reason: 'The method has been renamed to get_effective_times(), which also returns the effective duedate.',
++        mdl: 'MDL-89711',
++    )]
++    public static function get_effective_open_close_times(int $quizid, int $userid): array {
++        \core\deprecation::emit_deprecation([self::class, __FUNCTION__]);
++
++        $times = self::get_effective_times($quizid, $userid);
++
++        // Preserve the original return contract: only timeopen and timeclose.
++        return array_intersect_key($times, array_flip(['timeopen', 'timeclose']));
++    }
++
+     /**
+      * Computes the effective overridden times for a user for a given quiz.
+      *
+diff --git a/public/mod/quiz/tests/local/override_manager_test.php b/public/mod/quiz/tests/local/override_manager_test.php
+index 0d396430548..b9d96befa2f 100644
+--- a/public/mod/quiz/tests/local/override_manager_test.php
++++ b/public/mod/quiz/tests/local/override_manager_test.php
+@@ -1111,6 +1111,36 @@ final class override_manager_test extends \advanced_testcase {
+         $this->assertSame([], override_manager::get_effective_times($quizobj->get_quizid(), $user->id));
+     }
+ 
++    /**
++     * Test the deprecated get_effective_open_close_times() still works, emits a deprecation
++     * warning, and only returns the timeopen/timeclose keys.
++     */
++    public function test_get_effective_open_close_times_deprecated(): void {
++        $this->setAdminUser();
++        $this->resetAfterTest();
++
++        [$quizobj, $course] = $this->create_quiz_and_course();
++        $user = $this->getDataGenerator()->create_and_enrol($course);
++
++        $manager = $quizobj->get_override_manager();
++        $manager->save_override([
++            'userid' => $user->id,
++            'timeopen' => 200,
++            'timeclose' => 300,
++            'duedate' => 250,
++        ]);
++
++        $result = override_manager::get_effective_open_close_times($quizobj->get_quizid(), $user->id);
++        $this->assertDebuggingCalledCount(1);
++
++        // Only timeopen and timeclose are returned, to preserve the original return contract.
++        $this->assertEquals([
++            'timeopen' => 200,
++            'timeclose' => 300,
++        ], $result);
++        $this->assertArrayNotHasKey('duedate', $result);
++    }
++
+     /**
+      * Test get_effective_times() returns a user override's values, and that it takes
+      * precedence over a group override the user is also a member of.

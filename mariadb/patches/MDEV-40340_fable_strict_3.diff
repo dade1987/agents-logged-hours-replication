@@ -1,0 +1,107 @@
+diff --git a/client/mysqlimport.cc b/client/mysqlimport.cc
+index 06f44b5b..b531846d 100644
+--- a/client/mysqlimport.cc
++++ b/client/mysqlimport.cc
+@@ -836,22 +836,29 @@ int table_load_params::load_data(MYSQL *mysql)
+ 
+ 
+ 
+-static void lock_table(MYSQL *mysql, int tablecount, char **raw_tablename)
++static void lock_table(MYSQL *mysql,
++                       const std::vector<table_load_params> &files)
+ {
+-  DYNAMIC_STRING query;
+-  int i;
+-  char tablename[FN_REFLEN];
++  std::string query= "LOCK TABLES ";
++  bool found= false;
+ 
+   if (verbose)
+     fprintf(stdout, "Locking tables for write\n");
+-  init_dynamic_string(&query, "LOCK TABLES ", 256, 1024);
+-  for (i=0 ; i < tablecount ; i++)
++  for (const auto &f : files)
+   {
+-    fn_format(tablename, raw_tablename[i], "", "", 1 | 2);
+-    dynstr_append(&query, tablename);
+-    dynstr_append(&query, " WRITE,");
++    if (f.is_view || f.data_file.empty())
++      continue;
++    if (found)
++      query+= ",";
++    query+= quote_identifier(current_db ? current_db : f.dbname.c_str());
++    query+= ".";
++    query+= quote_identifier(f.tablename.c_str());
++    query+= " WRITE";
++    found= true;
+   }
+-  if (mysql_real_query(mysql, query.str, (ulong)query.length-1))
++  if (!found)
++    return;
++  if (mysql_real_query(mysql, query.c_str(), (ulong) query.length()))
+     db_error(mysql); /* We shall continue here, if --force was given */
+ }
+ 
+@@ -1361,7 +1368,7 @@ int main(int argc, char **argv)
+   else
+   {
+     if (lock_tables)
+-      lock_table(mysql, argc, argv);
++      lock_table(mysql, files_to_load);
+     for (auto &f : files_to_load)
+     {
+       if ((error= f.load_data(mysql)))
+diff --git a/mysql-test/main/mysqldump.result b/mysql-test/main/mysqldump.result
+index 4600ef81..7913c0be 100644
+--- a/mysql-test/main/mysqldump.result
++++ b/mysql-test/main/mysqldump.result
+@@ -7223,4 +7223,21 @@ mariadb-dump: Options --tab and --dir are mutually exclusive
+ mariadb-dump: Error: path 'MYSQLTEST_VARDIR/tmp/mysql' exists, but it is not a directory
+ mariadb-dump: Path 'MYSQLTEST_VARDIR/tmp/dump' specified by option '--dir' is not a directory
+ mariadb-dump: Path 'MYSQLTEST_VARDIR/does_not_exist' specified by option '--dir' does not exist
++#
++# MDEV-40340 mariadb-import --lock-tables crashes
++#
++create table t1 (a int);
++insert into t1 values (1),(2);
++create table t2 (b int);
++insert into t2 values (3);
++truncate table t1;
++truncate table t2;
++select * from t1;
++a
++1
++2
++select * from t2;
++b
++3
++drop table t1, t2;
+ ALTER DATABASE test CHARACTER SET utf8mb4 COLLATE utf8mb4_uca1400_ai_ci;
+diff --git a/mysql-test/main/mysqldump.test b/mysql-test/main/mysqldump.test
+index 060106ba..d92e3a48 100644
+--- a/mysql-test/main/mysqldump.test
++++ b/mysql-test/main/mysqldump.test
+@@ -3262,4 +3262,23 @@ EOF
+ --error 3
+ --exec $MYSQL_DUMP --dir=$MYSQLTEST_VARDIR/does_not_exist mysql 2>&1
+ 
++--echo #
++--echo # MDEV-40340 mariadb-import --lock-tables crashes
++--echo #
++create table t1 (a int);
++insert into t1 values (1),(2);
++create table t2 (b int);
++insert into t2 values (3);
++--exec $MYSQL_DUMP --tab=$MYSQLTEST_VARDIR/tmp/ test t1 t2
++truncate table t1;
++truncate table t2;
++--exec $MYSQL_IMPORT --lock-tables test $MYSQLTEST_VARDIR/tmp/t1.txt $MYSQLTEST_VARDIR/tmp/t2.txt
++select * from t1;
++select * from t2;
++drop table t1, t2;
++--remove_file $MYSQLTEST_VARDIR/tmp/t1.sql
++--remove_file $MYSQLTEST_VARDIR/tmp/t1.txt
++--remove_file $MYSQLTEST_VARDIR/tmp/t2.sql
++--remove_file $MYSQLTEST_VARDIR/tmp/t2.txt
++
+ --source include/test_db_charset_restore.inc

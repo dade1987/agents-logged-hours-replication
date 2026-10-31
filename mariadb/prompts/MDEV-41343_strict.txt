@@ -1,0 +1,65 @@
+You are a software engineer fixing an issue in MariaDB Server (C/C++). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot build MariaDB or run its test suite. Read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update mysql-test tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDEV-41343: REVOKE DENY ... FROM PUBLIC bypass via unrelated column-level UPDATE grant on mysql.global_priv
+
+{code:sql}
+CREATE DATABASE db;
+CREATE TABLE db.t1 (id INT, data INT);
+INSERT INTO db.t1 VALUES (1,100),(2,200);
+
+CREATE USER u1@localhost;
+GRANT SELECT ON db.t1 TO u1@localhost;
+
+CREATE USER u2@localhost;
+GRANT UPDATE (Host) ON mysql.global_priv TO u2@localhost;
+
+CREATE USER u_nogrant@localhost;
+
+DENY SELECT ON db.t1 TO PUBLIC;
+
+connect(a1,localhost,u1,,db);
+--error ER_TABLEACCESS_DENIED_ERROR
+SELECT * FROM t1;
+
+connect(u_nogrant,localhost,u_nogrant,,);
+--error ER_TABLEACCESS_DENIED_ERROR,ER_DBACCESS_DENIED_ERROR
+REVOKE DENY SELECT ON db.t1 FROM PUBLIC;
+disconnect u_nogrant;
+
+--echo # BUG: u2, with only UPDATE(Host) on mysql.global_priv - not UPDATE(Priv) - still succeeds at lifting the PUBLIC-wide DENY.
+connect(a2,localhost,u2,,);
+
+--error ER_COLUMNACCESS_DENIED_ERROR
+UPDATE mysql.global_priv SET Priv='{}' WHERE User='u1';
+
+REVOKE DENY SELECT ON db.t1 FROM PUBLIC;
+
+connection a1;
+SELECT * FROM t1;
+
+connection default;
+disconnect a1;
+disconnect a2;
+
+DROP USER u1@localhost, u2@localhost, u_nogrant@localhost;
+DROP DATABASE db;
+
+DELETE FROM mysql.global_priv WHERE User='PUBLIC';
+FLUSH PRIVILEGES;
+{code}
+{noformat}
+REVOKE DENY SELECT ON db.t1 FROM PUBLIC;
+connection a1;
+SELECT * FROM t1;
+id	data
+1	100
+2	200
+{noformat}
+reported by Nguyen Ba Chi Tan

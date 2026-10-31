@@ -1,0 +1,79 @@
+diff --git a/mysql-test/main/func_json.result b/mysql-test/main/func_json.result
+index dd40304f..c0dbf862 100644
+--- a/mysql-test/main/func_json.result
++++ b/mysql-test/main/func_json.result
+@@ -1602,6 +1602,20 @@ Warnings:
+ Warning	1260	Row 1 was cut by JSON_ARRAYAGG()
+ drop table t1;
+ SET group_concat_max_len= default;
++#
++# MDEV-39817: JSON_ARRAYAGG() returns garbage because of off-by-one
++# error in the truncation of the result
++#
++set session group_concat_max_len = 9;
++create temporary table t (c varchar(20) character set latin1);
++insert into t values ('ab'), ('cd'), ('ef');
++select json_arrayagg(c order by c) from t;
++json_arrayagg(c order by c)
++["ab","cd"]
++Warnings:
++Warning	1260	Row 3 was cut by JSON_ARRAYAGG()
++drop temporary table t;
++SET group_concat_max_len= default;
+ create table t1 (col1 json);
+ insert into t1 values('{"color":"red", "size":1}' );
+ insert into t1 values('{"color":"blue", "size":2}' );
+diff --git a/mysql-test/main/func_json.test b/mysql-test/main/func_json.test
+index 842ce772..405bbec4 100644
+--- a/mysql-test/main/func_json.test
++++ b/mysql-test/main/func_json.test
+@@ -1071,6 +1071,17 @@ select json_arrayagg(a) from t1;
+ drop table t1;
+ SET group_concat_max_len= default;
+ 
++--echo #
++--echo # MDEV-39817: JSON_ARRAYAGG() returns garbage because of off-by-one
++--echo # error in the truncation of the result
++--echo #
++set session group_concat_max_len = 9;
++create temporary table t (c varchar(20) character set latin1);
++insert into t values ('ab'), ('cd'), ('ef');
++select json_arrayagg(c order by c) from t;
++drop temporary table t;
++SET group_concat_max_len= default;
++
+ create table t1 (col1 json);
+ insert into t1 values('{"color":"red", "size":1}' );
+ insert into t1 values('{"color":"blue", "size":2}' );
+diff --git a/sql/item_jsonfunc.cc b/sql/item_jsonfunc.cc
+index cf5bb9be..646cf387 100644
+--- a/sql/item_jsonfunc.cc
++++ b/sql/item_jsonfunc.cc
+@@ -4101,6 +4101,27 @@ void Item_func_json_arrayagg::cut_max_length(String *result,
+     return;
+   }
+ 
++  /*
++    old_length is the length of the complete JSON array elements that were
++    already added. The row that exceeded max_length starts after the
++    separator (if any) that precedes it.
++  */
++  size_t row_start= old_length;
++  if (old_length)
++    row_start+= get_separator()->length();
++
++  /*
++    If there is no room for the opening quote of the new row (plus the
++    closing quote we are about to append), drop the whole new row and
++    the separator. Cutting at max_length-1 would otherwise produce an
++    invalid JSON array, e.g. ["ab","cd""] or ["ab",""].
++  */
++  if (max_length - 1 <= row_start)
++  {
++    Item_func_group_concat::cut_max_length(result, old_length, old_length);
++    return;
++  }
++
+   Item_func_group_concat::cut_max_length(result, old_length, max_length-1);
+   result->append('"');
+ }

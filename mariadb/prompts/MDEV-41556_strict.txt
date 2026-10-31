@@ -1,0 +1,29 @@
+You are a software engineer fixing an issue in MariaDB Server (C/C++). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot build MariaDB or run its test suite. Read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update mysql-test tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDEV-41556: Unexpected error: Incorrect ASSOCIATIVE ARRAY KEY value
+
+{code:sql}
+SET sql_mode=ORACLE;
+DELIMITER $$
+DECLARE
+  TYPE t IS TABLE OF INT INDEX BY BIGINT;
+  a t;
+BEGIN
+  a(-9223372036854775807-1):= 10;   -- key is LONGLONG_MIN
+  SELECT a(-9223372036854775807-1) AS c1;
+END;
+$$
+DELIMITER ;
+{code}
+{noformat}
+ERROR 1525 (HY000): Incorrect ASSOCIATIVE ARRAY KEY value: '-9223372036854775808'
+{noformat}
+The error is not expected. It should return 10.
+

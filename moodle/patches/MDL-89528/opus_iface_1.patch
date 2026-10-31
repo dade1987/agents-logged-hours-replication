@@ -1,0 +1,179 @@
+diff --git a/.upgradenotes/MDL-89528-2026102400000000.yml b/.upgradenotes/MDL-89528-2026102400000000.yml
+new file mode 100644
+index 00000000000..aa165bac8bc
+--- /dev/null
++++ b/.upgradenotes/MDL-89528-2026102400000000.yml
+@@ -0,0 +1,8 @@
++issueNumber: MDL-89528
++notes:
++  core:
++    - message: |
++        The DI container now supports attribute-based injection using the `#[\DI\Attribute\Inject]` attribute.
++        This allows properties to be injected, including on an existing instance using `\core\di::get_container()->injectOn($this)`.
++        A new `\core\di::make()` method has also been added to always create a new instance of an entry, optionally with parameters.
++      type: improved
+diff --git a/public/lib/classes/di.php b/public/lib/classes/di.php
+index 46dd11354eb..72dd88c610e 100644
+--- a/public/lib/classes/di.php
++++ b/public/lib/classes/di.php
+@@ -62,6 +62,28 @@ class di {
+         return self::get_container()->get($id);
+     }
+ 
++    /**
++     * Resolve an entry by its name, always creating a new instance.
++     *
++     * Unlike {@see self::get()}, this method always returns a new instance and does not store it in the container.
++     * Any additional parameters will be passed to the constructor of the entry, overriding any automatically resolved
++     * parameters.
++     *
++     * Please note that the `make` method is not a part of the PSR-11 standard.
++     *
++     * @param string $name Entry name or a class name.
++     * @param array $params Optional parameters to use to build the entry, indexed by the parameter name.
++     * @return mixed
++     */
++    public static function make(
++        string $name,
++        array $params = [],
++    ): mixed {
++        /** @var \DI\FactoryInterface $container */
++        $container = self::get_container();
++        return $container->make($name, $params);
++    }
++
+     /**
+      * Set an entry in the container by its identifier.
+      *
+@@ -89,9 +111,10 @@ class di {
+         // Configure the Container builder.
+         $builder = new \DI\ContainerBuilder();
+ 
+-        // At the moment we are using autowiring, but not automatic attribute injection.
+-        // Automatic attribute injection is a php-di specific feature.
++        // Enable autowiring, and attribute-based injection.
++        // Attribute injection (for example using #[\DI\Attribute\Inject]) is a php-di specific feature.
+         $builder->useAutowiring(true);
++        $builder->useAttributes(true);
+ 
+         if (!$CFG->debugdeveloper) {
+             // Enable compilation of the container and write proxies to disk in production.
+diff --git a/public/lib/tests/di_test.php b/public/lib/tests/di_test.php
+index b99707f5aeb..aad6eb316ad 100644
+--- a/public/lib/tests/di_test.php
++++ b/public/lib/tests/di_test.php
+@@ -159,4 +159,114 @@ final class di_test extends \advanced_testcase {
+             $stringmanager,
+         );
+     }
++    /**
++     * Test that properties with the Inject attribute are injected when fetched from the container.
++     */
++    public function test_attribute_property_injection(): void {
++        $instance = di::get(di_test_attribute_injection_fixture::class);
++        $this->assertInstanceOf(\moodle_database::class, $instance->get_db());
++        $this->assertSame(hook\manager::get_instance(), $instance->get_hookmanager());
++    }
++
++    /**
++     * Test that injectOn can be used to inject attribute-based dependencies on an existing instance.
++     */
++    public function test_attribute_inject_on(): void {
++        global $DB;
++
++        $instance = new di_test_attribute_injection_fixture();
++        $this->assertNull($instance->get_db());
++
++        di::get_container()->injectOn($instance);
++        $this->assertSame($DB, $instance->get_db());
++        $this->assertSame(hook\manager::get_instance(), $instance->get_hookmanager());
++    }
++
++    /**
++     * Test that make always creates a new instance.
++     */
++    public function test_make(): void {
++        $first = di::make(di_test_attribute_injection_fixture::class);
++        $second = di::make(di_test_attribute_injection_fixture::class);
++
++        $this->assertInstanceOf(di_test_attribute_injection_fixture::class, $first);
++        $this->assertInstanceOf(di_test_attribute_injection_fixture::class, $second);
++        $this->assertNotSame($first, $second);
++        $this->assertInstanceOf(\moodle_database::class, $first->get_db());
++
++        // The get method returns the same instance each time.
++        $this->assertSame(
++            di::get(di_test_attribute_injection_fixture::class),
++            di::get(di_test_attribute_injection_fixture::class),
++        );
++    }
++
++    /**
++     * Test that make passes parameters to the constructor.
++     */
++    public function test_make_with_params(): void {
++        $instance = di::make(di_test_make_fixture::class, ['name' => 'example']);
++        $this->assertSame('example', $instance->name);
++        $this->assertInstanceOf(\core_string_manager::class, $instance->stringmanager);
++    }
++}
++
++// phpcs:disable Generic.Files.OneClassPerFile.MultipleFound
++
++/**
++ * Fixture used to test attribute-based injection.
++ *
++ * @package    core
++ * @copyright  Andrew Lyons <andrew@nicols.co.uk>
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class di_test_attribute_injection_fixture {
++    /** @var \moodle_database|null The database */
++    #[\DI\Attribute\Inject]
++    protected ?\moodle_database $db = null;
++
++    /** @var hook\manager|null The hook manager */
++    #[\DI\Attribute\Inject]
++    protected ?hook\manager $hookmanager = null;
++
++    /**
++     * Get the injected database.
++     *
++     * @return \moodle_database|null
++     */
++    public function get_db(): ?\moodle_database {
++        return $this->db;
++    }
++
++    /**
++     * Get the injected hook manager.
++     *
++     * @return hook\manager|null
++     */
++    public function get_hookmanager(): ?hook\manager {
++        return $this->hookmanager;
++    }
++}
++
++/**
++ * Fixture used to test make with parameters.
++ *
++ * @package    core
++ * @copyright  Andrew Lyons <andrew@nicols.co.uk>
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class di_test_make_fixture {
++    /**
++     * Constructor.
++     *
++     * @param string $name
++     * @param \core_string_manager $stringmanager
++     */
++    public function __construct(
++        /** @var string */
++        public readonly string $name,
++        /** @var \core_string_manager */
++        public readonly \core_string_manager $stringmanager,
++    ) {
++    }
+ }

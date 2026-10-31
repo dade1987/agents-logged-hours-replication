@@ -1,0 +1,73 @@
+diff --git a/plugin/type_xmltype/mysql-test/type_xmltype/type_xmltype.test b/plugin/type_xmltype/mysql-test/type_xmltype/type_xmltype.test
+index 67f8cb69..693fe237 100644
+--- a/plugin/type_xmltype/mysql-test/type_xmltype/type_xmltype.test
++++ b/plugin/type_xmltype/mysql-test/type_xmltype/type_xmltype.test
+@@ -309,3 +309,14 @@ DROP TABLE t1, t2;
+ SELECT CAST('a' AS xmltype);
+ 
+ --echo # End of 12.3 tests
++
++--echo # MDEV-39683: Numeric aggregates should end up with an error for xmltype
++CREATE TABLE t_mdev39683 (x XMLTYPE);
++INSERT INTO t_mdev39683 VALUES ('<a/>');
++--error ER_ILLEGAL_PARAMETER_DATA_TYPE_FOR_OPERATION
++SELECT SUM(x) FROM t_mdev39683;
++--error ER_ILLEGAL_PARAMETER_DATA_TYPE_FOR_OPERATION
++SELECT AVG(x) FROM t_mdev39683;
++--error ER_ILLEGAL_PARAMETER_DATA_TYPE_FOR_OPERATION
++SELECT STDDEV(x) FROM t_mdev39683;
++DROP TABLE t_mdev39683;
+diff --git a/plugin/type_xmltype/sql_type_xmltype.cc b/plugin/type_xmltype/sql_type_xmltype.cc
+index 0dd2e1ab..190ae491 100644
+--- a/plugin/type_xmltype/sql_type_xmltype.cc
++++ b/plugin/type_xmltype/sql_type_xmltype.cc
+@@ -19,6 +19,7 @@
+ #include "my_xml.h"
+ #include "sql_class.h"
+ #include "sql_lex.h"
++#include "item_sum.h"
+ #include "sql_type_xmltype.h"
+ 
+ 
+@@ -330,3 +331,26 @@ void Item_xmltype_typecast::print(String *str, enum_query_type query_type)
+   str->append(')');
+ }
+ 
++
++
++bool Type_handler_xmltype::
++       Item_sum_sum_fix_length_and_dec(Item_sum_sum *) const
++{
++  LEX_CSTRING name= {STRING_WITH_LEN("sum") };
++  return Item_func_or_sum_illegal_param(name);
++}
++
++
++bool Type_handler_xmltype::
++       Item_sum_avg_fix_length_and_dec(Item_sum_avg *) const
++{
++  LEX_CSTRING name= {STRING_WITH_LEN("avg") };
++  return Item_func_or_sum_illegal_param(name);
++}
++
++
++bool Type_handler_xmltype::
++       Item_sum_variance_fix_length_and_dec(Item_sum_variance *item) const
++{
++  return Item_func_or_sum_illegal_param(item);
++}
+diff --git a/plugin/type_xmltype/sql_type_xmltype.h b/plugin/type_xmltype/sql_type_xmltype.h
+index c393c24c..ca1453ce 100644
+--- a/plugin/type_xmltype/sql_type_xmltype.h
++++ b/plugin/type_xmltype/sql_type_xmltype.h
+@@ -71,6 +71,10 @@ class Type_handler_xmltype: public Type_handler_long_blob
+     return to->set_data_type_name(name_on_client);
+   }
+ 
++  bool Item_sum_sum_fix_length_and_dec(Item_sum_sum *) const override;
++  bool Item_sum_avg_fix_length_and_dec(Item_sum_avg *) const override;
++  bool Item_sum_variance_fix_length_and_dec(Item_sum_variance *) const override;
++
+   bool can_return_int() const override { return false; }
+   bool can_return_decimal() const override { return false; }
+   bool can_return_real() const override { return false; }

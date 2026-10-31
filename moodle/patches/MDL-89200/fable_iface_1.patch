@@ -1,0 +1,198 @@
+diff --git a/public/admin/tool/task/lang/en/tool_task.php b/public/admin/tool/task/lang/en/tool_task.php
+index 7ccee87463e..7c22f6c18ad 100644
+--- a/public/admin/tool/task/lang/en/tool_task.php
++++ b/public/admin/tool/task/lang/en/tool_task.php
+@@ -84,6 +84,7 @@ $string['runadhoctasksfailed'] = 'Run failed \'{$a}\' tasks';
+ $string['runagain'] = 'Run again';
+ $string['runasap'] = 'Run ASAP';
+ $string['runasap_confirm'] = 'Are you sure you want to run this task \'{$a}\' ASAP? The task will run via cron at the next available time.';
++$string['runasaprunning'] = 'This task \'{$a}\' is currently running and cannot be scheduled to run ASAP. Please try again once it has finished.';
+ $string['runasapsuccess'] = 'This task \'{$a}\' has been scheduled to run ASAP.';
+ $string['runclassname'] = 'Run all';
+ $string['runclassnamedueonly'] = 'Run due only';
+diff --git a/public/admin/tool/task/renderer.php b/public/admin/tool/task/renderer.php
+index 583a4ef428b..7af4fee3bf0 100644
+--- a/public/admin/tool/task/renderer.php
++++ b/public/admin/tool/task/renderer.php
+@@ -457,7 +457,9 @@ class tool_task_renderer extends plugin_renderer_base {
+                 );
+ 
+                 $nextruntime = $task->get_next_run_time();
+-                if ($nextruntime > time() && $task->is_enabled()) {
++                // Only offer "Run ASAP" if the task is not already due and is not currently running.
++                // A request made while the task is running would be discarded when the running task completes.
++                if ($nextruntime > time() && $task->is_enabled() && !$task->get_timestarted()) {
+                     $runnow .= html_writer::div(
+                         html_writer::link(
+                             new moodle_url('/admin/tool/task/schedule_task.php', [
+diff --git a/public/admin/tool/task/schedule_task.php b/public/admin/tool/task/schedule_task.php
+index 2824cea75be..0b4b73569b3 100644
+--- a/public/admin/tool/task/schedule_task.php
++++ b/public/admin/tool/task/schedule_task.php
+@@ -80,8 +80,13 @@ if ($action == 'asap') {
+         );
+     }
+     // Set nextruntime to the past so cron picks it up on its very next run.
+-    \core\task\manager::set_scheduled_task_nextruntime($task, time() - HOURSECS);
+-    echo $OUTPUT->notification(get_string('runasapsuccess', 'tool_task', $task->get_name()), 'success');
++    // This is rejected if the task is currently running, because the next run time would be
++    // recalculated (and the request discarded) when the running task completes.
++    if (\core\task\manager::set_scheduled_task_nextruntime($task, time() - HOURSECS)) {
++        echo $OUTPUT->notification(get_string('runasapsuccess', 'tool_task', $task->get_name()), 'success');
++    } else {
++        echo $OUTPUT->notification(get_string('runasaprunning', 'tool_task', $task->get_name()), 'error');
++    }
+     echo $output->link_back(get_class($task));
+     echo $OUTPUT->footer();
+     exit;
+diff --git a/public/lib/UPGRADING.md b/public/lib/UPGRADING.md
+index aad02bc1da4..57faf547667 100644
+--- a/public/lib/UPGRADING.md
++++ b/public/lib/UPGRADING.md
+@@ -97,6 +97,9 @@
+ 
+ ### Changed
+ 
++- `\core\task\manager::set_scheduled_task_nextruntime()` now returns a `bool` instead of `void`. It returns `false` (and leaves the next run time unchanged) when the scheduled task is currently running, because the next run time is recalculated when the running task completes. A new `\core\task\manager::is_scheduled_task_running()` method has also been added.
++
++  For more information see [MDL-89200](https://tracker.moodle.org/browse/MDL-89200)
+ - The `search` landmark role in the `core/search_input_auto` template is enclosed within a `searchrole` Mustache block so that templates that use this template can override and remove the `search` landmark role when deemed unnecessary.
+ 
+   For more information see [MDL-88833](https://tracker.moodle.org/browse/MDL-88833)
+diff --git a/public/lib/classes/task/manager.php b/public/lib/classes/task/manager.php
+index 1bd67857f72..9c50ba65d1d 100644
+--- a/public/lib/classes/task/manager.php
++++ b/public/lib/classes/task/manager.php
+@@ -1391,19 +1391,58 @@ class manager {
+     /**
+      * Sets the next run time for a scheduled task.
+      *
++     * The next run time is not changed if the task is currently running, because
++     * {@see scheduled_task_complete()} and {@see scheduled_task_failed()} recalculate
++     * the next run time when the running task finishes, which would silently discard
++     * the requested value.
++     *
+      * @param scheduled_task $task Task to modify
+      * @param int $nextruntime timestamp
++     * @return bool true if the next run time was updated, false if the task is currently running
++     *              (or could not be found) and the next run time was left unchanged
++     * @throws \dml_exception If there is a database error
++     * @since Moodle 5.3
++     */
++    public static function set_scheduled_task_nextruntime(scheduled_task $task, int $nextruntime): bool {
++        global $DB;
++
++        $classname = self::get_canonical_class_name($task);
++
++        // Guard against a race with a running task: the update is only applied when
++        // the task is not currently running (timestarted is cleared when a task completes or fails).
++        $sql = "UPDATE {task_scheduled}
++                   SET nextruntime = :nextruntime
++                 WHERE classname = :classname
++                   AND (timestarted IS NULL OR timestarted = 0)";
++        $DB->execute($sql, ['nextruntime' => $nextruntime, 'classname' => $classname]);
++
++        // Verify the change was applied (the record exists, is not running and now has the requested value).
++        $record = $DB->get_record('task_scheduled', ['classname' => $classname], 'id, nextruntime, timestarted');
++        if (!$record || !empty($record->timestarted) || (int)$record->nextruntime !== $nextruntime) {
++            return false;
++        }
++
++        $task->set_next_run_time($nextruntime);
++        return true;
++    }
++
++    /**
++     * Checks whether a scheduled task is currently running.
++     *
++     * @param scheduled_task $task Task to check
++     * @return bool
+      * @throws \dml_exception If there is a database error
+      * @since Moodle 5.3
+      */
+-    public static function set_scheduled_task_nextruntime(scheduled_task $task, int $nextruntime): void {
++    public static function is_scheduled_task_running(scheduled_task $task): bool {
+         global $DB;
+-        $DB->set_field(
++
++        $timestarted = $DB->get_field(
+             'task_scheduled',
+-            'nextruntime',
+-            $nextruntime,
++            'timestarted',
+             ['classname' => self::get_canonical_class_name($task)]
+         );
++        return !empty($timestarted);
+     }
+ 
+     /**
+diff --git a/public/lib/tests/task/manager_test.php b/public/lib/tests/task/manager_test.php
+index 7e28d285776..cf9d27ee0d4 100644
+--- a/public/lib/tests/task/manager_test.php
++++ b/public/lib/tests/task/manager_test.php
+@@ -696,10 +696,64 @@ final class manager_test extends \advanced_testcase {
+         $next = \core\task\manager::get_next_scheduled_task($clock->time() + 10);
+         $this->assertNull($next);
+ 
+-        manager::set_scheduled_task_nextruntime($first, $clock->time() + 20);
++        $this->assertTrue(manager::set_scheduled_task_nextruntime($first, $clock->time() + 20));
++        $this->assertEquals($clock->time() + 20, $first->get_next_run_time());
+ 
+         $next = \core\task\manager::get_next_scheduled_task($clock->time() + 30);
+         $this->assertNotNull($next);
+         manager::scheduled_task_complete($next);
+     }
++
++    /**
++     * Test that the next run time of a scheduled task cannot be changed while the task is running.
++     *
++     * If the request were accepted, the next run time would be recalculated (and the request silently
++     * discarded) when the running task completes.
++     *
++     * @covers ::set_scheduled_task_nextruntime
++     * @covers ::is_scheduled_task_running
++     */
++    public function test_set_scheduled_task_nextruntime_while_running(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $this->preventResetByRollback();
++        $clock = $this->mock_clock_with_frozen(
++            (new \DateTimeImmutable('2026-01-01 12:00:00', \core_date::get_server_timezone_object()))->getTimestamp(),
++        );
++
++        // Disable all the tasks, so we can insert our own and be sure it's the only one being run.
++        $DB->set_field('task_scheduled', 'disabled', 1);
++
++        $task = new scheduled_test_task();
++        $task->set_month('*');
++        $task->set_hour('0');
++        $task->set_next_run_time($clock->time() - HOURSECS);
++        $DB->insert_record('task_scheduled', manager::record_from_scheduled_task($task));
++
++        // Start the task running (this acquires the lock and marks it as started).
++        $running = manager::get_next_scheduled_task($clock->time());
++        $this->assertNotNull($running);
++        $this->assertTrue(manager::is_scheduled_task_running($running));
++
++        $classname = manager::get_canonical_class_name($running);
++        $before = (int) $DB->get_field('task_scheduled', 'nextruntime', ['classname' => $classname]);
++
++        // A "run ASAP" request while running must be rejected and leave the record untouched.
++        $asap = $clock->time() - HOURSECS;
++        $this->assertFalse(manager::set_scheduled_task_nextruntime($running, $asap));
++        $this->assertEquals($before, (int) $DB->get_field('task_scheduled', 'nextruntime', ['classname' => $classname]));
++
++        // Complete the running task; the next run time is recalculated from the schedule (00:00 next day).
++        manager::scheduled_task_complete($running);
++        $this->assertFalse(manager::is_scheduled_task_running($running));
++        $this->assertNull(manager::get_next_scheduled_task($clock->time() + 10));
++
++        // Now that nothing is running, the request is accepted and the task becomes due.
++        $this->assertTrue(manager::set_scheduled_task_nextruntime($running, $asap));
++        $this->assertEquals($asap, (int) $DB->get_field('task_scheduled', 'nextruntime', ['classname' => $classname]));
++        $next = manager::get_next_scheduled_task($clock->time() + 10);
++        $this->assertNotNull($next);
++        manager::scheduled_task_complete($next);
++    }
+ }

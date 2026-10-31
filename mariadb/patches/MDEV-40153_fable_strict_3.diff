@@ -1,0 +1,151 @@
+diff --git a/mysql-test/suite/compat/oracle/r/sp-record.result b/mysql-test/suite/compat/oracle/r/sp-record.result
+index 5b66c6fa..79312b36 100644
+--- a/mysql-test/suite/compat/oracle/r/sp-record.result
++++ b/mysql-test/suite/compat/oracle/r/sp-record.result
+@@ -895,3 +895,57 @@ NULL;
+ END;
+ $$
+ ERROR HY000: Data type 'rec0_t' doesn't support CHARACTER SET attribute.
++#
++# MDEV-40153 Assertion `rec->field->head()->charset == nullptr' failed in virtual bool Type_handler_row::Column_definition_prepare_stage1(THD *, MEM_ROOT *, Column_definition *, column_definition_type_t, const Column_derived_attributes *) const
++#
++SET sql_mode=ORACLE;
++CREATE PACKAGE pkg1 AS
++TYPE rec0_t IS RECORD (b BLOB);
++FUNCTION f1 RETURN rec0_t;
++FUNCTION f2(p rec0_t) RETURN INT;
++PROCEDURE p1;
++END;
++$$
++CREATE PACKAGE BODY pkg1 AS
++FUNCTION f1 RETURN rec0_t AS
++r0 rec0_t:= rec0_t('abc');
++BEGIN
++RETURN r0;
++END;
++FUNCTION f2(p rec0_t) RETURN INT AS
++BEGIN
++RETURN LENGTH(p.b);
++END;
++PROCEDURE p1 AS
++r0 rec0_t;
++BEGIN
++r0:= f1();
++SELECT f2(r0);
++END;
++END;
++$$
++CALL pkg1.p1;
++f2(r0)
++3
++DROP PACKAGE pkg1;
++CREATE PACKAGE pkg1 AS
++TYPE rec0_t IS RECORD (a VARBINARY(10), b VARCHAR(10) CHARACTER SET utf8mb4);
++FUNCTION f1 RETURN rec0_t;
++FUNCTION f2(p rec0_t) RETURN VARCHAR(100);
++END;
++$$
++CREATE PACKAGE BODY pkg1 AS
++FUNCTION f1 RETURN rec0_t AS
++BEGIN
++RETURN rec0_t('abc','def');
++END;
++FUNCTION f2(p rec0_t) RETURN VARCHAR(100) AS
++BEGIN
++RETURN HEX(p.a) || ' ' || p.b;
++END;
++END;
++$$
++SELECT pkg1.f2(pkg1.f1());
++pkg1.f2(pkg1.f1())
++616263 def
++DROP PACKAGE pkg1;
+diff --git a/mysql-test/suite/compat/oracle/t/sp-record.test b/mysql-test/suite/compat/oracle/t/sp-record.test
+index b75a739d..194c4b4a 100644
+--- a/mysql-test/suite/compat/oracle/t/sp-record.test
++++ b/mysql-test/suite/compat/oracle/t/sp-record.test
+@@ -975,3 +975,61 @@ BEGIN
+ END;
+ $$
+ DELIMITER ;$$
++
++
++--echo #
++--echo # MDEV-40153 Assertion `rec->field->head()->charset == nullptr' failed in virtual bool Type_handler_row::Column_definition_prepare_stage1(THD *, MEM_ROOT *, Column_definition *, column_definition_type_t, const Column_derived_attributes *) const
++--echo #
++
++SET sql_mode=ORACLE;
++DELIMITER $$;
++CREATE PACKAGE pkg1 AS
++  TYPE rec0_t IS RECORD (b BLOB);
++  FUNCTION f1 RETURN rec0_t;
++  FUNCTION f2(p rec0_t) RETURN INT;
++  PROCEDURE p1;
++END;
++$$
++CREATE PACKAGE BODY pkg1 AS
++  FUNCTION f1 RETURN rec0_t AS
++    r0 rec0_t:= rec0_t('abc');
++  BEGIN
++    RETURN r0;
++  END;
++  FUNCTION f2(p rec0_t) RETURN INT AS
++  BEGIN
++    RETURN LENGTH(p.b);
++  END;
++  PROCEDURE p1 AS
++    r0 rec0_t;
++  BEGIN
++    r0:= f1();
++    SELECT f2(r0);
++  END;
++END;
++$$
++DELIMITER ;$$
++CALL pkg1.p1;
++DROP PACKAGE pkg1;
++
++DELIMITER $$;
++CREATE PACKAGE pkg1 AS
++  TYPE rec0_t IS RECORD (a VARBINARY(10), b VARCHAR(10) CHARACTER SET utf8mb4);
++  FUNCTION f1 RETURN rec0_t;
++  FUNCTION f2(p rec0_t) RETURN VARCHAR(100);
++END;
++$$
++CREATE PACKAGE BODY pkg1 AS
++  FUNCTION f1 RETURN rec0_t AS
++  BEGIN
++    RETURN rec0_t('abc','def');
++  END;
++  FUNCTION f2(p rec0_t) RETURN VARCHAR(100) AS
++  BEGIN
++    RETURN HEX(p.a) || ' ' || p.b;
++  END;
++END;
++$$
++DELIMITER ;$$
++SELECT pkg1.f2(pkg1.f1());
++DROP PACKAGE pkg1;
+diff --git a/sql/sql_type_row.cc b/sql/sql_type_row.cc
+index 97d48ed3..4b792389 100644
+--- a/sql/sql_type_row.cc
++++ b/sql/sql_type_row.cc
+@@ -252,7 +252,17 @@ bool Type_handler_row::
+   {
+     DBUG_ASSERT(rec->field);
+     DBUG_ASSERT(rec->field->elements);
+-    DBUG_ASSERT(rec->field->head()->charset == nullptr); // Not prepared
++    /*
++      Note, rec->field is never prepared itself: it's always deep-copied
++      before preparing (see also sp_variable_declarations_finalize() and
++      LEX::declare_type_ref_cursor()). It's not possible to test here
++      that rec->field is not prepared by checking that "charset" of its
++      members is nullptr: the parser can set "charset" explicitly for
++      some data types already at the parse time, e.g.:
++        TYPE r IS RECORD (a BLOB);
++        TYPE r IS RECORD (a VARBINARY(10));
++        TYPE r IS RECORD (a VARCHAR(10) CHARACTER SET utf8mb4);
++    */
+     Row_definition_list *row= rec->field->deep_copy(thd);
+     if (!row || thd->lex->sphead->row_fill_field_definitions(thd, row))
+       return true; // Error

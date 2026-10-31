@@ -1,0 +1,111 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You CAN run Moodle's existing PHPUnit tests: `cd {WS} && vendor/bin/phpunit <path/to/some_test.php>` (the test environment is already initialised). You may also run `php -l <file>` and read code with grep/find/cat. Use absolute paths starting with {WS} in every command.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-89431: Gemini AI provider image generation breaks on 17 August 2026: hardcoded imagen-4.0-generate-001 endpoint is being retired by Google
+
+Google is retiring the Imagen 4 endpoints on 17 August 2026. After that date, all API
+calls to those endpoints return "404 Not Found". The retired endpoints are:
+
+* imagen-4.0-generate-001
+* imagen-4.0-ultra-generate-001
+* imagen-4.0-fast-generate-001
+
+Google's recommended migration path for all three is gemini-3.1-flash-image.
+
+The Gemini API provider shipped in Moodle 5.2 only supports imagen-4.0-generate-001 for
+the "Generate image" action, so image generation via this provider will stop working on
+that date for every site, with no configuration change available to the administrator
+that can fix it.
+
+Verified on 5.2.2:
+
+  ai/provider/gemini/classes/aimodel/imagen40generate001.php:51
+      returns [https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict|https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict]
+
+  ai/provider/gemini/classes/form/action_generate_image_form.php:38
+      same URL as the default endpoint
+
+  ai/provider/gemini/classes/process_generate_image.php:50
+      builds $requestobj->instances (Imagen "predict" request schema)
+
+  ai/provider/gemini/classes/process_generate_image.php:78-81
+      reads $bodyobj->predictions[0]->bytesBase64Encoded (Imagen response schema)
+
+There is no other image model class in classes/aimodel/, and no occurrence of
+generateContent, inlineData or responseModalities anywhere in the image generation path.
+
+WHY THIS IS NOT A CONFIGURATION FIX
+
+The endpoint field in the action form is editable, so at first sight an administrator
+could simply point it at a newer model. That does not work, because Imagen models and
+Gemini image models use different request and response schemas, not just different model
+IDs:
+
+{noformat}              Imagen 4                     Gemini image models{noformat}
+
+  Method          :predict                     :generateContent
+  Request         instances[].prompt           contents[].parts[].text
+                  parameters.sampleCount       generationConfig.responseModalities: ["IMAGE"]
+                  parameters.aspectRatio       generationConfig.imageConfig.aspectRatio
+  Response        predictions[0]               candidates[0].content.parts[]
+                    .bytesBase64Encoded          .inlineData.data / .inlineData.mimeType
+
+Changing the configured endpoint or model name still sends an Imagen-shaped body and
+still parses an Imagen-shaped response, so the request fails regardless.
+
+STEPS TO REPRODUCE
+
+# On a Moodle 5.2.2 site, configure the Gemini API provider with a valid Gemini API key.
+# Enable the "Generate image" action (imagen-4.0-generate-001 is the only option).
+# Generate an image from a course. It currently works.
+# Edit the action endpoint to any current Gemini image model, for example
+[https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:generateContent|https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:generateContent]
+# Generate an image again.
+
+EXPECTED RESULT
+
+  A supported, non-retired image model is available and image generation keeps working
+  after 17 August 2026.
+
+ACTUAL RESULT
+
+  Step 3 will start returning HTTP 404 from 17 August 2026 onwards.
+  Step 5 fails today, because the request body and response parser are Imagen-specific.
+
+SUGGESTED FIX
+
+Add support for the Gemini native image generation protocol, along the lines of what
+aiprovider_openai already does for its own image models. That provider defines an
+openai_image_base interface with response_format() and get_output_format() returning null
+for models that do not support a given parameter, and process_generate_image.php guards
+the call with "instanceof openai_image_base". The same pattern would work here:
+
+# Add one or more aimodel classes for the current Gemini image models
+(gemini-3.1-flash-image, gemini-3.1-flash-lite-image, gemini-3-pro-image),
+each returning the :generateContent endpoint.
+# Introduce an interface (or a method on the model class) that indicates which
+protocol the model speaks, so process_generate_image.php can build either an
+Imagen "predict" body or a Gemini "generateContent" body.
+# Branch the response handling accordingly: read inlineData.data / inlineData.mimeType
+for Gemini models, keep predictions[0].bytesBase64Encoded for Imagen models.
+# Note that Gemini image models return a single image per call, so the "number of
+images" setting needs to be constrained or implemented as multiple calls.
+# Consider surfacing promptFeedback.blockReason and candidates[0].finishReason in the
+error path, since Gemini's safety filtering rejects prompts that Imagen accepted.
+
+Given the hard external deadline, a backport to MOODLE_502_STABLE before 17 August 2026
+would be valuable. Sites that reach the Gemini API through a proxy can work around this
+locally by translating the request and response at the proxy layer, but sites calling
+[generativelanguage.googleapis.com|http://generativelanguage.googleapis.com] directly have no workaround available.
+
+REFERENCES
+
+  Google AI Studio deprecation notice sent to API customers on 18 June 2026,
+  subject "[Action required] Update your Imagen models for the Gemini API before
+  17 August 2026".

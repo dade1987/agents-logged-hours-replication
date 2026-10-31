@@ -1,0 +1,58 @@
+diff --git a/public/lib/classes/plugininfo/orphaned.php b/public/lib/classes/plugininfo/orphaned.php
+index 2c496ae9320..71c0eb296c3 100644
+--- a/public/lib/classes/plugininfo/orphaned.php
++++ b/public/lib/classes/plugininfo/orphaned.php
+@@ -76,6 +76,7 @@ class orphaned extends base {
+             $plugin->type        = $type;
+             $plugin->typerootdir = $typerootdir;
+             $plugin->name        = $name;
++            $plugin->component   = $plugin->type . '_' . $plugin->name;
+             $plugin->rootdir     = null;
+             $plugin->displayname = $name;
+             $plugin->versiondb   = $version;
+diff --git a/public/lib/tests/plugin_manager_test.php b/public/lib/tests/plugin_manager_test.php
+index cdd59b5f1a4..a3463c020bd 100644
+--- a/public/lib/tests/plugin_manager_test.php
++++ b/public/lib/tests/plugin_manager_test.php
+@@ -278,6 +278,41 @@ final class plugin_manager_test extends \advanced_testcase {
+         $this->assertTrue(core_plugin_manager::instance()->can_uninstall_plugin('report_competency'));
+     }
+ 
++    /**
++     * Test that orphaned subplugins (whose parent plugin and subplugin type are missing from disk)
++     * are correctly identified and can be uninstalled.
++     *
++     * @covers \core\plugininfo\orphaned::get_plugins
++     * @covers ::can_uninstall_plugin
++     */
++    public function test_can_uninstall_orphaned_subplugin(): void {
++        $this->resetAfterTest();
++
++        // Simulate a subplugin whose parent plugin (and thus its subplugin type) has been removed from disk.
++        set_config('version', 2025010100, 'xxxxxxxsub_alpha');
++        core_plugin_manager::reset_caches();
++
++        $pluginman = core_plugin_manager::instance();
++
++        $plugininfo = $pluginman->get_plugin_info('xxxxxxxsub_alpha');
++        $this->assertInstanceOf(\core\plugininfo\orphaned::class, $plugininfo);
++        $this->assertSame('xxxxxxxsub', $plugininfo->type);
++        $this->assertSame('alpha', $plugininfo->name);
++        $this->assertSame('xxxxxxxsub_alpha', $plugininfo->component);
++        $this->assertSame(core_plugin_manager::PLUGIN_STATUS_MISSING, $plugininfo->get_status());
++
++        // The orphaned subplugin is also listed by get_plugins() with a proper component name.
++        $plugins = $pluginman->get_plugins();
++        $this->assertArrayHasKey('xxxxxxxsub', $plugins);
++        $this->assertArrayHasKey('alpha', $plugins['xxxxxxxsub']);
++        $this->assertSame('xxxxxxxsub_alpha', $plugins['xxxxxxxsub']['alpha']->component);
++
++        // The orphaned subplugin can be uninstalled.
++        $this->assertTrue($pluginman->can_uninstall_plugin('xxxxxxxsub_alpha'));
++        $this->assertTrue($pluginman->can_uninstall_plugin($plugins['xxxxxxxsub']['alpha']->component));
++        $this->assertInstanceOf(\moodle_url::class, $pluginman->get_uninstall_url('xxxxxxxsub_alpha'));
++    }
++
+     public function test_plugin_states(): void {
+         global $CFG;
+         $this->resetAfterTest();

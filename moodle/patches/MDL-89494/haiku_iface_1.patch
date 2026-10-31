@@ -1,0 +1,36 @@
+diff --git a/public/admin/tool/customlang/locallib.php b/public/admin/tool/customlang/locallib.php
+index c76ff7829fb..32d67cb375b 100644
+--- a/public/admin/tool/customlang/locallib.php
++++ b/public/admin/tool/customlang/locallib.php
+@@ -47,6 +47,22 @@ class tool_customlang_utils {
+     private function __construct() {
+     }
+ 
++    /**
++     * Calculates the checkout progress percentage for the given number of processed strings.
++     *
++     * The estimate of the total workload is rough, so the result is capped at 99 while the
++     * checkout is still running. The value 100 is reserved for the final "checkout done" update,
++     * which is sent only once the whole checkout has really finished.
++     *
++     * @param int $done number of strings processed so far
++     * @return int percentage between 0 and 99
++     */
++    public static function calculate_checkout_percent(int $done): int {
++        $done = max(0, $done);
++        $percent = (int) floor(min($done, self::ROUGH_NUMBER_OF_STRINGS) / self::ROUGH_NUMBER_OF_STRINGS * 100);
++        return min($percent, 99);
++    }
++
+     /**
+      * Returns a list of all components installed on the server
+      *
+@@ -154,7 +170,7 @@ class tool_customlang_utils {
+ 
+                 if (!is_null($progressbar)) {
+                     $done++;
+-                    $donepercent = floor(min($done, self::ROUGH_NUMBER_OF_STRINGS) / self::ROUGH_NUMBER_OF_STRINGS * 100);
++                    $donepercent = self::calculate_checkout_percent($done);
+                     $progressbar->update_full($donepercent, $strinprogress);
+                 }
+ 

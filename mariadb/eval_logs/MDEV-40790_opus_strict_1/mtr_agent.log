@@ -1,0 +1,321 @@
+Logging: /home/user/mdb_src/mysql-test/mariadb-test-run.pl  --vardir=/home/mtr/var/t --force --parallel=4 --retry=0 main.select_into_row
+VS config: 
+vardir: /home/mtr/var/t
+Removing old var directory...
+Creating var directory '/home/mtr/var/t'...
+Checking supported features...
+MariaDB Version 12.3.3-MariaDB-debug
+ - SSL connections supported
+ - binaries are debug compiled
+Collecting tests...
+Installing system database...
+worker[01] Using MTR_BUILD_THREAD 300, with reserved ports 19000..19029
+
+worker[02] Using MTR_BUILD_THREAD 301, with reserved ports 19030..19059
+worker[03] Using MTR_BUILD_THREAD 302, with reserved ports 19060..19089
+==============================================================================
+
+TEST                                  WORKER RESULT   TIME (ms) or COMMENT
+--------------------------------------------------------------------------
+
+worker[04] Using MTR_BUILD_THREAD 303, with reserved ports 19090..19119
+main.select_into_row                     w1 [ fail ]
+        Test ended at 2026-10-29 01:12:25
+
+CURRENT_TEST: main.select_into_row
+mysqltest: At line 48: query 'CREATE PROCEDURE p1()
+BEGIN
+DECLARE r0 ROW (a INT, b VARCHAR(10));
+SELECT a,b INTO r0.a,r0.b1_non_existing FROM t1;
+END;
+' failed with wrong errno <Unknown> (2013): 'Lost connection to server during query', instead of ER_ROW_VARIABLE_DOES_NOT_HAVE_FIELD (4082)...
+
+The result from queries just before the failure was:
+< snip >
+BEGIN
+DECLARE r0 ROW (a INT, b VARCHAR(10));
+SELECT a,b INTO r0.a,r0.b FROM t1;
+SELECT r0.a, r0.b;
+END;
+$$
+CALL p1;
+r0.a	r0.b
+10	b10
+DROP PROCEDURE p1;
+DROP TABLE t1;
+# Into an explicit ROW field variable - non-existing field
+CREATE TABLE t1 (a INT,b VARCHAR(10));
+INSERT INTO t1 VALUES (10,'b10');
+CREATE PROCEDURE p1()
+BEGIN
+DECLARE r0 ROW (a INT, b VARCHAR(10));
+SELECT a,b INTO r0.a,r0.b1_non_existing FROM t1;
+END;
+$$
+
+More results from queries before failure can be found in /home/mtr/var/t/1/log/select_into_row.log
+
+
+Server [mysqld.1 - pid: 28605, winpid: 28605, exit: 256] failed during test run
+Server log from this test:
+----------SERVER LOG START-----------
+$ /home/user/mdb_build_dbg/sql/mariadbd --defaults-group-suffix=.1 --defaults-file=/home/mtr/var/t/1/my.cnf --log-output=file --core-file --loose-debug-sync-timeout=300
+2026-10-29  1:12:04 0 [Warning] Could not increase number of max_open_files to more than 1024 (request: 32186)
+2026-10-29  1:12:04 0 [Warning] Changed limits: max_open_files: 1024  max_connections: 151 (was 151)  table_cache: 421 (was 2000)
+2026-10-29  1:12:04 0 [Note] Starting MariaDB 12.3.3-MariaDB-debug-log source revision 3ad0455a2651a993b3cd8dfceeb893bfb1218a0e server_uid NzS151uu8ZVD58aPAFsNZrW2jyI= as process 28606
+2026-10-29  1:12:04 0 [Note] Plugin 'partition' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'InnoDB' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'SEQUENCE' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'INNODB_FT_CONFIG' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'INNODB_SYS_TABLESTATS' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'INNODB_CMP_PER_INDEX' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'INNODB_FT_DELETED' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'INNODB_CMP' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'THREAD_POOL_WAITS' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'INNODB_CMP_RESET' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'THREAD_POOL_QUEUES' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'INNODB_SYS_FIELDS' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'INNODB_BUFFER_PAGE_LRU' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'FEEDBACK' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'INNODB_FT_INDEX_TABLE' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'INNODB_CMPMEM' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'THREAD_POOL_GROUPS' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'INNODB_CMP_PER_INDEX_RESET' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'INNODB_SYS_FOREIGN_COLS' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'INNODB_FT_INDEX_CACHE' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'INNODB_BUFFER_POOL_STATS' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'INNODB_FT_BEING_DELETED' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'INNODB_SYS_FOREIGN' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'INNODB_CMPMEM_RESET' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'INNODB_FT_DEFAULT_STOPWORD' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'INNODB_SYS_TABLES' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'INNODB_SYS_COLUMNS' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'INNODB_SYS_TABLESPACES' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'INNODB_SYS_INDEXES' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'INNODB_SYS_VIRTUAL' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'user_variables' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'INNODB_TABLESPACES_ENCRYPTION' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'THREAD_POOL_STATS' is disabled.
+2026-10-29  1:12:05 0 [Note] Plugin 'unix_socket' is disabled.
+2026-10-29  1:12:05 0 [Warning] /home/user/mdb_build_dbg/sql/mariadbd: unknown option '--loose-pam-debug'
+2026-10-29  1:12:05 0 [Warning] /home/user/mdb_build_dbg/sql/mariadbd: unknown option '--loose-aria'
+2026-10-29  1:12:05 0 [Note] Server socket created on IP: '127.0.0.1', port: '19000'.
+2026-10-29  1:12:05 0 [Note] mariadbd: Event Scheduler: Loaded 0 events
+2026-10-29  1:12:05 0 [Note] /home/user/mdb_build_dbg/sql/mariadbd: ready for connections.
+Version: '12.3.3-MariaDB-debug-log'  socket: '/home/mtr/var/t/tmp/1/mysqld.1.sock'  port: 19000  Source distribution
+mariadbd: /home/user/mdb_src/sql/sql_type_row.cc:215: virtual my_var* Type_handler_row::make_outvar_field(THD*, const Lex_ident_sys_st&, const sp_rcontext_addr&, const Lex_ident_sys_st&, sp_head*, bool) const: Assertion `0' failed.
+261029  1:12:05 [ERROR] /home/user/mdb_build_dbg/sql/mariadbd got signal 6 ;
+Sorry, we probably made a mistake, and this is a bug.
+
+Your assistance in bug reporting will enable us to fix this for the next release.
+To report this bug, see https://mariadb.com/docs/general-resources/community/community/bug-tracking/reporting-bugs about how to report
+a bug on https://jira.mariadb.org/.
+
+Please include the information from the server start above, to the end of the
+information below.
+
+Server version: 12.3.3-MariaDB-debug-log source revision: 3ad0455a2651a993b3cd8dfceeb893bfb1218a0e
+
+The information page at https://mariadb.com/docs/server/reference/product-development/mariadb-fault-finding/how-to-produce-a-full-stack-trace-for-mariadbdcontains instructions to obtain a better version of the backtrace below.
+Following these instructions will help MariaDB developers provide a fix quicker.
+
+Attempting backtrace. Include this in the bug report.
+(note: Retrieving this information may fail)
+
+Thread pointer: 0x7fda48000dd0
+stack_bottom = 0x7fda657aa000 thread_stack 0x49000
+/home/user/mdb_build_dbg/sql/mariadbd(my_print_stacktrace+0x44)[0x55735489002e]
+/home/user/mdb_build_dbg/sql/mariadbd(handle_fatal_signal+0x260)[0x557353e11c4f]
+libc_sigaction.c:0(__restore_rt)[0x7fda6be45330]
+nptl/pthread_kill.c:44(__pthread_kill_implementation)[0x7fda6be9ec0c]
+posix/raise.c:27(__GI_raise)[0x7fda6be4527e]
+stdlib/abort.c:81(__GI_abort)[0x7fda6be288ff]
+intl/loadmsgcat.c:1177(_nl_load_domain)[0x7fda6be2881b]
+/lib/x86_64-linux-gnu/libc.so.6(+0x3b517)[0x7fda6be3b517]
+sql/sql_type_row.cc:216(Type_handler_row::make_outvar_field(THD*, Lex_ident_sys_st const&, sp_rcontext_addr const&, Lex_ident_sys_st const&, sp_head*, bool) const)[0x557353d24595]
+sql/sql_lex.cc:9067(LEX::create_outvar(THD*, Lex_ident_sys_st const&, Lex_ident_sys_st const&))[0x5573538f651f]
+sql/sql_yacc.yy:13773(MYSQLparse(THD*))[0x557353d50f62]
+sql/sql_parse.cc:10369(parse_sql(THD*, Parser_state*, Object_creation_ctx*, bool))[0x55735393f2a8]
+sql/sql_parse.cc:7897(mysql_parse(THD*, char*, unsigned int, Parser_state*))[0x557353939787]
+sql/sql_parse.cc:1905(dispatch_command(enum_server_command, THD*, char*, unsigned int, bool))[0x557353928794]
+sql/sql_parse.cc:1437(do_command(THD*, bool))[0x5573539274d7]
+sql/sql_connect.cc:1514(do_handle_one_connection(CONNECT*, bool))[0x557353b6e287]
+sql/sql_connect.cc:1428(handle_one_connection)[0x557353b6e013]
+perfschema/pfs.cc:2200(pfs_spawn_thread)[0x5573541d617a]
+nptl/pthread_create.c:447(start_thread)[0x7fda6be9cb84]
+x86_64/clone3.S:80(clone3)[0x7fda6bf29ecc]
+
+Connection ID (thread ID): 4
+Status: NOT_KILLED
+Query (0x7fda48017fe0): CREATE PROCEDURE p1()
+BEGIN
+DECLARE r0 ROW (a INT, b VARCHAR(10));
+SELECT a,b INTO r0.a,r0.b1_non_existing FROM t1;
+END
+
+Optimizer switch: index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,index_merge_sort_intersection=off,index_condition_pushdown=on,derived_merge=on,derived_with_keys=on,firstmatch=on,loosescan=on,duplicateweedout=on,materialization=on,in_to_exists=on,semijoin=on,partial_match_rowid_merge=on,partial_match_table_scan=on,subquery_cache=on,mrr=off,mrr_cost_based=off,mrr_sort_keys=off,outer_join_with_cache=on,semijoin_with_cache=on,join_cache_incremental=on,join_cache_hashed=on,join_cache_bka=on,optimize_join_buffer_size=on,table_elimination=on,extended_keys=on,exists_to_in=on,orderby_uses_equalities=on,condition_pushdown_for_derived=on,split_materialized=on,condition_pushdown_for_subquery=on,rowid_filter=on,condition_pushdown_from_having=on,not_null_range_scan=off,hash_join_cardinality=on,cset_narrowing=on,sargable_casefold=on,reorder_outer_joins=off
+
+Writing a core file...
+Working directory at /home/mtr/var/t/1/mysqld.1/data
+Resource Limits (excludes unlimited resources):
+Limit                     Soft Limit           Hard Limit           Units     
+Max stack size            8388608              unlimited            bytes     
+Max processes             64279                64279                processes 
+Max open files            1024                 1024                 files     
+Max locked memory         8388608              8388608              bytes     
+Max pending signals       64279                64279                signals   
+Max msgqueue size         819200               819200               bytes     
+Max nice priority         0                    0                    
+Max realtime priority     0                    0                    
+Core pattern: core
+
+Kernel version: Linux version 6.18.44-fc-v185 (builder@sandboxing) (gcc (GCC) 15.3.0, GNU ld (GNU Binutils) 2.46) #1 SMP PREEMPT_DYNAMIC @0
+
+----------SERVER LOG END-------------
+
+
+ - found 'core' (0/5)
+Core generated by '/home/user/mdb_build_dbg/sql/mariadbd'
+Output from gdb follows. The first stack trace is from the failing thread.
+The following stack traces are from all threads (so the failing one is
+duplicated).
+--------------------------
+[New LWP 28614]
+[New LWP 28606]
+[New LWP 28607]
+[New LWP 28610]
+[New LWP 28611]
+[New LWP 28608]
+[New LWP 28609]
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+Core was generated by `/home/user/mdb_build_dbg/sql/mariadbd --defaults-group-suffix=.1 --defaults-fil'.
+Program terminated with signal SIGABRT, Aborted.
+#0  __pthread_kill_implementation (no_tid=0, signo=6, threadid=<optimized out>) at ./nptl/pthread_kill.c:44
+
+warning: 44	./nptl/pthread_kill.c: No such file or directory
+[Current thread is 1 (Thread 0x7fda657a96c0 (LWP 28614))]
+
+Thread 7 (Thread 0x7fda6588a6c0 (LWP 28609)):
+#0  0x00007fda6be98e51 in __futex_abstimed_wait_common64 (private=32730, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x557355939388 <COND_manager+40>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=32730, abstime=0x0, clockid=0, expected=0, futex_word=0x557355939388 <COND_manager+40>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x557355939388 <COND_manager+40>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007fda6be9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x5573559392c8 <LOCK_manager+40>, cond=0x557355939360 <COND_manager>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x557355939360 <COND_manager>, mutex=0x5573559392c8 <LOCK_manager+40>) at ./nptl/pthread_cond_wait.c:627
+#5  0x000055735489459e in safe_cond_wait (cond=0x557355939360 <COND_manager>, mp=0x5573559392a0 <LOCK_manager>, file=0x557354f93c68 "/home/user/mdb_src/mysys/my_thr_init.c", line=580) at /home/user/mdb_src/mysys/thr_mutex.c:489
+#6  0x000055735488e57d in psi_cond_wait (that=0x557355939360 <COND_manager>, mutex=0x5573559392a0 <LOCK_manager>, file=0x557354a04108 "/home/user/mdb_src/sql/sql_manager.cc", line=110) at /home/user/mdb_src/mysys/my_thr_init.c:580
+#7  0x000055735391d46b in inline_mysql_cond_wait (that=0x557355939360 <COND_manager>, mutex=0x5573559392a0 <LOCK_manager>, src_file=0x557354a04108 "/home/user/mdb_src/sql/sql_manager.cc", src_line=110) at /home/user/mdb_src/include/mysql/psi/mysql_thread.h:1070
+#8  0x000055735391d95d in handle_manager (arg=0x0) at /home/user/mdb_src/sql/sql_manager.cc:110
+#9  0x00005573541d617a in pfs_spawn_thread (arg=0x55738a5d59c0) at /home/user/mdb_src/storage/perfschema/pfs.cc:2198
+#10 0x00007fda6be9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#11 0x00007fda6bf29ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 6 (Thread 0x7fda6608b6c0 (LWP 28608)):
+#0  0x00007fda6be98e51 in __futex_abstimed_wait_common64 (private=21875, cancel=true, abstime=0x7fda6608aba0, op=393, expected=0, futex_word=0x5573561750a8 <COND_checkpoint+40>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=21875, abstime=0x7fda6608aba0, clockid=0, expected=0, futex_word=0x5573561750a8 <COND_checkpoint+40>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5573561750a8 <COND_checkpoint+40>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x7fda6608aba0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007fda6be9bd6e in __pthread_cond_wait_common (abstime=0x7fda6608aba0, clockid=0, mutex=0x557356174fe8 <LOCK_checkpoint+40>, cond=0x557356175080 <COND_checkpoint>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_timedwait64 (cond=0x557356175080 <COND_checkpoint>, mutex=0x557356174fe8 <LOCK_checkpoint+40>, abstime=0x7fda6608aba0) at ./nptl/pthread_cond_wait.c:652
+#5  0x0000557354894963 in safe_cond_timedwait (cond=0x557356175080 <COND_checkpoint>, mp=0x557356174fc0 <LOCK_checkpoint>, abstime=0x7fda6608aba0, file=0x557354f93c68 "/home/user/mdb_src/mysys/my_thr_init.c", line=593) at /home/user/mdb_src/mysys/thr_mutex.c:543
+#6  0x000055735488e630 in psi_cond_timedwait (that=0x557356175080 <COND_checkpoint>, mutex=0x557356174fc0 <LOCK_checkpoint>, abstime=0x7fda6608aba0, file=0x557354d1ad28 "/home/user/mdb_src/storage/maria/ma_servicethread.c", line=115) at /home/user/mdb_src/mysys/my_thr_init.c:593
+#7  0x000055735411c460 in inline_mysql_cond_timedwait (that=0x557356175080 <COND_checkpoint>, mutex=0x557356174fc0 <LOCK_checkpoint>, abstime=0x7fda6608aba0, src_file=0x557354d1ad28 "/home/user/mdb_src/storage/maria/ma_servicethread.c", src_line=115) at /home/user/mdb_src/include/mysql/psi/mysql_thread.h:1086
+#8  0x000055735411c9d4 in my_service_thread_sleep (control=0x557355719520 <checkpoint_control>, sleep_time=29000000000) at /home/user/mdb_src/storage/maria/ma_servicethread.c:115
+#9  0x000055735410fd39 in ma_checkpoint_background (arg=0x1e) at /home/user/mdb_src/storage/maria/ma_checkpoint.c:765
+#10 0x00005573541d617a in pfs_spawn_thread (arg=0x55738a2e1e50) at /home/user/mdb_src/storage/perfschema/pfs.cc:2198
+#11 0x00007fda6be9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#12 0x00007fda6bf29ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 5 (Thread 0x7fda657f46c0 (LWP 28611)):
+#0  0x00007fda6be98e51 in __futex_abstimed_wait_common64 (private=21875, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x55735592e5cc <COND_slave_deadlock_handler+44>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=21875, abstime=0x0, clockid=0, expected=0, futex_word=0x55735592e5cc <COND_slave_deadlock_handler+44>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x55735592e5cc <COND_slave_deadlock_handler+44>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007fda6be9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x557355931b08 <LOCK_slave_deadlock_handler+40>, cond=0x55735592e5a0 <COND_slave_deadlock_handler>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x55735592e5a0 <COND_slave_deadlock_handler>, mutex=0x557355931b08 <LOCK_slave_deadlock_handler+40>) at ./nptl/pthread_cond_wait.c:627
+#5  0x000055735489459e in safe_cond_wait (cond=0x55735592e5a0 <COND_slave_deadlock_handler>, mp=0x557355931ae0 <LOCK_slave_deadlock_handler>, file=0x557354f93c68 "/home/user/mdb_src/mysys/my_thr_init.c", line=580) at /home/user/mdb_src/mysys/thr_mutex.c:489
+#6  0x000055735488e57d in psi_cond_wait (that=0x55735592e5a0 <COND_slave_deadlock_handler>, mutex=0x557355931ae0 <LOCK_slave_deadlock_handler>, file=0x5573549c4418 "/home/user/mdb_src/sql/slave.cc", line=500) at /home/user/mdb_src/mysys/my_thr_init.c:580
+#7  0x00005573537c216f in inline_mysql_cond_wait (that=0x55735592e5a0 <COND_slave_deadlock_handler>, mutex=0x557355931ae0 <LOCK_slave_deadlock_handler>, src_file=0x5573549c4418 "/home/user/mdb_src/sql/slave.cc", src_line=500) at /home/user/mdb_src/include/mysql/psi/mysql_thread.h:1070
+#8  0x00005573537c3940 in slave_deadlock_handler (arg=0x0) at /home/user/mdb_src/sql/slave.cc:500
+#9  0x00005573541d617a in pfs_spawn_thread (arg=0x55738a6b49b0) at /home/user/mdb_src/storage/perfschema/pfs.cc:2198
+#10 0x00007fda6be9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#11 0x00007fda6bf29ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 4 (Thread 0x7fda6583f6c0 (LWP 28610)):
+#0  0x00007fda6be45fc8 in __GI___sigtimedwait (set=0x7fda6583ebf0, info=0x7fda6583eb30, timeout=0x0) at ../sysdeps/unix/sysv/linux/sigtimedwait.c:31
+#1  0x0000557353721d62 in my_sigwait (set=0x7fda6583ebf0, sig=0x7fda6583ebd8, code=0x7fda6583ebdc) at /home/user/mdb_src/include/my_pthread.h:180
+#2  0x00005573537289a6 in signal_hand () at /home/user/mdb_src/sql/mysqld.cc:3362
+#3  0x00005573541d617a in pfs_spawn_thread (arg=0x55738a6534c0) at /home/user/mdb_src/storage/perfschema/pfs.cc:2198
+#4  0x00007fda6be9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#5  0x00007fda6bf29ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 3 (Thread 0x7fda66c026c0 (LWP 28607)):
+#0  0x00007fda6be98e51 in __futex_abstimed_wait_common64 (private=21875, cancel=true, abstime=0x7fda66c01c60, op=393, expected=0, futex_word=0x55735620b508 <COND_timer+40>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=21875, abstime=0x7fda66c01c60, clockid=0, expected=0, futex_word=0x55735620b508 <COND_timer+40>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x55735620b508 <COND_timer+40>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x7fda66c01c60, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007fda6be9bd6e in __pthread_cond_wait_common (abstime=0x7fda66c01c60, clockid=0, mutex=0x55735620b448 <LOCK_timer+40>, cond=0x55735620b4e0 <COND_timer>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_timedwait64 (cond=0x55735620b4e0 <COND_timer>, mutex=0x55735620b448 <LOCK_timer+40>, abstime=0x7fda66c01c60) at ./nptl/pthread_cond_wait.c:652
+#5  0x0000557354894963 in safe_cond_timedwait (cond=0x55735620b4e0 <COND_timer>, mp=0x55735620b420 <LOCK_timer>, abstime=0x7fda66c01c60, file=0x557354f93c68 "/home/user/mdb_src/mysys/my_thr_init.c", line=593) at /home/user/mdb_src/mysys/thr_mutex.c:543
+#6  0x000055735488e630 in psi_cond_timedwait (that=0x55735620b4e0 <COND_timer>, mutex=0x55735620b420 <LOCK_timer>, abstime=0x7fda66c01c60, file=0x557354f94c08 "/home/user/mdb_src/mysys/thr_timer.c", line=330) at /home/user/mdb_src/mysys/my_thr_init.c:593
+#7  0x0000557354895a30 in inline_mysql_cond_timedwait (that=0x55735620b4e0 <COND_timer>, mutex=0x55735620b420 <LOCK_timer>, abstime=0x7fda66c01c60, src_file=0x557354f94c08 "/home/user/mdb_src/mysys/thr_timer.c", src_line=330) at /home/user/mdb_src/include/mysql/psi/mysql_thread.h:1086
+#8  0x0000557354896809 in timer_handler (arg=0x0) at /home/user/mdb_src/mysys/thr_timer.c:330
+#9  0x00005573541d617a in pfs_spawn_thread (arg=0x557389fa10a0) at /home/user/mdb_src/storage/perfschema/pfs.cc:2198
+#10 0x00007fda6be9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#11 0x00007fda6bf29ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 2 (Thread 0x7fda6cbe5940 (LWP 28606)):
+#0  0x00007fda6bf1b79d in __GI___poll (fds=0x55738a66e060, nfds=3, timeout=-1) at ../sysdeps/unix/sysv/linux/poll.c:29
+#1  0x00005573537305c3 in handle_connections_sockets () at /home/user/mdb_src/sql/mysqld.cc:6738
+#2  0x000055735372ee13 in run_main_loop () at /home/user/mdb_src/sql/mysqld.cc:6012
+#3  0x000055735372fa71 in mysqld_main (argc=140, argv=0x557389eab8e0) at /home/user/mdb_src/sql/mysqld.cc:6438
+#4  0x0000557353721c4d in main (argc=6, argv=0x7fff7a02e9e8) at /home/user/mdb_src/sql/main.cc:34
+
+Thread 1 (Thread 0x7fda657a96c0 (LWP 28614)):
+#0  __pthread_kill_implementation (no_tid=0, signo=6, threadid=<optimized out>) at ./nptl/pthread_kill.c:44
+#1  __pthread_kill_internal (signo=6, threadid=<optimized out>) at ./nptl/pthread_kill.c:78
+#2  __GI___pthread_kill (threadid=<optimized out>, signo=6) at ./nptl/pthread_kill.c:89
+#3  0x0000557354890127 in my_write_core (sig=6) at /home/user/mdb_src/mysys/stacktrace.c:424
+#4  0x0000557353e11ec1 in handle_fatal_signal (sig=6) at /home/user/mdb_src/sql/signal_handler.cc:298
+#5  <signal handler called>
+#6  __pthread_kill_implementation (no_tid=0, signo=6, threadid=<optimized out>) at ./nptl/pthread_kill.c:44
+#7  __pthread_kill_internal (signo=6, threadid=<optimized out>) at ./nptl/pthread_kill.c:78
+#8  __GI___pthread_kill (threadid=<optimized out>, signo=signo@entry=6) at ./nptl/pthread_kill.c:89
+#9  0x00007fda6be4527e in __GI_raise (sig=sig@entry=6) at ../sysdeps/posix/raise.c:26
+#10 0x00007fda6be288ff in __GI_abort () at ./stdlib/abort.c:79
+#11 0x00007fda6be2881b in __assert_fail_base (fmt=0x7fda6bfd1208 "%s%s%s:%u: %s%sAssertion `%s' failed.\n%n", assertion=assertion@entry=0x557354ae2b0c "0", file=file@entry=0x557354ae3a40 "/home/user/mdb_src/sql/sql_type_row.cc", line=line@entry=215, function=function@entry=0x557354ae3ac0 "virtual my_var* Type_handler_row::make_outvar_field(THD*, const Lex_ident_sys_st&, const sp_rcontext_addr&, const Lex_ident_sys_st&, sp_head*, bool) const") at ./assert/assert.c:96
+#12 0x00007fda6be3b517 in __assert_fail (assertion=0x557354ae2b0c "0", file=0x557354ae3a40 "/home/user/mdb_src/sql/sql_type_row.cc", line=215, function=0x557354ae3ac0 "virtual my_var* Type_handler_row::make_outvar_field(THD*, const Lex_ident_sys_st&, const sp_rcontext_addr&, const Lex_ident_sys_st&, sp_head*, bool) const") at ./assert/assert.c:105
+#13 0x0000557353d24595 in Type_handler_row::make_outvar_field (this=0x55735596a360 <type_handler_row_internal>, thd=0x7fda48000dd0, name=..., addr=..., field=..., sphead=0x7fda4805c1d0, validate_only=false) at /home/user/mdb_src/sql/sql_type_row.cc:215
+#14 0x00005573538f651f in LEX::create_outvar (this=0x7fda48060630, thd=0x7fda48000dd0, a=..., b=...) at /home/user/mdb_src/sql/sql_lex.cc:9067
+#15 0x0000557353d50f62 in MYSQLparse (thd=0x7fda48000dd0) at /home/user/mdb_src/sql/sql_yacc.yy:13773
+#16 0x000055735393f2a8 in parse_sql (thd=0x7fda48000dd0, parser_state=0x7fda657a82a0, creation_ctx=0x0, do_pfs_digest=true) at /home/user/mdb_src/sql/sql_parse.cc:10369
+#17 0x0000557353939787 in mysql_parse (thd=0x7fda48000dd0, rawbuf=0x7fda48017fe0 "CREATE PROCEDURE p1()\nBEGIN\nDECLARE r0 ROW (a INT, b VARCHAR(10));\nSELECT a,b INTO r0.a,r0.b1_non_existing FROM t1;\nEND", length=119, parser_state=0x7fda657a82a0) at /home/user/mdb_src/sql/sql_parse.cc:7897
+#18 0x0000557353928794 in dispatch_command (command=COM_QUERY, thd=0x7fda48000dd0, packet=0x7fda48250411 "CREATE PROCEDURE p1()\nBEGIN\nDECLARE r0 ROW (a INT, b VARCHAR(10));\nSELECT a,b INTO r0.a,r0.b1_non_existing FROM t1;\nEND;\n", packet_length=121, blocking=true) at /home/user/mdb_src/sql/sql_parse.cc:1903
+#19 0x00005573539274d7 in do_command (thd=0x7fda48000dd0, blocking=true) at /home/user/mdb_src/sql/sql_parse.cc:1437
+#20 0x0000557353b6e287 in do_handle_one_connection (connect=0x55738a749f10, put_in_cache=true) at /home/user/mdb_src/sql/sql_connect.cc:1514
+#21 0x0000557353b6e013 in handle_one_connection (arg=0x55738a72bd50) at /home/user/mdb_src/sql/sql_connect.cc:1426
+#22 0x00005573541d617a in pfs_spawn_thread (arg=0x55738a66f470) at /home/user/mdb_src/storage/perfschema/pfs.cc:2198
+#23 0x00007fda6be9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#24 0x00007fda6bf29ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+ - saving '/home/mtr/var/t/1/log/main.select_into_row/' to '/home/mtr/var/t/log/main.select_into_row/'
+***Warnings generated in error logs during shutdown after running tests: main.select_into_row
+
+mariadbd: /home/user/mdb_src/sql/sql_type_row.cc:215: virtual my_var* Type_handler_row::make_outvar_field(THD*, const Lex_ident_sys_st&, const sp_rcontext_addr&, const Lex_ident_sys_st&, sp_head*, bool) const: Assertion `0' failed.
+261029  1:12:05 [ERROR] /home/user/mdb_build_dbg/sql/mariadbd got signal 6 ;
+Attempting backtrace. Include this in the bug report.
+
+--------------------------------------------------------------------------
+The servers were restarted 0 times
+Spent 0.000 of 25 seconds executing testcases
+
+Completed: Failed 1/1 tests, 0.00% were successful.
+
+Failing test(s): main.select_into_row
+
+The log files in var/log may give you some hint of what went wrong.
+
+If you want to report this error, MariaDB's bug tracker is found at
+https://jira.mariadb.org
+
+Errors/warnings were found in logfiles during server shutdown after running the
+following sequence(s) of tests:
+    main.select_into_row
+mysql-test-run: *** ERROR: there were failing test cases

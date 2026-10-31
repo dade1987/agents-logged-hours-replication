@@ -1,0 +1,70 @@
+diff --git a/public/blocks/recentlyaccesseditems/classes/helper.php b/public/blocks/recentlyaccesseditems/classes/helper.php
+index 61e215ca261..850c66535ea 100644
+--- a/public/blocks/recentlyaccesseditems/classes/helper.php
++++ b/public/blocks/recentlyaccesseditems/classes/helper.php
+@@ -37,6 +37,9 @@ class helper {
+     /**
+      * Returns a list of the most recently items accessed by the logged user
+      *
++     * Stale records for course modules that are no longer present in course modinfo are removed as they
++     * are encountered.
++     *
+      * @param int $limit Restrict result set to this amount
+      * @return array List of recent items accessed by userid
+      */
+@@ -74,6 +77,11 @@ class helper {
+                 continue;
+             }
+             foreach ($items as $key => $item) {
++                if (empty($modinfo->cms[$item->cmid])) {
++                    $DB->delete_records('block_recentlyaccesseditems', ['id' => $item->id]);
++                    continue;
++                }
++
+                 // Exclude not visible items.
+                 if (!$modinfo->cms[$item->cmid]->uservisible) {
+                     continue;
+diff --git a/public/blocks/recentlyaccesseditems/db/upgrade.php b/public/blocks/recentlyaccesseditems/db/upgrade.php
+index 8d3d675f189..8768e754118 100644
+--- a/public/blocks/recentlyaccesseditems/db/upgrade.php
++++ b/public/blocks/recentlyaccesseditems/db/upgrade.php
+@@ -43,6 +43,8 @@
+  * @return bool
+  */
+ function xmldb_block_recentlyaccesseditems_upgrade($oldversion, $block) {
++    global $DB;
++
+     // Automatically generated Moodle v4.4.0 release upgrade line.
+     // Put any upgrade step following this.
+ 
+@@ -58,5 +60,18 @@ function xmldb_block_recentlyaccesseditems_upgrade($oldversion, $block) {
+     // Automatically generated Moodle v5.2.0 release upgrade line.
+     // Put any upgrade step following this.
+ 
++    if ($oldversion < 2026050700) {
++        // Remove any recently accessed item records for course modules that no longer exist.
++        upgrade_set_timeout();
++        $stalesql = "SELECT rai.id AS staleid
++                       FROM {block_recentlyaccesseditems} rai
++                  LEFT JOIN {course_modules} cm ON cm.id = rai.cmid
++                      WHERE cm.id IS NULL";
++        $DB->delete_records_subquery('block_recentlyaccesseditems', 'id', 'staleid', $stalesql);
++
++        // Recentlyaccesseditems savepoint reached.
++        upgrade_block_savepoint(true, 2026050700, 'recentlyaccesseditems');
++    }
++
+     return true;
+ }
+diff --git a/public/blocks/recentlyaccesseditems/version.php b/public/blocks/recentlyaccesseditems/version.php
+index bd103c061b3..49f44905c3b 100644
+--- a/public/blocks/recentlyaccesseditems/version.php
++++ b/public/blocks/recentlyaccesseditems/version.php
+@@ -22,6 +22,6 @@
+  */
+ defined('MOODLE_INTERNAL') || die();
+ 
+-$plugin->version   = 2026042000;            // The current plugin version (Date: YYYYMMDDXX).
++$plugin->version   = 2026050700;            // The current plugin version (Date: YYYYMMDDXX).
+ $plugin->requires  = 2026041000;            // Requires this Moodle version.
+ $plugin->component = 'block_recentlyaccesseditems'; // Full name of the plugin (used for diagnostics).

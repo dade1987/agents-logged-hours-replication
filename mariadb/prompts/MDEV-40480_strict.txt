@@ -1,0 +1,113 @@
+You are a software engineer fixing an issue in MariaDB Server (C/C++). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot build MariaDB or run its test suite. Read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update mysql-test tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDEV-40480: LOAD DATA leaves a stale STORED generated column after a BEFORE INSERT trigger changes its base column
+
+h2. Environment
+
+* Product: MariaDB Server
+* Observed affected versions: 10.3, 10.6, and 12.2.2
+* Storage engine: InnoDB
+* Client prerequisite: enable {{LOCAL INFILE}} for the client used below (for
+  example, start the MariaDB client with {{--local-infile=1}}).
+* Clean comparison: MySQL 8.0.36 computes the expected stored value for the
+  same schedule.
+
+h2. Steps to reproduce
+
+1. In a shell on the client host, create the one-row input file.  This is only
+   local test input; no attachment is needed.
+
+{code:bash}
+printf '2\t12\tnew\n' > /tmp/mdev_load_generated.tsv
+{code}
+
+2. Connect with a MariaDB client that permits {{LOCAL INFILE}} and run this
+   complete SQL block:
+
+{code:sql}
+DROP DATABASE IF EXISTS mdev_load_generated;
+CREATE DATABASE mdev_load_generated;
+USE mdev_load_generated;
+
+CREATE TABLE t(
+  id   INT PRIMARY KEY,
+  v    INT NOT NULL,
+  g    INT GENERATED ALWAYS AS (v * 2) STORED,
+  note VARCHAR(20)
+) ENGINE=InnoDB;
+
+DELIMITER //
+CREATE TRIGGER t_bi BEFORE INSERT ON t FOR EACH ROW
+BEGIN
+  SET NEW.v = 20;
+END//
+DELIMITER ;
+
+LOAD DATA LOCAL INFILE '/tmp/mdev_load_generated.tsv'
+INTO TABLE t
+FIELDS TERMINATED BY '\t'
+LINES TERMINATED BY '\n'
+(id, v, note);
+
+SELECT VERSION() AS version, id, v, g, v * 2 AS expected_g, g = v * 2 AS invariant_holds
+FROM t;
+{code}
+
+h2. Expected result
+
+The trigger makes the final {{v}} value 20.  A stored column defined as
+{{v * 2}} must consequently be 40:
+
+{code}
+id  v   g   expected_g  invariant_holds
+2   20  40  40          1
+{code}
+
+h2. Actual result on MariaDB 10.3, 10.6, and 12.2.2
+
+{code}
+id  v   g   expected_g  invariant_holds
+2   20  24  40          0
+{code}
+
+The stored value 24 is {{12 * 2}}, i.e. it reflects the input value before
+the trigger changed {{NEW.v}}.  The row was inserted successfully and the
+trigger's base-column change is visible, so this is not a failure to invoke the
+trigger.
+
+h2. Relevant controls
+
+* Replacing {{LOAD DATA}} with
+  {{INSERT INTO t(id, v, note) VALUES(2, 12, 'new')}} yields
+  {{v=20, g=40}} on the same MariaDB schema.
+* {{LOAD DATA ... SET v=20}} yields {{v=20, g=40}}.
+* Removing the trigger yields {{v=12, g=24}}, which satisfies the generated
+  expression.
+* The {{IGNORE}} modifier is not required for the symptom.
+* The same {{LOAD DATA}} schedule on MySQL 8.0.36 yields {{v=20, g=40}}.
+
+h2. Repetition and scope
+
+The minimal schedule reproduced three times each on MariaDB 10.3, 10.6, and
+12.2.2, with no setup errors.  The effect is specific to the combination of a
+bulk-import path, a {{BEFORE INSERT}} mutation of a base column, and a stored
+generated column.
+
+h2. Nearby issues checked
+
+I found related {{LOAD DATA}}/generated-column reports, but none describes a
+successful load in which the trigger runs, visibly rewrites a base column, and
+the persisted *stored* generated value remains pre-trigger:
+
+* MDEV-7968 concerns a virtual generated column becoming NULL.
+* MDEV-8818 concerns trigger invocation by {{LOAD DATA}}; here the trigger is
+  demonstrably invoked.
+* MDEV-24665 and MDEV-27224 concern failure/crash paths with other feature
+  combinations.

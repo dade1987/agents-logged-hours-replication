@@ -1,0 +1,78 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot run Moodle's test suite. You may run `php -l <file>` and read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-89100: Random failure on "test_set_scheduled_task_nextruntime"
+
+Based on what I’m seeing, my best guess is that [https://moodle.atlassian.net/browse/MDL-84729|https://moodle.atlassian.net/browse/MDL-84729|smart-link] significantly improved the clock timing issues, but the {{manager}} class still uses the {{scheduled_task}} class method: {{get_next_scheduled_time()}}, which uses {{time()}} by default. The proposed change corrects that, which I am hopeful will resolve this random failure.
+
+I have seen these very random failures since at least {{2026-06-25}} on main branch so far.
+
+h2. Console Output
+
+h3. mariadb
+
+{code:java}1) core\task\manager_test::test_set_scheduled_task_nextruntime
+core\exception\coding_exception: Coding error detected, it must be fixed by a programmer:     A lock was created but not released at: * line 122 of /public/lib/classes/lock/mysql_lock_factory.php: call to core\lock\lock->__construct()
+* line 1061 of /public/lib/classes/task/manager.php: call to core\lock\mysql_lock_factory->get_lock()
+* line 666 of /public/lib/tests/task/manager_test.php: call to core\task\manager::get_next_scheduled_task()
+* line 1667 of /vendor/phpunit/phpunit/src/Framework/TestCase.php: call to core\task\manager_test->test_set_scheduled_task_nextruntime()
+* line 519 of /vendor/phpunit/phpunit/src/Framework/TestCase.php: call to PHPUnit\Framework\TestCase->runTest()
+* line 87 of /vendor/phpunit/phpunit/src/Framework/TestRunner/TestRunner.php: call to PHPUnit\Framework\TestCase->runBare()
+* line 365 of /vendor/phpunit/phpunit/src/Framework/TestCase.php: call to PHPUnit\Framework\TestRunner->run()
+* line 369 of /vendor/phpunit/phpunit/src/Framework/TestSuite.php: call to PHPUnit\Framework\TestCase->run()
+* line 369 of /vendor/phpunit/phpunit/src/Framework/TestSuite.php: call to PHPUnit\Framework\TestSuite->run()
+* line 369 of /vendor/phpunit/phpunit/src/Framework/TestSuite.php: call to PHPUnit\Framework\TestSuite->run()
+* line 64 of /vendor/phpunit/phpunit/src/TextUI/TestRunner.php: call to PHPUnit\Framework\TestSuite->run()
+* line 211 of /vendor/phpunit/phpunit/src/TextUI/Application.php: call to PHPUnit\TextUI\TestRunner->run()
+* line 104 of /vendor/phpunit/phpunit/phpunit: call to PHPUnit\TextUI\Application->run()
+* line 122 of /vendor/bin/phpunit: call to include()
+
+    Code should look like:
+
+        $factory = \core\lock\lock_config::get_lock_factory('type');
+        $lock = $factory->get_lock(031da60bb77bb3d1551f917b5330bcc90c0b7960);
+        $lock->release();  // Locks must ALWAYS be released like this.
+
+/home/runner/work/moodle/moodle/public/lib/classes/lock/lock.php:111
+/home/runner/work/moodle/moodle/public/lib/classes/lock/lock.php:128
+
+Caused by
+Failed asserting that core\task\scheduled_test_task is null{code}
+
+h3. postgres
+
+{code:java}1) core\task\scheduled_task_test::test_get_next_scheduled_task
+core\exception\coding_exception: Coding error detected, it must be fixed by a programmer:     A lock was created but not released at: * line 179 of /public/lib/classes/lock/postgres_lock_factory.php: call to core\lock\lock->__construct()
+* line 1061 of /public/lib/classes/task/manager.php: call to core\lock\postgres_lock_factory->get_lock()
+* line 631 of /public/lib/tests/task/scheduled_task_test.php: call to core\task\manager::get_next_scheduled_task()
+* line 1667 of /vendor/phpunit/phpunit/src/Framework/TestCase.php: call to core\task\scheduled_task_test->test_get_next_scheduled_task()
+* line 519 of /vendor/phpunit/phpunit/src/Framework/TestCase.php: call to PHPUnit\Framework\TestCase->runTest()
+* line 87 of /vendor/phpunit/phpunit/src/Framework/TestRunner/TestRunner.php: call to PHPUnit\Framework\TestCase->runBare()
+* line 365 of /vendor/phpunit/phpunit/src/Framework/TestCase.php: call to PHPUnit\Framework\TestRunner->run()
+* line 369 of /vendor/phpunit/phpunit/src/Framework/TestSuite.php: call to PHPUnit\Framework\TestCase->run()
+* line 369 of /vendor/phpunit/phpunit/src/Framework/TestSuite.php: call to PHPUnit\Framework\TestSuite->run()
+* line 369 of /vendor/phpunit/phpunit/src/Framework/TestSuite.php: call to PHPUnit\Framework\TestSuite->run()
+* line 64 of /vendor/phpunit/phpunit/src/TextUI/TestRunner.php: call to PHPUnit\Framework\TestSuite->run()
+* line 211 of /vendor/phpunit/phpunit/src/TextUI/Application.php: call to PHPUnit\TextUI\TestRunner->run()
+* line 104 of /vendor/phpunit/phpunit/phpunit: call to PHPUnit\TextUI\Application->run()
+* line 122 of /vendor/bin/phpunit: call to include()
+
+    Code should look like:
+
+        $factory = \core\lock\lock_config::get_lock_factory('type');
+        $lock = $factory->get_lock(cron_\core\task\scheduled_test_task);
+        $lock->release();  // Locks must ALWAYS be released like this.
+
+/home/runner/work/moodle/moodle/public/lib/classes/lock/lock.php:111
+/home/runner/work/moodle/moodle/public/lib/classes/lock/lock.php:128
+
+Caused by
+Failed asserting that an instance of class core\task\scheduled_test_task is an instance of class \core\task\scheduled_test2_task.
+
+/home/runner/work/moodle/moodle/public/lib/tests/task/scheduled_task_test.php:632{code}

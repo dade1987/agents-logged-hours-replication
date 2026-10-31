@@ -1,0 +1,109 @@
+diff --git a/public/lib/editor/tiny/plugins/recordrtc/amd/build/base_recorder.min.js b/public/lib/editor/tiny/plugins/recordrtc/amd/build/base_recorder.min.js
+index 3299229ed830e8e723c567a19f7987615f1c8890..26b52c0501c53a0942045312c932d93c9d70614b 100644
+GIT binary patch
+delta 148
+zcmZ2gzNTWsf4z*1#A4sXiqL|b{KS;t%&Jrk&FbX*yy6mt+{6kH-`1}*Hz~D9qa-7<
+zST8-b1WmD~bx~?bX;GdcM44V@v0tK}22`)6ni`a4XR!I7-Xvy8uql{Us;O<BU?jx}
+E0Q$!_xBvhE
+
+delta 17
+ZcmZ2ev8sH-f4$8a`V*Nq3mHps0sv1J2OIzZ
+
+diff --git a/public/lib/editor/tiny/plugins/recordrtc/amd/src/base_recorder.js b/public/lib/editor/tiny/plugins/recordrtc/amd/src/base_recorder.js
+index c9ce7d6daf1..0fc6b7c67c9 100644
+--- a/public/lib/editor/tiny/plugins/recordrtc/amd/src/base_recorder.js
++++ b/public/lib/editor/tiny/plugins/recordrtc/amd/src/base_recorder.js
+@@ -780,6 +780,19 @@ export default class {
+         return this.config.maxrecsize;
+     }
+ 
++    /**
++     * Whether the recording size is limited.
++     *
++     * A value of -1 (USER_CAN_IGNORE_FILE_SIZE_LIMITS) means that the current user has the
++     * moodle/course:ignorefilesizelimits capability and no size limit should be applied.
++     *
++     * @returns {boolean}
++     */
++    hasMaxUploadSize() {
++        const maxSize = Number(this.getMaxUploadSize());
++        return !Number.isNaN(maxSize) && maxSize > 0;
++    }
++
+     /**
+      * Stop the recording.
+      * Please note that this should only stop the recording.
+@@ -875,7 +888,8 @@ export default class {
+             const newSize = this.data.blobSize + event.data.size;
+             // Recording stops when either the maximum upload size is reached, or the time limit expires.
+             // The time limit is checked in the `updateButtonTime` function.
+-            if (newSize >= this.getMaxUploadSize()) {
++            // Users with the moodle/course:ignorefilesizelimits capability have no maximum upload size.
++            if (this.hasMaxUploadSize() && newSize >= this.getMaxUploadSize()) {
+                 this.stopRecorder();
+                 this.displayFileLimitHitMessage();
+             } else {
+diff --git a/public/lib/editor/tiny/plugins/recordrtc/classes/plugininfo.php b/public/lib/editor/tiny/plugins/recordrtc/classes/plugininfo.php
+index 12c05c16a8d..f055bae4888 100644
+--- a/public/lib/editor/tiny/plugins/recordrtc/classes/plugininfo.php
++++ b/public/lib/editor/tiny/plugins/recordrtc/classes/plugininfo.php
+@@ -115,10 +115,11 @@ class plugininfo extends plugin implements
+             }
+         }
+ 
+-        $maxrecsize = get_max_upload_file_size();
+-        if (!empty($options['maxbytes'])) {
+-            $maxrecsize = min($maxrecsize, $options['maxbytes']);
+-        }
++        // Calculate the maximum recording size, taking into account the user's capabilities.
++        // Users with the moodle/course:ignorefilesizelimits capability get USER_CAN_IGNORE_FILE_SIZE_LIMITS (-1),
++        // which means that no limit should be applied to the recording size.
++        $modulebytes = !empty($options['maxbytes']) ? (int) $options['maxbytes'] : 0;
++        $maxrecsize = get_user_max_upload_file_size($context, 0, 0, $modulebytes);
+         $params = [
+             'contextid' => $context->id,
+             'sesskey' => $sesskey,
+diff --git a/public/lib/editor/tiny/plugins/recordrtc/tests/plugininfo_test.php b/public/lib/editor/tiny/plugins/recordrtc/tests/plugininfo_test.php
+index 51b66c03fe8..8ace82a134d 100644
+--- a/public/lib/editor/tiny/plugins/recordrtc/tests/plugininfo_test.php
++++ b/public/lib/editor/tiny/plugins/recordrtc/tests/plugininfo_test.php
+@@ -64,6 +64,39 @@ final class plugininfo_test extends advanced_testcase {
+         $this->assertEquals($expectedconfiguration, plugininfo::get_plugin_configuration_for_external($context));
+     }
+ 
++    /**
++     * Test that users with moodle/course:ignorefilesizelimits are not limited in recording size.
++     *
++     * @covers \tiny_recordrtc\plugininfo::get_plugin_configuration_for_context
++     */
++    public function test_maxrecsize_ignorefilesizelimits(): void {
++        global $DB;
++
++        $generator = $this->getDataGenerator();
++        $context = \context_system::instance();
++        $user = $generator->create_user();
++        $this->setUser($user);
++
++        // Without the capability, the limit is the minimum of the upload limit and the module limit.
++        $config = plugininfo::get_plugin_configuration_for_context($context, ['maxbytes' => 1024], []);
++        $this->assertEquals(min(get_max_upload_file_size(), 1024), $config['data']['params']['maxrecsize']);
++        $config = plugininfo::get_plugin_configuration_for_context($context, [], []);
++        $this->assertEquals(get_max_upload_file_size(), $config['data']['params']['maxrecsize']);
++        $external = plugininfo::get_plugin_configuration_for_external($context);
++        $this->assertSame((string) get_max_upload_file_size(), $external['maxrecsize']);
++
++        // With the capability, no limit should be applied.
++        $roleid = $generator->create_role();
++        assign_capability('moodle/course:ignorefilesizelimits', CAP_ALLOW, $roleid, $context->id);
++        role_assign($roleid, $user->id, $context->id);
++        accesslib_clear_all_caches_for_unit_testing();
++
++        $config = plugininfo::get_plugin_configuration_for_context($context, ['maxbytes' => 1024], []);
++        $this->assertEquals(USER_CAN_IGNORE_FILE_SIZE_LIMITS, $config['data']['params']['maxrecsize']);
++        $external = plugininfo::get_plugin_configuration_for_external($context);
++        $this->assertSame((string) USER_CAN_IGNORE_FILE_SIZE_LIMITS, $external['maxrecsize']);
++    }
++
+     /**
+      * Data provider for test_for_external.
+      *

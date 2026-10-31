@@ -1,0 +1,24 @@
+diff --git a/sql/sql_acl.cc b/sql/sql_acl.cc
+index de8a27c9..883acc30 100644
+--- a/sql/sql_acl.cc
++++ b/sql/sql_acl.cc
+@@ -12818,6 +12818,8 @@ bool Sql_cmd_grant_table::execute(THD *thd)
+ }
+ 
+ 
++static bool check_password_lifetime(THD *thd, const ACL_USER &acl_user);
++
+ int acl_setauthorization(THD *thd, const LEX_USER *user)
+ {
+   if (!initialized)
+@@ -12887,6 +12889,10 @@ int acl_setauthorization(THD *thd, const LEX_USER *user)
+     *sctx= save_security_ctx;
+     return 1;
+   }
++  /* SET AUTHORIZATION must not un-expire a password */
++  sctx->password_expired= save_security_ctx.password_expired ||
++                          acl_user->password_expired ||
++                          check_password_lifetime(thd, *acl_user);
+ 
+   mysql_audit_notify_connection_change_user(thd, &save_security_ctx);
+   save_security_ctx.destroy();

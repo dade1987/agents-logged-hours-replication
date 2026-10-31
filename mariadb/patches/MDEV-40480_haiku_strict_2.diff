@@ -1,0 +1,39 @@
+diff --git a/sql/sql_base.cc b/sql/sql_base.cc
+index 544df995..0b9538cc 100644
+--- a/sql/sql_base.cc
++++ b/sql/sql_base.cc
+@@ -9372,16 +9372,28 @@ fill_record_n_invoke_before_triggers(THD *thd, TABLE *table,
+       Re-calculate virtual fields to cater for cases when base columns are
+       updated by the triggers.
+     */
+-    if (table->vfield && fields.elements)
++    if (table->vfield)
+     {
+-      Item *fld= (Item_field*) fields.head();
+-      Item_field *item_field= fld->field_for_view_update();
+-      if (item_field)
++      /*
++        An empty field list happens e.g. for LOAD DATA without a SET clause:
++        the row values are read directly into the table fields, so the
++        base columns of generated fields may have been changed by the
++        trigger and the generated values must be recalculated.
++      */
++      bool recalc= !fields.elements;
++      if (!recalc)
+       {
+-        DBUG_ASSERT(table == item_field->field->table);
++        Item *fld= (Item_field*) fields.head();
++        Item_field *item_field= fld->field_for_view_update();
++        if (item_field)
++        {
++          DBUG_ASSERT(table == item_field->field->table);
++          recalc= true;
++        }
++      }
++      if (recalc)
+         result|= table->update_virtual_fields(table->file,
+                                               VCOL_UPDATE_FOR_WRITE);
+-      }
+     }
+   }
+   return result;

@@ -1,0 +1,32 @@
+diff --git a/plugin/server_audit/server_audit.c b/plugin/server_audit/server_audit.c
+index 5d37186a..550b27d8 100644
+--- a/plugin/server_audit/server_audit.c
++++ b/plugin/server_audit/server_audit.c
+@@ -839,6 +839,8 @@ static struct connection_info *get_loc_info(MYSQL_THD thd)
+   return (struct connection_info *) THDVAR(thd, loc_info);
+   */
+   struct connection_info *ci= (struct connection_info *) THDVAR(thd, loc_info);
++  if (!ci)
++    return NULL;
+   if ((size_t) ci->user_length > sizeof(ci->user))
+   {
+     ci->user_length= 0;
+@@ -2073,6 +2075,9 @@ void auditing(MYSQL_THD thd, unsigned int event_class, const void *ev)
+     cn= get_loc_info(thd);
+   }
+ 
++  if (!cn)
++    return; /* thd-local storage not yet allocated for this plugin */
++
+   update_connection_info(thd, cn, event_class, ev, &after_action);
+ 
+   if (!logging)
+@@ -2631,6 +2636,8 @@ static void log_current_query(MYSQL_THD thd)
+   if (!thd)
+     return;
+   cn= get_loc_info(thd);
++  if (!cn)
++    return;
+   if (!ci_needs_setup(cn) && cn->query_length)
+   {
+     cn->log_always= 1;

@@ -1,0 +1,153 @@
+diff --git a/public/lib/classes/task/manager.php b/public/lib/classes/task/manager.php
+index 1bd67857f72..92ace6587e7 100644
+--- a/public/lib/classes/task/manager.php
++++ b/public/lib/classes/task/manager.php
+@@ -1356,7 +1356,9 @@ class manager {
+         $classname = self::get_canonical_class_name($task);
+ 
+         $record = $DB->get_record('task_scheduled', ['classname' => $classname]);
+-        $record->nextruntime = $clock->time() + $delay;
++        if (!self::is_run_asap_requested_during_execution($task, $record)) {
++            $record->nextruntime = $clock->time() + $delay;
++        }
+         $record->faildelay = $delay;
+         $record->timestarted = null;
+         $record->hostname = null;
+@@ -1388,6 +1390,28 @@ class manager {
+         $DB->update_record('task_scheduled', $record);
+     }
+ 
++    /**
++     * Checks whether the next run time of a scheduled task was brought forward while the task was executing.
++     *
++     * This happens when the task is requested to "Run ASAP" while an existing execution is still in progress. In that
++     * case the requested next run time must be preserved instead of being replaced when the execution completes.
++     *
++     * @param scheduled_task $task The task being executed
++     * @param \stdClass $record The current task_scheduled record of the task
++     * @return bool
++     */
++    protected static function is_run_asap_requested_during_execution(scheduled_task $task, \stdClass $record): bool {
++        $clock = \core\di::get(\core\clock::class);
++
++        $originalnextruntime = $task->get_next_run_time();
++        if (empty($originalnextruntime) || !isset($record->nextruntime)) {
++            return false;
++        }
++
++        $nextruntime = (int) $record->nextruntime;
++        return $nextruntime !== (int) $originalnextruntime && $nextruntime <= $clock->time();
++    }
++
+     /**
+      * Sets the next run time for a scheduled task.
+      *
+@@ -1436,6 +1460,10 @@ class manager {
+         $record->pid = $pid;
+         $DB->update_record('task_scheduled', $record);
+ 
++        // Remember the next run time this execution was started for, so that any change made to it while the task
++        // is running (for example a "Run ASAP" request) can be detected and preserved when the task finishes.
++        $task->set_next_run_time($record->nextruntime);
++
+         self::task_starting($task);
+     }
+ 
+@@ -1460,7 +1488,9 @@ class manager {
+         if ($record) {
+             $record->lastruntime = $clock->time();
+             $record->faildelay = 0;
+-            $record->nextruntime = $task->get_next_scheduled_time();
++            if (!self::is_run_asap_requested_during_execution($task, $record)) {
++                $record->nextruntime = $task->get_next_scheduled_time();
++            }
+             $record->timestarted = null;
+             $record->hostname = null;
+             $record->pid = null;
+diff --git a/public/lib/tests/task/manager_test.php b/public/lib/tests/task/manager_test.php
+index 7e28d285776..afc3656dd5e 100644
+--- a/public/lib/tests/task/manager_test.php
++++ b/public/lib/tests/task/manager_test.php
+@@ -702,4 +702,82 @@ final class manager_test extends \advanced_testcase {
+         $this->assertNotNull($next);
+         manager::scheduled_task_complete($next);
+     }
++
++    /**
++     * Test that a "Run ASAP" request made while a scheduled task is running is not discarded when it completes.
++     */
++    public function test_run_asap_while_running_is_preserved_on_complete(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $this->preventResetByRollback();
++        $clock = $this->mock_clock_with_frozen(
++            (new \DateTimeImmutable('2026-01-01 12:00:00', \core_date::get_server_timezone_object()))->getTimestamp(),
++        );
++
++        $DB->set_field('task_scheduled', 'disabled', 1);
++
++        $task = new scheduled_test_task();
++        $task->set_month('*');
++        $task->set_hour('0');
++        $task->set_next_run_time($clock->time() - 10);
++        $DB->insert_record('task_scheduled', manager::record_from_scheduled_task($task));
++
++        $running = manager::get_next_scheduled_task($clock->time());
++        $this->assertNotNull($running);
++        manager::scheduled_task_starting($running);
++
++        // Request to run ASAP while the task is running.
++        $asaptime = $clock->time() - HOURSECS;
++        manager::set_scheduled_task_nextruntime($running, $asaptime);
++
++        manager::scheduled_task_complete($running);
++
++        $classname = manager::get_canonical_class_name($task);
++        $this->assertEquals($asaptime, $DB->get_field('task_scheduled', 'nextruntime', ['classname' => $classname]));
++        $next = manager::get_next_scheduled_task($clock->time());
++        $this->assertNotNull($next);
++
++        // Without an ASAP request the next run time is recalculated as usual.
++        manager::scheduled_task_starting($next);
++        manager::scheduled_task_complete($next);
++        $this->assertGreaterThan(
++            $clock->time(),
++            $DB->get_field('task_scheduled', 'nextruntime', ['classname' => $classname])
++        );
++        $this->assertNull(manager::get_next_scheduled_task($clock->time()));
++    }
++
++    /**
++     * Test that a "Run ASAP" request made while a scheduled task is running is not discarded when it fails.
++     */
++    public function test_run_asap_while_running_is_preserved_on_failure(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $this->preventResetByRollback();
++        $clock = $this->mock_clock_with_frozen(
++            (new \DateTimeImmutable('2026-01-01 12:00:00', \core_date::get_server_timezone_object()))->getTimestamp(),
++        );
++
++        $DB->set_field('task_scheduled', 'disabled', 1);
++
++        $task = new scheduled_test_task();
++        $task->set_month('*');
++        $task->set_hour('0');
++        $task->set_next_run_time($clock->time() - 10);
++        $DB->insert_record('task_scheduled', manager::record_from_scheduled_task($task));
++
++        $running = manager::get_next_scheduled_task($clock->time());
++        $this->assertNotNull($running);
++        manager::scheduled_task_starting($running);
++
++        $asaptime = $clock->time() - HOURSECS;
++        manager::set_scheduled_task_nextruntime($running, $asaptime);
++
++        manager::scheduled_task_failed($running);
++
++        $classname = manager::get_canonical_class_name($task);
++        $this->assertEquals($asaptime, $DB->get_field('task_scheduled', 'nextruntime', ['classname' => $classname]));
++    }
+ }

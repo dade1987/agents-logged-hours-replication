@@ -1,0 +1,293 @@
+diff --git a/.upgradenotes/MDL-88683-2026102500000000.yml b/.upgradenotes/MDL-88683-2026102500000000.yml
+new file mode 100644
+index 00000000000..c208ca4bbce
+--- /dev/null
++++ b/.upgradenotes/MDL-88683-2026102500000000.yml
+@@ -0,0 +1,8 @@
++issueNumber: MDL-88683
++notes:
++  core_blog:
++    - message: >-
++        The user profile blog link for the current user has been renamed to "View my blog entries"
++        and a new "View site blog entries" link to /blog/index.php has been added to the
++        Miscellaneous section.
++      type: changed
+diff --git a/MDL-88683-documentation.md b/MDL-88683-documentation.md
+new file mode 100644
+index 00000000000..5e5551af03a
+--- /dev/null
++++ b/MDL-88683-documentation.md
+@@ -0,0 +1,8 @@
++# Blog links in the user profile (MDL-88683)
++
++When blogs are enabled, the Miscellaneous section of the user profile now shows two blog links, in the same situations where the previous blog link was shown:
++
++* **View my blog entries** (previously "Blog entries") opens the viewed user's own blog entries.
++* **View site blog entries** (new) opens the site-wide blog listing (/blog/index.php).
++
++When blogs are disabled, neither link is shown. Blog pages, permissions and access rules are unchanged. This replaces the Classic theme Navigation block link to site blogs, which is no longer available as Classic is removed in Moodle 5.3.
+diff --git a/public/blocks/blog_recent/tests/behat/block_blog_recent_frontpage.feature b/public/blocks/blog_recent/tests/behat/block_blog_recent_frontpage.feature
+index c833afe41a1..6285f40e0db 100644
+--- a/public/blocks/blog_recent/tests/behat/block_blog_recent_frontpage.feature
++++ b/public/blocks/blog_recent/tests/behat/block_blog_recent_frontpage.feature
+@@ -14,17 +14,10 @@ Feature: Feature: Students can use the recent blog entries block to view recent
+     And the following config values are set as admin:
+       | enablemyhome    | 1 | |
+       | unaddableblocks | | theme_boost|
+-    And I log in as "admin"
+-    And I am on site homepage
+-    And I turn editing mode on
+-    # TODO MDL-57120 site "Blogs" link not accessible without navigation block.
+-    And I add the "Navigation" block if not present
+-    And I log out
+ 
+   Scenario: Students use the recent blog entries block to view blogs
+-    Given I log in as "student1"
+-    And I am on site homepage
+-    And I click on "Site blogs" "link" in the "Navigation" "block"
++    Given I am on the "student1" "user > profile" page logged in as "student1"
++    And I follow "View site blog entries"
+     And I follow "Add a new entry"
+     When I set the following fields to these values:
+       | Entry title | S1 First Blog |
+@@ -38,9 +31,8 @@ Feature: Feature: Students can use the recent blog entries block to view recent
+     And I should see "This is my awesome blog!"
+ 
+   Scenario: Students only see a few entries in the recent blog entries block
+-    Given I log in as "student1"
+-    And I am on site homepage
+-    And I click on "Site blogs" "link" in the "Navigation" "block"
++    Given I am on the "student1" "user > profile" page logged in as "student1"
++    And I follow "View site blog entries"
+     And I follow "Add a new entry"
+     # Blog 1 of 5
+     And I set the following fields to these values:
+diff --git a/public/blocks/blog_tags/tests/behat/blogtag.feature b/public/blocks/blog_tags/tests/behat/blogtag.feature
+index 21a856c0e25..986b49fd3c0 100644
+--- a/public/blocks/blog_tags/tests/behat/blogtag.feature
++++ b/public/blocks/blog_tags/tests/behat/blogtag.feature
+@@ -23,21 +23,17 @@ Feature: Adding blog tag block
+     When I log in as "teacher1"
+     And I am on "Course 1" course homepage with editing mode on
+     And I add the "Blog tags" block
+-    And the following config values are set as admin:
+-      | unaddableblocks | | theme_boost|
+-    # TODO MDL-57120 site "Blogs" link not accessible without navigation block.
+-    And I add the "Navigation" block if not present
+-    And I am on the "Course 1" "enrolled users" page
+-    And I click on "Course blogs" "link" in the "Navigation" "block"
+-    And I follow "Blog about this Course"
++    And I am on the "teacher1" "user > profile" page
++    And I follow "View site blog entries"
++    And I follow "Add a new entry"
+     And I set the following fields to these values:
+       | Entry title                                 | Blog post from teacher    |
+       | Blog entry body                             | Teacher blog post content |
+       | Tags                                        | Cats, dogs                 |
+     And I press "Save changes"
+-    And I am on the "Course 1" "enrolled users" page logged in as "student1"
+-    And I click on "Course blogs" "link" in the "Navigation" "block"
+-    And I follow "Blog about this Course"
++    And I am on the "student1" "user > profile" page logged in as "student1"
++    And I follow "View site blog entries"
++    And I follow "Add a new entry"
+     And I set the following fields to these values:
+       | Entry title                                 | Blog post from student    |
+       | Blog entry body                             | Student blog post content |
+diff --git a/public/blog/lib.php b/public/blog/lib.php
+index aa3e7802a73..cc9c9b979d6 100644
+--- a/public/blog/lib.php
++++ b/public/blog/lib.php
+@@ -1051,12 +1051,21 @@ function core_blog_myprofile_navigation(core_user\output\myprofile\tree $tree, $
+         $url->param('courseid', $course->id);
+     }
+     if ($iscurrentuser) {
+-        $title = get_string('blogentries', 'core_blog');
++        $title = get_string('viewmyblogentries', 'core_blog');
+     } else {
+         $title = get_string('myprofileuserblogs', 'core_blog');
+     }
+     $blognode = new core_user\output\myprofile\node('miscellaneous', 'blogs', $title, null, $url);
+     $tree->add_node($blognode);
++
++    $siteblognode = new core_user\output\myprofile\node(
++        'miscellaneous',
++        'siteblogs',
++        get_string('viewsiteblogentries', 'core_blog'),
++        null,
++        new moodle_url('/blog/index.php'),
++    );
++    $tree->add_node($siteblognode);
+     return true;
+ }
+ 
+diff --git a/public/blog/tests/behat/blog_entry.feature b/public/blog/tests/behat/blog_entry.feature
+index f3fa1938c79..15f5a343979 100644
+--- a/public/blog/tests/behat/blog_entry.feature
++++ b/public/blog/tests/behat/blog_entry.feature
+@@ -9,7 +9,7 @@ Feature: Blog entries can be added, modified and deleted
+       | username | firstname | lastname | email              |
+       | testuser | Test      | User     | moodle@example.com |
+     And I am on the "testuser" "user > profile" page logged in as testuser
+-    And I follow "Blog entries"
++    And I follow "View my blog entries"
+     And I follow "Add a new entry"
+     And I should see "Blogs: Add a new entry"
+     And I set the following fields to these values:
+diff --git a/public/blog/tests/behat/blog_visibility.feature b/public/blog/tests/behat/blog_visibility.feature
+index 20514d724c1..91a97acd671 100644
+--- a/public/blog/tests/behat/blog_visibility.feature
++++ b/public/blog/tests/behat/blog_visibility.feature
+@@ -27,7 +27,7 @@ Feature: Blogs can be set to be only visible by the author.
+     Given  I am on the "C1" "enrolled users" page logged in as testuser
+     When I follow "Test2 User2"
+     And I should see "Miscellaneous"
+-    Then I should not see "Blog entries"
++    Then I should not see "View all blog entries"
+     And I follow "Profile" in the user menu
+-    And I follow "Blog entries"
++    And I follow "View my blog entries"
+     And I should see "User blog: Test User"
+diff --git a/public/blog/tests/behat/comment.feature b/public/blog/tests/behat/comment.feature
+index 0902d403e9c..22206f21902 100644
+--- a/public/blog/tests/behat/comment.feature
++++ b/public/blog/tests/behat/comment.feature
+@@ -14,23 +14,10 @@ Feature: Comment on a blog entry
+     And the following "core_blog > entries" exist:
+       | subject               | body                     | user     |
+       | Blog post from user 1 | User 1 blog post content | testuser |
+-    And I log in as "admin"
+-    And I am on site homepage
+-    And I turn editing mode on
+-    And the following config values are set as admin:
+-      | unaddableblocks | | theme_boost|
+-    # TODO MDL-57120 "Site blogs" link not accessible without navigation block.
+-    And I add the "Navigation" block if not present
+-    And I configure the "Navigation" block
+-    And I set the following fields to these values:
+-      | Page contexts | Display throughout the entire site |
+-    And I press "Save changes"
+-    And I log out
+ 
+   Scenario: Commenting on my own blog entry
+-    Given I log in as "testuser"
+-    And I click on "Site pages" "list_item" in the "Navigation" "block"
+-    And I click on "Site blogs" "link" in the "Navigation" "block"
++    Given I am on the "testuser" "user > profile" page logged in as "testuser"
++    And I follow "View site blog entries"
+     And I follow "Blog post from user 1"
+     And I should see "User 1 blog post content"
+     And I follow "Comments (0)"
+@@ -42,9 +29,8 @@ Feature: Comment on a blog entry
+     And I should see "Comments (2)" in the ".comment-link" "css_element"
+ 
+   Scenario: Deleting my own comment
+-    Given I log in as "testuser"
+-    And I click on "Site pages" "list_item" in the "Navigation" "block"
+-    And I click on "Site blogs" "link" in the "Navigation" "block"
++    Given I am on the "testuser" "user > profile" page logged in as "testuser"
++    And I follow "View site blog entries"
+     And I follow "Blog post from user 1"
+     And I should see "User 1 blog post content"
+     And I follow "Comments (0)"
+@@ -60,11 +46,8 @@ Feature: Comment on a blog entry
+     And I should see "Comments (0)" in the ".comment-link" "css_element"
+ 
+   Scenario: Commenting on someone's blog post
+-    Given I am on site homepage
+-    And I log in as "testuser2"
+-    And I am on site homepage
+-    And I click on "Site pages" "list_item" in the "Navigation" "block"
+-    And I click on "Site blogs" "link" in the "Navigation" "block"
++    Given I am on the "testuser2" "user > profile" page logged in as "testuser2"
++    And I follow "View site blog entries"
+     And I follow "Blog post from user 1"
+     When I follow "Comments (0)"
+     And I set the field "content" to "$My own >nasty< \"string\"!"
+diff --git a/public/blog/tests/behat/delete.feature b/public/blog/tests/behat/delete.feature
+index 176cb108067..e47b1c31f2f 100644
+--- a/public/blog/tests/behat/delete.feature
++++ b/public/blog/tests/behat/delete.feature
+@@ -14,21 +14,8 @@ Feature: Delete a blog entry
+       | subject       | body                     | user     |
+       | Blog post one | User 1 blog post content | testuser |
+       | Blog post two | User 1 blog post content | testuser |
+-    And I log in as "admin"
+-    And I am on site homepage
+-    And I turn editing mode on
+-    And the following config values are set as admin:
+-      | unaddableblocks | | theme_boost|
+-    # TODO MDL-57120 "Site blogs" link not accessible without navigation block.
+-    And I add the "Navigation" block if not present
+-    And I configure the "Navigation" block
+-    And I set the following fields to these values:
+-      | Page contexts | Display throughout the entire site |
+-    And I press "Save changes"
+-    And I log out
+-    And I log in as "testuser"
+-    And I am on site homepage
+-    And I click on "Site blogs" "link" in the "Navigation" "block"
++    And I am on the "testuser" "user > profile" page logged in as "testuser"
++    And I follow "View site blog entries"
+ 
+   Scenario: Delete blog post results in post deleted
+     Given I follow "Blog post one"
+diff --git a/public/blog/tests/behat/profile_links.feature b/public/blog/tests/behat/profile_links.feature
+new file mode 100644
+index 00000000000..3c2a5bda5ec
+--- /dev/null
++++ b/public/blog/tests/behat/profile_links.feature
+@@ -0,0 +1,37 @@
++@core @core_blog
++Feature: Blog links in the user profile
++  In order to find personal and site blog entries
++  As a user
++  I need to see clear blog links in the Miscellaneous section of the profile
++
++  Background:
++    Given the following "users" exist:
++      | username | firstname | lastname | email                |
++      | testuser | Test      | User     | moodle@example.com   |
++    And the following "core_blog > entries" exist:
++      | subject       | body                | user     |
++      | Blog post one | Blog post content   | testuser |
++
++  Scenario: Both blog links are shown when blogs are enabled
++    Given I am on the "testuser" "user > profile" page logged in as "testuser"
++    Then I should see "View my blog entries"
++    And I should see "View site blog entries"
++
++  Scenario: The personal blog link opens the user's own blog entries
++    Given I am on the "testuser" "user > profile" page logged in as "testuser"
++    When I follow "View my blog entries"
++    Then I should see "User blog: Test User"
++    And I should see "Blog post one"
++
++  Scenario: The site blog link opens the site blog page
++    Given I am on the "testuser" "user > profile" page logged in as "testuser"
++    When I follow "View site blog entries"
++    Then I should see "Site blog"
++    And I should see "Blog post one"
++
++  Scenario: No blog links are shown when blogs are disabled
++    Given the following config values are set as admin:
++      | enableblogs | 0 |
++    When I am on the "testuser" "user > profile" page logged in as "testuser"
++    Then I should not see "View my blog entries"
++    And I should not see "View site blog entries"
+diff --git a/public/lang/en/blog.php b/public/lang/en/blog.php
+index 4f43579e387..d08756e7d25 100644
+--- a/public/lang/en/blog.php
++++ b/public/lang/en/blog.php
+@@ -206,9 +206,11 @@ $string['viewgroupblogs'] = 'View entries for group...';
+ $string['viewgroupentries'] = 'Group entries';
+ $string['viewmodblogs'] = 'View entries for module...';
+ $string['viewmodentries'] = 'Module entries';
++$string['viewmyblogentries'] = 'View my blog entries';
+ $string['viewmyentries'] = 'My entries';
+ $string['viewmyentriesaboutmodule'] = 'View my entries about this {$a}';
+ $string['viewmyentriesaboutcourse'] = 'View my entries about this course';
++$string['viewsiteblogentries'] = 'View site blog entries';
+ $string['viewsiteentries'] = 'View all entries';
+ $string['viewuserentries'] = 'View all entries by {$a}';
+ $string['worldblogs'] = 'The world can read entries set to be world-accessible';

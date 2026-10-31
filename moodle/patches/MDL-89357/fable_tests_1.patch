@@ -1,0 +1,102 @@
+diff --git a/public/ai/classes/aiactions/base.php b/public/ai/classes/aiactions/base.php
+index 3a764df9ac1..72bfaf91fbd 100644
+--- a/public/ai/classes/aiactions/base.php
++++ b/public/ai/classes/aiactions/base.php
+@@ -68,7 +68,7 @@ abstract class base {
+      * @return string
+      */
+     public static function get_name(): string {
+-        $stringid = 'action_' . self::get_basename();
++        $stringid = 'action_' . static::get_basename();
+         return get_string($stringid, 'core_ai');
+     }
+ 
+@@ -80,7 +80,7 @@ abstract class base {
+      * @return string
+      */
+     public static function get_description(): string {
+-        $stringid = 'action_' . self::get_basename() . '_desc';
++        $stringid = 'action_' . static::get_basename() . '_desc';
+         return get_string($stringid, 'core_ai');
+     }
+ 
+@@ -90,7 +90,7 @@ abstract class base {
+      * @return string The system instruction for the action.
+      */
+     public static function get_system_instruction(): string {
+-        $stringid = 'action_' . self::get_basename() . '_instruction';
++        $stringid = 'action_' . static::get_basename() . '_instruction';
+ 
+         // If the string doesn't exist, return an empty string.
+         if (!get_string_manager()->string_exists($stringid, 'core_ai')) {
+@@ -126,6 +126,6 @@ abstract class base {
+      * @return string The class name of the response object.
+      */
+     public static function get_response_classname(): string {
+-        return responses::class . '\\response_' . self::get_basename();
++        return responses::class . '\\response_' . static::get_basename();
+     }
+ }
+diff --git a/public/ai/tests/aiactions/base_test.php b/public/ai/tests/aiactions/base_test.php
+index f9894e3493e..640fb7b96d1 100644
+--- a/public/ai/tests/aiactions/base_test.php
++++ b/public/ai/tests/aiactions/base_test.php
+@@ -57,6 +57,58 @@ final class base_test extends \advanced_testcase {
+         );
+     }
+ 
++    /**
++     * Test that static methods overridden in a child class are used by the base class (late static binding).
++     */
++    public function test_late_static_binding(): void {
++        $this->resetAfterTest();
++
++        // Create an anonymous class that extends the base class and overrides get_basename().
++        $action = new class(1) extends \core_ai\aiactions\base {
++            /**
++             * Override the basename so that it matches an existing action.
++             *
++             * @return string
++             */
++            public static function get_basename(): string {
++                return 'generate_text';
++            }
++
++            /**
++             * Store the response.
++             *
++             * @param response_base $response
++             * @return int
++             */
++            public function store(response_base $response): int {
++                return 0;
++            }
++
++            /**
++             * Expose the protected table name.
++             *
++             * @return string
++             */
++            public function expose_tablename(): string {
++                return $this->get_tablename();
++            }
++        };
++
++        // Each base class method must use the overridden get_basename() rather than the one of the class
++        // where the method is defined.
++        $this->assertEquals(get_string('action_generate_text', 'core_ai'), $action::get_name());
++        $this->assertEquals(get_string('action_generate_text_desc', 'core_ai'), $action::get_description());
++        $this->assertEquals(
++            get_string('action_generate_text_instruction', 'core_ai'),
++            $action::get_system_instruction()
++        );
++        $this->assertEquals(
++            aiactions\responses\response_generate_text::class,
++            $action::get_response_classname()
++        );
++        $this->assertEquals('ai_action_generate_text', $action->expose_tablename());
++    }
++
+     /**
+      * Test that every action class implements a constructor.
+      */

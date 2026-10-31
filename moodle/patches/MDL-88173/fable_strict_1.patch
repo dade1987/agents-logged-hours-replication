@@ -1,0 +1,68 @@
+diff --git a/public/question/type/multichoice/renderer.php b/public/question/type/multichoice/renderer.php
+index cccaf774db8..0300ee2f3b2 100644
+--- a/public/question/type/multichoice/renderer.php
++++ b/public/question/type/multichoice/renderer.php
+@@ -143,11 +143,20 @@ abstract class qtype_multichoice_renderer_base extends qtype_with_combined_feedb
+             $classes[] = $class;
+         }
+ 
++        // Unique ids so that the group of inputs can be labelled by the question text
++        // as well as the legend, so that screen readers announce the actual question
++        // text when focus moves into the group of radio buttons / checkboxes.
++        $qtextid = $qa->get_outer_question_div_unique_id() . '-qtext';
++        $legendid = $qa->get_outer_question_div_unique_id() . '-legend';
++
+         $result = '';
+         $result .= html_writer::tag('div', $question->format_questiontext($qa),
+-                array('class' => 'qtext'));
++                ['class' => 'qtext', 'id' => $qtextid]);
+ 
+-        $result .= html_writer::start_tag('fieldset', array('class' => 'ablock no-overflow visual-scroll-x'));
++        $result .= html_writer::start_tag('fieldset', [
++            'class' => 'ablock no-overflow visual-scroll-x',
++            'aria-labelledby' => $qtextid . ' ' . $legendid,
++        ]);
+         if ($question->showstandardinstruction == 1) {
+             $legendclass = '';
+             $questionnumber = $options->add_question_identifier_to_label($this->prompt(), true, true);
+@@ -157,6 +166,7 @@ abstract class qtype_multichoice_renderer_base extends qtype_with_combined_feedb
+         }
+         $legendattrs = [
+             'class' => 'prompt h6 fw-normal ' . $legendclass,
++            'id' => $legendid,
+         ];
+         $result .= html_writer::tag('legend', $questionnumber, $legendattrs);
+ 
+diff --git a/public/question/type/multichoice/tests/walkthrough_test.php b/public/question/type/multichoice/tests/walkthrough_test.php
+index c09e39dd3e3..05db80140b4 100644
+--- a/public/question/type/multichoice/tests/walkthrough_test.php
++++ b/public/question/type/multichoice/tests/walkthrough_test.php
+@@ -304,8 +304,28 @@ final class walkthrough_test extends \qbehaviour_walkthrough_test_base {
+         // Check for 'Show standard instruction'.
+         $standardinstruction = \html_writer::tag('legend', get_string('answer'), [
+             'class' => 'prompt h6 fw-normal visually-hidden',
++            'id' => $this->get_question_attempt()->get_outer_question_div_unique_id() . '-legend',
+         ]);
+         $this->assertStringContainsString($standardinstruction, $this->currentoutput);
+     }
+ 
++    public function test_radio_group_is_labelled_by_question_text(): void {
++
++        // Create a multichoice, single question.
++        $mc = \test_question_maker::make_a_multichoice_single_question();
++
++        $this->start_attempt_at_question($mc, 'deferredfeedback', 3);
++        $this->render();
++
++        $uniqueid = $this->get_question_attempt()->get_outer_question_div_unique_id();
++        $qtextid = $uniqueid . '-qtext';
++        $legendid = $uniqueid . '-legend';
++
++        // The question text must have the id that the fieldset refers to.
++        $this->assertStringContainsString('id="' . $qtextid . '"', $this->currentoutput);
++        // The fieldset must be labelled by the question text as well as the legend.
++        $this->assertStringContainsString('aria-labelledby="' . $qtextid . ' ' . $legendid . '"', $this->currentoutput);
++        $this->assertStringContainsString('id="' . $legendid . '"', $this->currentoutput);
++    }
++
+ }

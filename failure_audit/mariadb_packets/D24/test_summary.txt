@@ -1,0 +1,124 @@
+Evaluation: the agent's diff (without its own mysql-test changes) was applied on the parent commit, the developers' mysql-test files from the fix were added, the server was built (debug) and the fix's mtr tests were run: ['main.spatial_utility_function_simplify']
+On the parent commit these tests FAIL; with the human fix they PASS.
+
+AGENT RESULT: FAIL
+main.spatial_utility_function_simplify   w1 [ fail ]
+        Test ended at 2026-10-28 09:40:05
+
+CURRENT_TEST: main.spatial_utility_function_simplify
+mysqltest: At line 514: query 'SELECT 'x' IN ('accounts','cond_instances','setup_consumers','setup_objects',
+ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((10 2,5 2,5 10,-5 10,-5 2,-10 2,-10 -2,-5 -2,-5 -10,5 -10,5 -2,10 -2,10 2))'), 3),
+'global_status') AS r' failed: <Unknown> (2013): Lost connection to server during query
+
+The result from queries just before the failure was:
+< snip >
+ERROR HY000: Incorrect arguments to st_simplify
+SELECT ST_ASTEXT(ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((0 0,0 10,10 10,10 0,0 0,0 0,0 0,0 0))'), 'a'));
+ERROR HY000: Incorrect arguments to st_simplify
+SELECT ST_ASTEXT(ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((0 0,0 10,10 10,10 0,0 0,0 0,0 0,0 0))'), a));
+ERROR 42S22: Unknown column 'a' in 'SELECT'
+# Clean up
+DROP TABLE gis_geometrycollection;
+#
+# MDEV-39914 MariaDB crash triggered by INFORMATION_SCHEMA query with
+#            ROW_NUMBER and GIS simplify
+#
+# ST_SIMPLIFY used as a constant element of an IN list is stored into
+# the array that IN builds for its comparisons.  That array element
+# arrives with no charset, so the binary geometry written into it must
+# mark the buffer as binary before appending.  Otherwise the append
+# reads a null charset and the server crashes.
+#
+SELECT 'x' IN ('accounts','cond_instances','setup_consumers','setup_objects',
+ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((10 2,5 2,5 10,-5 10,-5 2,-10 2,-10 -2,-5 -2,-5 -10,5 -10,5 -2,10 -2,10 2))'), 3),
+'global_status') AS r;
+
+More results from queries before failure can be found in /home/mtr/var/t/1/log/spatial_utility_function_simplify.log
+
+
+Server [mysqld.1 - pid: 7922, winpid: 7922, exit: 256] failed during test run
+Server log from this test:
+----------SERVER LOG START-----------
+$ /home/user/mdb_build_dbg/sql/mariadbd --defaults-group-suffix=.1 --defaults-file=/home/mtr/var/t/1/my.cnf --log-output=file --core-file --loose-debug-sync-timeout=300
+2026-10-28  9:39:44 0 [Warning] Could not increase number of max_open_files to more than 1024 (request: 32186)
+2026-10-28  9:39:44 0 [Warning] Changed limits: max_open_files: 1024  max_connections: 151 (was 151)  table_cache: 421 (was 2000)
+2026-10-28  9:39:44 0 [Note] Starting MariaDB 12.3.3-MariaDB-debug-log source revision deed18f42d59193afbc8f64ebd8fdcff4cafd9e1 server_uid NzS151uu8ZVD58aPAFsNZrW2jyI= as process 7923
+2026-10-28  9:39:44 0 [Note] Plugin 'partition' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'InnoDB' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'SEQUENCE' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'INNODB_FT_CONFIG' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'INNODB_SYS_TABLESTATS' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'INNODB_CMP_PER_INDEX' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'INNODB_FT_DELETED' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'INNODB_CMP' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'THREAD_POOL_WAITS' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'INNODB_CMP_RESET' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'THREAD_POOL_QUEUES' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'INNODB_SYS_FIELDS' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'INNODB_BUFFER_PAGE_LRU' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'FEEDBACK' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'INNODB_FT_INDEX_TABLE' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'INNODB_CMPMEM' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'THREAD_POOL_GROUPS' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'INNODB_CMP_PER_INDEX_RESET' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'INNODB_SYS_FOREIGN_COLS' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'INNODB_FT_INDEX_CACHE' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'INNODB_BUFFER_POOL_STATS' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'INNODB_FT_BEING_DELETED' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'INNODB_SYS_FOREIGN' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'INNODB_CMPMEM_RESET' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'INNODB_FT_DEFAULT_STOPWORD' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'INNODB_SYS_TABLES' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'INNODB_SYS_COLUMNS' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'INNODB_SYS_TABLESPACES' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'INNODB_SYS_INDEXES' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'INNODB_SYS_VIRTUAL' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'user_variables' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'INNODB_TABLESPACES_ENCRYPTION' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'THREAD_POOL_STATS' is disabled.
+2026-10-28  9:39:44 0 [Note] Plugin 'unix_socket' is disabled.
+2026-10-28  9:39:44 0 [Warning] /home/user/mdb_build_dbg/sql/mariadbd: unknown option '--loose-pam-debug'
+2026-10-28  9:39:44 0 [Warning] /home/user/mdb_build_dbg/sql/mariadbd: unknown option '--loose-aria'
+2026-10-28  9:39:44 0 [Note] Server socket created on IP: '127.0.0.1', port: '19000'.
+2026-10-28  9:39:44 0 [Note] mariadbd: Event Scheduler: Loaded 0 events
+2026-10-28  9:39:44 0 [Note] /home/user/mdb_build_dbg/sql/mariadbd: ready for connections.
+Version: '12.3.3-MariaDB-debug-log'  socket: '/home/mtr/var/t/tmp/1/mysqld.1.sock'  port: 19000  Source distribution
+261028  9:39:44 [ERROR] /home/user/mdb_build_dbg/sql/mariadbd got signal 11 ;
+Sorry, we probably made a mistake, and this is a bug.
+
+Your assistance in bug reporting will enable us to fix this for the next release.
+To report this bug, see https://mariadb.com/docs/general-resources/community/community/bug-tracking/reporting-bugs about how to report
+a bug on https://jira.mariadb.org/.
+
+Please include the information from the server start above, to the end of the
+information below.
+
+Server version: 12.3.3-MariaDB-debug-log source revision: deed18f42d59193afbc8f64ebd8fdcff4cafd9e1
+
+The information page at https://mariadb.com/docs/server/reference/product-development/mariadb-fault-finding/how-to-produce-a-full-stack-trace-for-mariadbdcontains instructions to obtain a better version of the backtrace below.
+Following these instructions will help MariaDB developers provide a fix quicker.
+
+Attempting backtrace. Include this in the bug report.
+(note: Retrieving this information may fail)
+
+Thread pointer: 0x7f5230000dd0
+stack_bottom = 0x7f524e7c2000 thread_stack 0x49000
+/home/user/mdb_build_dbg/sql/mariadbd(my_print_stacktrace+0x44)[0x55dcdddcfb92]
+/home/user/mdb_build_dbg/sql/mariadbd(handle_fatal_signal+0x260)[0x55dcdd3516c1]
+libc_sigaction.c:0(__restore_rt)[0x7f5255045330]
+sql/sql_string.h:116(Charset::mbminlen() const)[0x55dcdcfac12d]
+sql/sql_string.cc:549(String::append(char const*, unsigned long))[0x55dcdcfa9d33]
+/home/user/mdb_build_dbg/sql/mariadbd(_ZNK11Gis_polygon8simplifyEP6Stringd+0x329)[0x55dcdd595edb]
+sql/spatial.cc:2409(Gis_polygon::simplify(String*, double) const)[0x55dcdd42d9b7]
+sql/item_cmpfunc.cc:3901(in_string::set(unsigned int, Item*))[0x55dcdd3bdbcb]
+sql/item_cmpfunc.cc:4758(Item_func_in::fix_in_vector())[0x55dcdd3c1444]
+sql/item_cmpfunc.h:2748(Item_func_in::fix_for_scalar_comparison_using_bisection(THD*))[0x55dcdd1fbfb4]
+sql/sql_type.cc:6067(Type_handler_string_result::Item_func_in_fix_comparator_compatible_types(THD*, Item_func_in*) const)[0x55dcdd1e4099]
+sql/item_cmpfunc.cc:4723(Item_func_in::fix_length_and_dec(THD*))[0x55dcdd3c11db]
+sql/item_func.cc:412(Item_func::fix_fields(THD*, Item**))[0x55dcdd3f862b]
+sql/item_cmpfunc.cc:4553(Item_func_in::fix_fields(THD*, Item**))[0x55dcdd3c0859]
+sql/item.h:1148(Item::fix_fields_if_needed(THD*, Item**))[0x55dcdcd03374]
+sql/item.h:1157(Item::fix_fields_if_needed_for_scalar(THD*, Item**))[0x55dcdcd033ad]
+sql/sql_base.cc:8290(setup_fields(THD*, Bounds_checked_array<Item*>, List<Item>&, enum_column_usage, List<Item>*, List<Item>*, bool, THD_WHERE))[0x55dcdcda1960]
+sql/sql_select.cc:1598(JOIN::prepare(TABLE_LIST*, Item*, unsigned int, st_order*, bool, st_order*, Item*, st_order*, st_select_lex*, st_select_lex_unit*))[0x55dcdcee511f]
+sql/sql_select.cc:5410(mysql_select(THD*, TABLE_LIST*, List<Item>&, Item*, unsigned int, st_order*, st_order*, Item*, st_order*, unsigned long long, select_result*, st_select_lex_unit*, st_select_lex*))[0x55dcdcef349e]

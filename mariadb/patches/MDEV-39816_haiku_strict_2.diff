@@ -1,0 +1,36 @@
+diff --git a/storage/myisam/mi_open.c b/storage/myisam/mi_open.c
+index 414e483a..1119fee0 100644
+--- a/storage/myisam/mi_open.c
++++ b/storage/myisam/mi_open.c
+@@ -371,6 +371,17 @@ MI_INFO *mi_open(const char *name, int mode, uint open_flags)
+             my_errno= HA_ERR_CRASHED;
+             goto err;
+           }
++          /*
++            A non-packed key segment is copied verbatim into a fixed size
++            key buffer, so its length must not exceed the maximum key length.
++          */
++          if (!(pos->flag & (HA_SPACE_PACK | HA_VAR_LENGTH_PART |
++                             HA_BLOB_PART | HA_PACK_KEY)) &&
++              pos->length > HA_MAX_KEY_LENGTH)
++          {
++            my_errno= HA_ERR_CRASHED;
++            goto err;
++          }
+ 	  if (pos->type == HA_KEYTYPE_TEXT ||
+               pos->type == HA_KEYTYPE_VARTEXT1 ||
+               pos->type == HA_KEYTYPE_VARTEXT2)
+@@ -453,6 +464,13 @@ MI_INFO *mi_open(const char *name, int mode, uint open_flags)
+ 	for (j=0 ; j < share->uniqueinfo[i].keysegs; j++,pos++)
+ 	{
+ 	  disk_pos=mi_keyseg_read(disk_pos, pos);
++          if (!(pos->flag & (HA_SPACE_PACK | HA_VAR_LENGTH_PART |
++                             HA_BLOB_PART | HA_PACK_KEY)) &&
++              pos->length > HA_MAX_KEY_LENGTH)
++          {
++            my_errno= HA_ERR_CRASHED;
++            goto err;
++          }
+ 	  if (pos->type == HA_KEYTYPE_TEXT ||
+               pos->type == HA_KEYTYPE_VARTEXT1 ||
+               pos->type == HA_KEYTYPE_VARTEXT2)

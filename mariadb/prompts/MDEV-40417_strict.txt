@@ -1,0 +1,39 @@
+You are a software engineer fixing an issue in MariaDB Server (C/C++). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot build MariaDB or run its test suite. Read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update mysql-test tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDEV-40417: Compressed column always gets default value added
+
+A column with compression enabled automatically adds DEFAULT ''
+{code:sql}
+CREATE TABLE `t` (
+  `c1` longtext COMPRESSED NOT NULL ,
+  `nc1` longtext NOT NULL,
+  `c2` longtext COMPRESSED NOT NULL DEFAULT '',
+  `nc2` longtext NOT NULL DEFAULT ''
+) ENGINE=InnoDB
+{code}
+{code:sql}SHOW CREATE TABLE t;{code} shows:
+{code:sql}
+CREATE TABLE `t` (
+  `c1` longtext /*M!100301 COMPRESSED*/ NOT NULL DEFAULT '',
+  `nc1` longtext NOT NULL,
+  `c2` longtext /*M!100301 COMPRESSED*/ NOT NULL DEFAULT '',
+  `nc2` longtext NOT NULL DEFAULT ''
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
+{code}
+{code:sql}SHOW FULL COLUMNS FROM `t`{code}
+||Field||Type||Collation||Null||Key||Default||Extra||Privileges||Comment||
+|c1|longtext /\*M!100301 COMPRESSED\*/|utf8mb4_general_ci|NO| | | |select,insert,update,references| |
+|nc1|longtext|utf8mb4_general_ci|NO| |NULL| |select,insert,update,references| |
+|c2|longtext /\*M!100301 COMPRESSED\*/|utf8mb4_general_ci|NO| |''| |select,insert,update,references| |
+|nc2|longtext|utf8mb4_general_ci|NO| |''| |select,insert,update,references| |
+Note the different default values - empty string for c1 and two single quotes for c2
+
+This insert statement succeeds, so c1 effectively has a default value:
+{code:sql}INSERT INTO `t` (`nc1`) VALUES ('x'){code}

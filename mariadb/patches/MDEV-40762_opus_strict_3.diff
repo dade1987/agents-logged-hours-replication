@@ -1,0 +1,241 @@
+diff --git a/mysql-test/main/desc_index_range.result b/mysql-test/main/desc_index_range.result
+index fd84fd97..d87b3418 100644
+--- a/mysql-test/main/desc_index_range.result
++++ b/mysql-test/main/desc_index_range.result
+@@ -600,3 +600,105 @@ min(kp2)
+ 3
+ 3
+ drop table t20;
++#
++# MDEV-40762: Wrong MAX() result with GROUP BY when loose index scan
++#             uses DESC key part
++#
++create table t1 (
++  a int not null,
++  b int not null,
++  c int not null,
++  key k_asc (a, b, c),
++  key k_desc (a, b desc)
++) engine=innodb;
++insert into t1 select A.seq, B.seq, 1 from seq_1_to_10 A, seq_1_to_20 B;
++analyze table t1 persistent for all;
++Table	Op	Msg_type	Msg_text
++test.t1	analyze	status	Engine-independent statistics collected
++test.t1	analyze	status	OK
++select a, min(b), max(b) from t1 group by a;
++a	min(b)	max(b)
++1	1	20
++2	1	20
++3	1	20
++4	1	20
++5	1	20
++6	1	20
++7	1	20
++8	1	20
++9	1	20
++10	1	20
++select a, max(b) from t1 group by a;
++a	max(b)
++1	20
++2	20
++3	20
++4	20
++5	20
++6	20
++7	20
++8	20
++9	20
++10	20
++select a, min(b) from t1 group by a;
++a	min(b)
++1	1
++2	1
++3	1
++4	1
++5	1
++6	1
++7	1
++8	1
++9	1
++10	1
++drop table t1;
++create table t1 (
++  a int not null,
++  b int not null,
++  c int not null,
++  key k_desc (a, b desc, c),
++  key k_asc (a, b)
++) engine=innodb;
++insert into t1 select A.seq, B.seq, 1 from seq_1_to_10 A, seq_1_to_20 B;
++analyze table t1 persistent for all;
++Table	Op	Msg_type	Msg_text
++test.t1	analyze	status	Engine-independent statistics collected
++test.t1	analyze	status	OK
++select a, min(b), max(b) from t1 group by a;
++a	min(b)	max(b)
++1	1	20
++2	1	20
++3	1	20
++4	1	20
++5	1	20
++6	1	20
++7	1	20
++8	1	20
++9	1	20
++10	1	20
++select a, max(b) from t1 group by a;
++a	max(b)
++1	20
++2	20
++3	20
++4	20
++5	20
++6	20
++7	20
++8	20
++9	20
++10	20
++select a, min(b) from t1 group by a;
++a	min(b)
++1	1
++2	1
++3	1
++4	1
++5	1
++6	1
++7	1
++8	1
++9	1
++10	1
++drop table t1;
+diff --git a/mysql-test/main/desc_index_range.test b/mysql-test/main/desc_index_range.test
+index 36f4c406..b0a0e0f6 100644
+--- a/mysql-test/main/desc_index_range.test
++++ b/mysql-test/main/desc_index_range.test
+@@ -396,3 +396,36 @@ eval EXPLAIN $query;
+ eval $query;
+ 
+ drop table t20;
++
++--echo #
++--echo # MDEV-40762: Wrong MAX() result with GROUP BY when loose index scan
++--echo #             uses DESC key part
++--echo #
++
++create table t1 (
++  a int not null,
++  b int not null,
++  c int not null,
++  key k_asc (a, b, c),
++  key k_desc (a, b desc)
++) engine=innodb;
++insert into t1 select A.seq, B.seq, 1 from seq_1_to_10 A, seq_1_to_20 B;
++analyze table t1 persistent for all;
++select a, min(b), max(b) from t1 group by a;
++select a, max(b) from t1 group by a;
++select a, min(b) from t1 group by a;
++drop table t1;
++
++create table t1 (
++  a int not null,
++  b int not null,
++  c int not null,
++  key k_desc (a, b desc, c),
++  key k_asc (a, b)
++) engine=innodb;
++insert into t1 select A.seq, B.seq, 1 from seq_1_to_10 A, seq_1_to_20 B;
++analyze table t1 persistent for all;
++select a, min(b), max(b) from t1 group by a;
++select a, max(b) from t1 group by a;
++select a, min(b) from t1 group by a;
++drop table t1;
+diff --git a/sql/opt_range.cc b/sql/opt_range.cc
+index c8d1d8da..812d4168 100644
+--- a/sql/opt_range.cc
++++ b/sql/opt_range.cc
+@@ -14859,6 +14859,8 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
+     uint cur_key_infix_len= 0;
+     uchar cur_key_infix[MAX_KEY_LENGTH];
+     uint cur_used_key_parts;
++    /* The keypart of the MIN/MAX argument in the current index. */
++    KEY_PART_INFO *cur_min_max_arg_part= NULL;
+     
+     /*
+       Check (B1) - if current index is covering.
+@@ -15028,7 +15030,7 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
+         cause= "aggregate column not suffix in idx";
+         goto next_index;
+       }
+-      min_max_arg_part= cur_index_info->key_part + key_part_nr - 1;
++      cur_min_max_arg_part= cur_index_info->key_part + key_part_nr - 1;
+     }
+ 
+     /*
+@@ -15062,19 +15064,20 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
+     first_non_group_part= (cur_group_key_parts < key_parts) ?
+                           cur_index_info->key_part + cur_group_key_parts :
+                           NULL;
+-    first_non_infix_part= min_max_arg_part ?
+-                          (min_max_arg_part < last_part) ?
+-                             min_max_arg_part :
++    first_non_infix_part= cur_min_max_arg_part ?
++                          (cur_min_max_arg_part < last_part) ?
++                             cur_min_max_arg_part :
+                              NULL :
+                            NULL;
+     if (first_non_group_part &&
+-        (!min_max_arg_part || (min_max_arg_part - first_non_group_part > 0)))
++        (!cur_min_max_arg_part ||
++         (cur_min_max_arg_part - first_non_group_part > 0)))
+     {
+       if (tree)
+       {
+         SEL_ARG *index_range_tree= tree->keys[cur_param_idx];
+         if (!get_constant_key_infix(cur_index_info, index_range_tree,
+-                                    first_non_group_part, min_max_arg_part,
++                                    first_non_group_part, cur_min_max_arg_part,
+                                     last_part, thd, cur_key_infix, 
+                                     &cur_key_infix_len,
+                                     &first_non_infix_part))
+@@ -15083,8 +15086,8 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
+           goto next_index;
+         }
+       }
+-      else if (min_max_arg_part &&
+-               (min_max_arg_part - first_non_group_part > 0))
++      else if (cur_min_max_arg_part &&
++               (cur_min_max_arg_part - first_non_group_part > 0))
+       {
+         /*
+           There is a gap but no range tree, thus no predicates at all for the
+@@ -15128,7 +15131,7 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
+     if (first_non_infix_part)
+     {
+       cur_part= first_non_infix_part +
+-                (min_max_arg_part && (min_max_arg_part < last_part));
++                (cur_min_max_arg_part && (cur_min_max_arg_part < last_part));
+       for (; cur_part != last_part; cur_part++)
+       {
+         if (bitmap_is_set(table->read_set, cur_part->field->field_index))
+@@ -15148,7 +15151,7 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
+     {
+       SEL_ARG *index_range_tree= tree->keys[cur_param_idx];
+       SEL_ARG *cur_range= NULL;
+-      if (get_sel_arg_for_keypart(min_max_arg_part->field,
++      if (get_sel_arg_for_keypart(cur_min_max_arg_part->field,
+                                   index_range_tree, &cur_range) ||
+           (cur_range && cur_range->type != SEL_ARG::KEY_RANGE))
+       {
+@@ -15215,6 +15218,12 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
+       if (key_infix_len)
+         memcpy (key_infix, cur_key_infix, sizeof (key_infix));
+       used_key_parts= cur_used_key_parts;
++      /*
++        Remember the MIN/MAX keypart of the chosen index. It must belong to
++        the chosen index (and not to the last examined one), as e.g. its
++        HA_REVERSE_SORT flag determines how MIN/MAX are looked up.
++      */
++      min_max_arg_part= cur_min_max_arg_part;
+     }
+ 
+   next_index:

@@ -1,0 +1,110 @@
+diff --git a/sql/item_jsonfunc.cc b/sql/item_jsonfunc.cc
+index cf5bb9be..8e283b46 100644
+--- a/sql/item_jsonfunc.cc
++++ b/sql/item_jsonfunc.cc
+@@ -4088,21 +4088,100 @@ String *Item_func_json_arrayagg::get_str_from_field(Item *i,Field *f,
+ }
+ 
+ 
++/*
++  Checks whether the JSON array elements in [s, s + *len) end inside a string
++  literal. If so, returns true and sets *open_pos to the position of the
++  opening quote of that string. An incomplete escape sequence at the very end
++  is not kept: *len is reduced to its start.
++*/
++static bool json_ends_in_string(const char *s, size_t *len, size_t *open_pos)
++{
++  bool in_string= false;
++  size_t i= 0, n= *len;
++
++  while (i < n)
++  {
++    char c= s[i];
++    if (!in_string)
++    {
++      if (c == '"')
++      {
++        in_string= true;
++        *open_pos= i;
++      }
++      i++;
++    }
++    else if (c == '"')
++    {
++      in_string= false;
++      i++;
++    }
++    else if (c == '\\')
++    {
++      size_t esc_len= (i + 1 < n && s[i + 1] == 'u') ? 6 : 2;
++      if (i + esc_len > n)
++      {
++        *len= i;
++        break;
++      }
++      i+= esc_len;
++    }
++    else
++      i++;
++  }
++  return in_string;
++}
++
++
+ void Item_func_json_arrayagg::cut_max_length(String *result,
+        uint old_length, uint max_length) const
+ {
+   if (result->length() == 0)
+     return;
+ 
+-  if (result->ptr()[result->length() - 1] != '"' ||
+-      max_length == 0)
++  /*
++    The rows already in the result are complete JSON values and fit into
++    max_length. Never cut before them: max_length - 1 below would be smaller
++    than old_length and produce a bogus length.
++  */
++  if (old_length >= max_length)
+   {
+-    Item_func_group_concat::cut_max_length(result, old_length, max_length);
++    result->length(old_length);
+     return;
+   }
+ 
+-  Item_func_group_concat::cut_max_length(result, old_length, max_length-1);
+-  result->append('"');
++  size_t len, open_pos= 0;
++  bool in_string;
++
++  Item_func_group_concat::cut_max_length(result, old_length, max_length);
++  len= result->length();
++  in_string= json_ends_in_string(result->ptr(), &len, &open_pos);
++
++  if (in_string)
++  {
++    /* Keep one byte for the closing quote of the partially copied string */
++    Item_func_group_concat::cut_max_length(result, old_length, max_length - 1);
++    len= result->length();
++    in_string= json_ends_in_string(result->ptr(), &len, &open_pos);
++  }
++
++  if (in_string)
++  {
++    if (open_pos + 1 < len)
++    {
++      /* Keep the partial string and close it */
++      result->length(len);
++      result->append('"');
++      return;
++    }
++    /* Only the opening quote is left: drop the element entirely */
++    len= open_pos;
++  }
++
++  /* Drop the separator that may remain at the end of the cut result */
++  if (len > 0 && result->ptr()[len - 1] == ',')
++    len--;
++  result->length(len);
+ }
+ 
+ 

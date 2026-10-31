@@ -1,0 +1,36 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You CAN run Moodle's existing PHPUnit tests: `cd {WS} && vendor/bin/phpunit <path/to/some_test.php>` (the test environment is already initialised). You may also run `php -l <file>` and read code with grep/find/cat. Use absolute paths starting with {WS} in every command.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-76966: Multipage pdf conversions using ghostscript fail on windows server
+
+assign/feedback/editpdf convert pdfs to a set of pngs for use with pdf annotation.
+
+This is done by an adhoc task which runs on assignment submission create/update
+
+Our site doesn't (yet) use document conversion, so this task is only relevant when a student has submitted pdfs. We also only use ghostscript, not the poppler/pdftoppm application.
+
+After upgrading, we found that multi page pdfs get converted to an equivalent number of pngs (as expected), but each with "error converting this page" message, rather than reflecting the submitted pdf.
+
+Digging into the code, we located the issue 
+
+l.687 of  \mod\assign\feedback\editpdf\classes\pdf.php
+
+*$imagefilearg = \escapeshellarg($imagefile . '%d.png');*
+
+%d for the ghostscript commandline adds a page number to the filename.
+
+But on windows...[ https://www.php.net/manual/en/function.escapeshellarg.php|https://www.php.net/manual/en/function.escapeshellarg.php]
+
+"On Windows, *escapeshellarg()* instead{color:#de350b} *replaces percent signs,*{color} exclamation marks (delayed variable substitution) and double quotes *{color:#de350b}with spaces{color}* and adds double quotes around the string. Furthermore, each streak of consecutive backslashes ({{{}\{}}}) is escaped by one additional backslash."
+
+... and general hilarity ensues.
+
+We just removed the escapeshellarg function and everything works; it's not clear to me that sanitization is necessary for variables set in code without user input.
+
+ 

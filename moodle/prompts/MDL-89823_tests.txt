@@ -1,0 +1,20 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You CAN run Moodle's existing PHPUnit tests: `cd {WS} && vendor/bin/phpunit <path/to/some_test.php>` (the test environment is already initialised). You may also run `php -l <file>` and read code with grep/find/cat. Use absolute paths starting with {WS} in every command.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-89823: Harden PAT storage
+
+At the moment we’re generating the PAT secret using {{random_string()}}, which is a Moodle-specific method which generates a random string. This is generating a value using {{random_bytes()}}, which is good, but it’s just not the _right_ solution. We don’t need this value to be human readable, and the simpler solution is {{bin2hex}} wrapping {{random_bytes()}} instead.
+
+This is what we do for oauth2 secrets:
+
+{noformat}$secret = bin2hex(random_bytes(32));{noformat}
+
+[~accountid:5ccb99144253ab0e29348c22] and I also discussed other improvements to secrets, including how we can harden the PATs themselves by adding a calculated integrity check value using the list of scopes, and the token expiry. By adding this into the secret before hashing it, we can ensure that the database value has not been modified in any way.
+
+This prevents someone from manually modifying the database to extend the remit of a PAT.

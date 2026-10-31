@@ -1,0 +1,99 @@
+diff --git a/mysql-test/main/vector_innodb.result b/mysql-test/main/vector_innodb.result
+index 0b82acc3..de714e7e 100644
+--- a/mysql-test/main/vector_innodb.result
++++ b/mysql-test/main/vector_innodb.result
+@@ -387,4 +387,18 @@ ERROR 42S02: Table 'test.t1' doesn't exist in engine
+ DROP TABLE t2,t1;
+ Warnings:
+ Warning	1932	Table 'test.t1' doesn't exist in engine
++#
++# MDEV-40229 I_S.VECTOR_INDEXES: Unclear or inconsistent semantics of INDEX_SIZE
++#
++create table t1 (pk int auto_increment primary key, a vector(1) not null,
++vector(a)) engine=innodb;
++insert t1 (a) values (vec_fromtext('[1]'));
++insert t1 (a) select vec_fromtext(concat('[', seq, ']')) from seq_1_to_2000;
++analyze table t1;
++select index_length > 16384 as index_length_grows
++from information_schema.tables
++where table_schema = database() and table_name = 't1';
++index_length_grows
++1
++drop table t1;
+ # End of 11.8 tests
+diff --git a/mysql-test/main/vector_innodb.test b/mysql-test/main/vector_innodb.test
+index e083d958..69dc2bbb 100644
+--- a/mysql-test/main/vector_innodb.test
++++ b/mysql-test/main/vector_innodb.test
+@@ -382,4 +382,19 @@ INSERT INTO t1 VALUES (0,'');
+ # cleanup
+ DROP TABLE t2,t1;
+ 
++--echo #
++--echo # MDEV-40229 I_S.VECTOR_INDEXES: Unclear or inconsistent semantics of INDEX_SIZE
++--echo #
++create table t1 (pk int auto_increment primary key, a vector(1) not null,
++                 vector(a)) engine=innodb;
++insert t1 (a) values (vec_fromtext('[1]'));
++insert t1 (a) select vec_fromtext(concat('[', seq, ']')) from seq_1_to_2000;
++--disable_result_log
++analyze table t1;
++--enable_result_log
++select index_length > 16384 as index_length_grows
++from information_schema.tables
++where table_schema = database() and table_name = 't1';
++drop table t1;
++
+ --echo # End of 11.8 tests
+diff --git a/sql/handler.cc b/sql/handler.cc
+index 56a784d3..7e2cb7af 100644
+--- a/sql/handler.cc
++++ b/sql/handler.cc
+@@ -5676,7 +5676,27 @@ handler::ha_analyze(THD* thd, HA_CHECK_OPT* check_opt)
+               m_lock_type != F_UNLCK);
+   mark_trx_read_write();
+ 
+-  return analyze(thd, check_opt);
++  int error= analyze(thd, check_opt);
++  if (error != HA_ADMIN_OK && error != HA_ADMIN_ALREADY_DONE)
++    return error;
++  /*
++    Analyze vector (high-level) indexes too, so that their statistics,
++    in particular their size as shown in INDEX_LENGTH, are up to date.
++  */
++  if (table->file == this)
++  {
++    for (uint i= table->s->keys; i < table->s->total_keys; i++)
++    {
++      DBUG_ASSERT(table->s->hlindexes() == 1);
++      if (table->hlindex_open(i) || table->hlindex_lock(i))
++        return HA_ADMIN_FAILED;
++      int hl_error= table->hlindex->file->analyze(thd, check_opt);
++      if (hl_error != HA_ADMIN_OK && hl_error != HA_ADMIN_ALREADY_DONE &&
++          hl_error != HA_ADMIN_NOT_IMPLEMENTED)
++        return hl_error;
++    }
++  }
++  return error;
+ }
+ 
+ 
+diff --git a/sql/sql_show.cc b/sql/sql_show.cc
+index ed108adf..45ee9cb4 100644
+--- a/sql/sql_show.cc
++++ b/sql/sql_show.cc
+@@ -6087,8 +6087,13 @@ static int get_schema_tables_record(THD *thd, TABLE_LIST *tables,
+           if (show_table->hlindex || !show_table->hlindex_open(show_table->s->keys))
+           {
+               handler *hi= show_table->hlindex->file;
++              /*
++                The whole vector index table (both its data and its own
++                indexes) is the vector index of the main table.
++              */
+               if (!hi->info(HA_STATUS_VARIABLE))
+-                  file->stats.index_file_length+= hi->stats.data_file_length;
++                  file->stats.index_file_length+= hi->stats.data_file_length +
++                                                  hi->stats.index_file_length;
+           }
+       }
+ 

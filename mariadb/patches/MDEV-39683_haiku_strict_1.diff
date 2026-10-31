@@ -1,0 +1,55 @@
+diff --git a/plugin/type_xmltype/sql_type_xmltype.cc b/plugin/type_xmltype/sql_type_xmltype.cc
+index 0dd2e1ab..d1d0baca 100644
+--- a/plugin/type_xmltype/sql_type_xmltype.cc
++++ b/plugin/type_xmltype/sql_type_xmltype.cc
+@@ -170,6 +170,35 @@ const Type_handler *Type_handler_xmltype::
+ }
+ 
+ 
++/*
++  XMLTYPE is a string-based type, so without these overrides numeric
++  aggregates would silently fall back to the string->DOUBLE conversion
++  and return 0 for non-numeric values. Reject them explicitly instead,
++  the same way GEOMETRY and VECTOR do.
++*/
++bool Type_handler_xmltype::
++       Item_sum_sum_fix_length_and_dec(Item_sum_sum *item) const
++{
++  LEX_CSTRING name= {STRING_WITH_LEN("sum") };
++  return Item_func_or_sum_illegal_param(name);
++}
++
++
++bool Type_handler_xmltype::
++       Item_sum_avg_fix_length_and_dec(Item_sum_avg *item) const
++{
++  LEX_CSTRING name= {STRING_WITH_LEN("avg") };
++  return Item_func_or_sum_illegal_param(name);
++}
++
++
++bool Type_handler_xmltype::
++       Item_sum_variance_fix_length_and_dec(Item_sum_variance *item) const
++{
++  return Item_func_or_sum_illegal_param(item);
++}
++
++
+ 
+ /*****************************************************************/
+ void Field_xmltype::sql_type(String &res) const
+diff --git a/plugin/type_xmltype/sql_type_xmltype.h b/plugin/type_xmltype/sql_type_xmltype.h
+index c393c24c..6f9ad113 100644
+--- a/plugin/type_xmltype/sql_type_xmltype.h
++++ b/plugin/type_xmltype/sql_type_xmltype.h
+@@ -77,6 +77,10 @@ class Type_handler_xmltype: public Type_handler_long_blob
+   bool can_return_date() const override { return false; }
+   bool can_return_time() const override { return false; }
+ 
++  bool Item_sum_sum_fix_length_and_dec(Item_sum_sum *) const override;
++  bool Item_sum_avg_fix_length_and_dec(Item_sum_avg *) const override;
++  bool Item_sum_variance_fix_length_and_dec(Item_sum_variance *) const override;
++
+ };
+ 
+ extern Type_handler_xmltype type_handler_xmltype;

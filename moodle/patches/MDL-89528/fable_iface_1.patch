@@ -1,0 +1,199 @@
+diff --git a/public/lib/UPGRADING.md b/public/lib/UPGRADING.md
+index aad02bc1da4..d0bcb4e508e 100644
+--- a/public/lib/UPGRADING.md
++++ b/public/lib/UPGRADING.md
+@@ -4,6 +4,9 @@
+ 
+ ### Added
+ 
++- The DI container now supports attribute-based injection using the `#[\DI\Attribute\Inject]` attribute. This allows for property injection, and for injecting dependencies on to an existing instance using `\core\di::get_container()->injectOn($this)`. A new `\core\di::make()` helper has also been added to create a new instance of a class with its dependencies resolved by the container, optionally passing additional constructor parameters.
++
++  For more information see [MDL-89528](https://tracker.moodle.org/browse/MDL-89528)
+ - `email_to_user()` now emits a hook `before_email_to_user`. This hook allows any subscriber to modify the email contents, add additional headers, or add reasons to block the email. If any block reasons are added, the email is stopped from being sent and the reasons are output.
+ 
+   For more information see [MDL-69724](https://tracker.moodle.org/browse/MDL-69724)
+diff --git a/public/lib/classes/di.php b/public/lib/classes/di.php
+index 46dd11354eb..3db10a5e58d 100644
+--- a/public/lib/classes/di.php
++++ b/public/lib/classes/di.php
+@@ -62,6 +62,32 @@ class di {
+         return self::get_container()->get($id);
+     }
+ 
++    /**
++     * Create a new instance of the specified class, resolving its dependencies using the container.
++     *
++     * Unlike `get()`, this method always creates a new instance of the requested class, and allows additional
++     * parameters to be passed to the constructor. Any parameters which are not provided will be resolved by the
++     * container.
++     *
++     * This is a shortcut helper for \core\di::get_container()->make($name, $params).
++     *
++     * @param string $name The class name or identifier of the entry to create
++     * @param array $params Parameters to pass to the constructor, indexed by parameter name
++     * @return mixed The new instance
++     */
++    public static function make(
++        string $name,
++        array $params = [],
++    ): mixed {
++        // Please note that the `make` method is not a part of the PSR-11 standard.
++        // We currently make use of PHP-DI which does have this method, but its use is not guaranteed.
++        // If Moodle switches to alternative DI resolution, this method _must_ be updated to work with it.
++
++        /** @var \DI\Container */
++        $container = self::get_container();
++        return $container->make($name, $params);
++    }
++
+     /**
+      * Set an entry in the container by its identifier.
+      *
+@@ -89,9 +115,12 @@ class di {
+         // Configure the Container builder.
+         $builder = new \DI\ContainerBuilder();
+ 
+-        // At the moment we are using autowiring, but not automatic attribute injection.
+-        // Automatic attribute injection is a php-di specific feature.
++        // Enable autowiring and attribute-based injection.
++        // Attribute injection (using the \DI\Attribute\Inject attribute) is a php-di specific feature.
++        // It allows for property injection, and for injection on existing instances using the
++        // \core\di::get_container()->injectOn($instance) method.
+         $builder->useAutowiring(true);
++        $builder->useAttributes(true);
+ 
+         if (!$CFG->debugdeveloper) {
+             // Enable compilation of the container and write proxies to disk in production.
+diff --git a/public/lib/tests/di_test.php b/public/lib/tests/di_test.php
+index b99707f5aeb..2cf0539e19e 100644
+--- a/public/lib/tests/di_test.php
++++ b/public/lib/tests/di_test.php
+@@ -159,4 +159,128 @@ final class di_test extends \advanced_testcase {
+             $stringmanager,
+         );
+     }
++    /**
++     * Test that the make method creates a new instance each time, with resolved dependencies.
++     */
++    public function test_make(): void {
++        $client = di::make(http_client::class);
++        $this->assertInstanceOf(http_client::class, $client);
++
++        // The make method always returns a new instance.
++        $this->assertNotSame($client, di::make(http_client::class));
++        $this->assertNotSame($client, di::get(http_client::class));
++    }
++
++    /**
++     * Test that the make method accepts constructor parameters and resolves the remainder from the container.
++     */
++    public function test_make_with_params(): void {
++        $instance = di::make(
++            di_test_make_fixture::class,
++            ['name' => 'example'],
++        );
++
++        $this->assertInstanceOf(di_test_make_fixture::class, $instance);
++        $this->assertSame('example', $instance->name);
++        $this->assertSame(di::get(\moodle_database::class), $instance->db);
++        $this->assertSame(di::get(hook\manager::class), $instance->hookmanager);
++    }
++
++    /**
++     * Test that attribute-based injection is supported via the Inject attribute.
++     */
++    public function test_attribute_injection(): void {
++        $instance = di::get(di_test_inject_fixture::class);
++
++        $this->assertInstanceOf(di_test_inject_fixture::class, $instance);
++        $this->assertSame(di::get(hook\manager::class), $instance->get_hook_manager());
++        $this->assertSame(di::get(\moodle_database::class), $instance->get_db());
++    }
++
++    /**
++     * Test that dependencies can be injected on to an existing instance.
++     */
++    public function test_inject_on(): void {
++        $instance = new di_test_inject_fixture();
++        $this->assertFalse($instance->has_hook_manager());
++
++        /** @var \DI\Container $container */
++        $container = di::get_container();
++        $result = $container->injectOn($instance);
++
++        $this->assertSame($instance, $result);
++        $this->assertTrue($instance->has_hook_manager());
++        $this->assertSame(di::get(hook\manager::class), $instance->get_hook_manager());
++        $this->assertSame(di::get(\moodle_database::class), $instance->get_db());
++    }
++}
++
++/**
++ * Fixture class for testing \core\di::make().
++ *
++ * @package   core
++ * @copyright 2025 Andrew Nicols <andrew@nicols.co.uk>
++ * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++final class di_test_make_fixture {
++    /**
++     * Constructor.
++     *
++     * @param \moodle_database $db
++     * @param hook\manager $hookmanager
++     * @param string $name
++     */
++    public function __construct(
++        /** @var \moodle_database The database */
++        public readonly \moodle_database $db,
++        /** @var hook\manager The hook manager */
++        public readonly hook\manager $hookmanager,
++        /** @var string A name */
++        public readonly string $name,
++    ) {
++    }
++}
++
++/**
++ * Fixture class for testing attribute-based injection.
++ *
++ * @package   core
++ * @copyright 2025 Andrew Nicols <andrew@nicols.co.uk>
++ * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++final class di_test_inject_fixture {
++    /** @var hook\manager The hook manager */
++    #[\DI\Attribute\Inject]
++    private hook\manager $hookmanager;
++
++    /** @var \moodle_database The database */
++    #[\DI\Attribute\Inject]
++    private \moodle_database $db;
++
++    /**
++     * Whether the hook manager has been injected.
++     *
++     * @return bool
++     */
++    public function has_hook_manager(): bool {
++        return isset($this->hookmanager);
++    }
++
++    /**
++     * Get the hook manager.
++     *
++     * @return hook\manager
++     */
++    public function get_hook_manager(): hook\manager {
++        return $this->hookmanager;
++    }
++
++    /**
++     * Get the database.
++     *
++     * @return \moodle_database
++     */
++    public function get_db(): \moodle_database {
++        return $this->db;
++    }
+ }

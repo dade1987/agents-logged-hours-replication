@@ -1,0 +1,112 @@
+diff --git a/mysql-test/main/func_json.result b/mysql-test/main/func_json.result
+index 2f791dc4..13f87982 100644
+--- a/mysql-test/main/func_json.result
++++ b/mysql-test/main/func_json.result
+@@ -5776,4 +5776,47 @@ JSON_SCHEMA_VALID(@schema, @value)
+ SELECT JSON_SCHEMA_VALID( '{"enum": ["x"]}', CONVERT(CONCAT('"', REPEAT('e', 100000), '"') USING ucs2)) AS r;
+ r
+ 0
++#
++# MDEV-41067: wrong result with json_overlaps when one of the arguments
++# has an empty nested array element
++#
++SELECT JSON_OVERLAPS('[[1]]', '[[]]') AS r;
++r
++0
++SELECT JSON_OVERLAPS('[[]]', '[[1]]') AS r;
++r
++0
++SELECT JSON_OVERLAPS('[[1]]', '[[],123]') AS r;
++r
++0
++SELECT JSON_OVERLAPS('[[1,2]]', '[[1]]') AS r;
++r
++0
++SELECT JSON_OVERLAPS('[[1]]', '[[1,2]]') AS r;
++r
++0
++SELECT JSON_OVERLAPS('[[]]', '[[]]') AS r;
++r
++1
++SELECT JSON_OVERLAPS('[[1]]', '[[1]]') AS r;
++r
++1
++SELECT JSON_OVERLAPS('[[1], 123]', '[[],123]') AS r;
++r
++1
++SELECT JSON_OVERLAPS('{"a": [1]}', '{"a": []}') AS r;
++r
++0
++SELECT JSON_OVERLAPS('{"a": []}', '{"a": []}') AS r;
++r
++1
++SELECT JSON_OVERLAPS('{"a": [1], "b": 2}', '{"a": [], "b": 2}') AS r;
++r
++1
++SELECT JSON_OVERLAPS('[[[1],2]]', '[[[1],3]]') AS r;
++r
++0
++SELECT JSON_OVERLAPS('[[[1],2]]', '[[[1],2]]') AS r;
++r
++1
+ # End of 11.4 tests
+diff --git a/mysql-test/main/func_json.test b/mysql-test/main/func_json.test
+index c6045cb2..15797ddb 100644
+--- a/mysql-test/main/func_json.test
++++ b/mysql-test/main/func_json.test
+@@ -4450,4 +4450,23 @@ SELECT JSON_SCHEMA_VALID(@schema, @value);
+ 
+ SELECT JSON_SCHEMA_VALID( '{"enum": ["x"]}', CONVERT(CONCAT('"', REPEAT('e', 100000), '"') USING ucs2)) AS r;
+ 
++--echo #
++--echo # MDEV-41067: wrong result with json_overlaps when one of the arguments
++--echo # has an empty nested array element
++--echo #
++
++SELECT JSON_OVERLAPS('[[1]]', '[[]]') AS r;
++SELECT JSON_OVERLAPS('[[]]', '[[1]]') AS r;
++SELECT JSON_OVERLAPS('[[1]]', '[[],123]') AS r;
++SELECT JSON_OVERLAPS('[[1,2]]', '[[1]]') AS r;
++SELECT JSON_OVERLAPS('[[1]]', '[[1,2]]') AS r;
++SELECT JSON_OVERLAPS('[[]]', '[[]]') AS r;
++SELECT JSON_OVERLAPS('[[1]]', '[[1]]') AS r;
++SELECT JSON_OVERLAPS('[[1], 123]', '[[],123]') AS r;
++SELECT JSON_OVERLAPS('{"a": [1]}', '{"a": []}') AS r;
++SELECT JSON_OVERLAPS('{"a": []}', '{"a": []}') AS r;
++SELECT JSON_OVERLAPS('{"a": [1], "b": 2}', '{"a": [], "b": 2}') AS r;
++SELECT JSON_OVERLAPS('[[[1],2]]', '[[[1],3]]') AS r;
++SELECT JSON_OVERLAPS('[[[1],2]]', '[[[1],2]]') AS r;
++
+ --echo # End of 11.4 tests
+diff --git a/sql/item_jsonfunc.cc b/sql/item_jsonfunc.cc
+index 615d0cb4..caf1ebfa 100644
+--- a/sql/item_jsonfunc.cc
++++ b/sql/item_jsonfunc.cc
+@@ -4809,9 +4809,25 @@ bool json_compare_arrays_in_order(json_engine_t *js, json_engine_t *value)
+       return FALSE;
+     }
+   }
+-  res= (value->state == JST_ARRAY_END || value->state == JST_OBJ_END ?
++  /*
++    Nested arrays are equal only if both of them have been exhausted at the
++    same time, i.e. they have the same number of elements. If one array ended
++    while the other still has elements (e.g. '[1]' vs '[]' or '[1,2]' vs '[1]')
++    they are not equal.
++  */
++  res= ((js->state == JST_ARRAY_END || js->state == JST_OBJ_END) &&
++        (value->state == JST_ARRAY_END || value->state == JST_OBJ_END) ?
+         TRUE : FALSE);
+-  json_skip_current_level(js, value);
++  /*
++    Skip the remaining elements of the array that has not been exhausted
++    yet. An array that has already ended must not be skipped, as its level
++    has already been popped and json_skip_level() would then skip the rest
++    of the enclosing structure (e.g. the "123" in '[[],123]').
++  */
++  if (js->state != JST_ARRAY_END && js->state != JST_OBJ_END)
++    json_skip_level(js);
++  if (value->state != JST_ARRAY_END && value->state != JST_OBJ_END)
++    json_skip_level(value);
+   return res;
+ }
+ 

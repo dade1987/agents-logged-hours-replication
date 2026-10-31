@@ -1,0 +1,29 @@
+diff --git a/public/admin/tool/uploadcourse/classes/course.php b/public/admin/tool/uploadcourse/classes/course.php
+index b4a35053d3a..7a1541b0771 100644
+--- a/public/admin/tool/uploadcourse/classes/course.php
++++ b/public/admin/tool/uploadcourse/classes/course.php
+@@ -918,8 +918,24 @@ class tool_uploadcourse_course {
+             if ($rc->get_status() == backup::STATUS_REQUIRE_CONV) {
+                 $rc->convert();
+             }
++
++            // The course already exists, so the course configuration (summary, overview files, etc.) is only restored
++            // when the overwrite_conf setting is enabled. Enable it, unless the setting is locked (by permissions or config).
++            $overwritesetting = $rc->get_plan()->get_setting('overwrite_conf');
++            $overwriteconf = $overwritesetting->get_status() == base_setting::NOT_LOCKED;
++            if ($overwriteconf) {
++                $overwritesetting->set_value(true);
++            }
++
+             if ($rc->execute_precheck()) {
+                 $rc->execute_plan();
++                if ($overwriteconf) {
++                    // The restore has replaced the course settings with those of the template course. Apply again the
++                    // values provided in the upload, so they take precedence over the template ones.
++                    $coursedata = (object) $this->data;
++                    $coursedata->id = $course->id;
++                    update_course($coursedata);
++                }
+                 $this->status('courserestored', new lang_string('courserestored', 'tool_uploadcourse'));
+             } else {
+                 $this->error('errorwhilerestoringcourse', new lang_string('errorwhilerestoringcourse', 'tool_uploadcourse'));

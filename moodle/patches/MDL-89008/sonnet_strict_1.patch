@@ -1,0 +1,45 @@
+diff --git a/public/lib/editor/tiny/plugins/recordrtc/amd/build/base_recorder.min.js b/public/lib/editor/tiny/plugins/recordrtc/amd/build/base_recorder.min.js
+index 3299229ed830e8e723c567a19f7987615f1c8890..ce871872e1d930bbd494238faeb8fcac384b4bcf 100644
+GIT binary patch
+delta 41
+wcmZ2geyn`M1S6S}jLc%a^wbjH#EQ^@oczR;;LNI24NW^+12whH6O5!d0cMB~82|tP
+
+delta 12
+TcmX?BzN&n~1f$JsjHEaLD&hr&
+
+diff --git a/public/lib/editor/tiny/plugins/recordrtc/amd/src/base_recorder.js b/public/lib/editor/tiny/plugins/recordrtc/amd/src/base_recorder.js
+index c9ce7d6daf1..c9023cdc23a 100644
+--- a/public/lib/editor/tiny/plugins/recordrtc/amd/src/base_recorder.js
++++ b/public/lib/editor/tiny/plugins/recordrtc/amd/src/base_recorder.js
+@@ -875,7 +875,8 @@ export default class {
+             const newSize = this.data.blobSize + event.data.size;
+             // Recording stops when either the maximum upload size is reached, or the time limit expires.
+             // The time limit is checked in the `updateButtonTime` function.
+-            if (newSize >= this.getMaxUploadSize()) {
++            const maxUploadSize = this.getMaxUploadSize();
++            if (maxUploadSize >= 0 && newSize >= maxUploadSize) {
+                 this.stopRecorder();
+                 this.displayFileLimitHitMessage();
+             } else {
+diff --git a/public/lib/editor/tiny/plugins/recordrtc/classes/plugininfo.php b/public/lib/editor/tiny/plugins/recordrtc/classes/plugininfo.php
+index 12c05c16a8d..efc43161e78 100644
+--- a/public/lib/editor/tiny/plugins/recordrtc/classes/plugininfo.php
++++ b/public/lib/editor/tiny/plugins/recordrtc/classes/plugininfo.php
+@@ -115,9 +115,14 @@ class plugininfo extends plugin implements
+             }
+         }
+ 
+-        $maxrecsize = get_max_upload_file_size();
+-        if (!empty($options['maxbytes'])) {
+-            $maxrecsize = min($maxrecsize, $options['maxbytes']);
++        if (has_capability('moodle/course:ignorefilesizelimits', $context)) {
++            // The user can ignore file size limits, so do not limit the recording size.
++            $maxrecsize = USER_CAN_IGNORE_FILE_SIZE_LIMITS;
++        } else {
++            $maxrecsize = get_max_upload_file_size();
++            if (!empty($options['maxbytes']) && $options['maxbytes'] != USER_CAN_IGNORE_FILE_SIZE_LIMITS) {
++                $maxrecsize = min($maxrecsize, $options['maxbytes']);
++            }
+         }
+         $params = [
+             'contextid' => $context->id,

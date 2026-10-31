@@ -1,0 +1,37 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot run Moodle's test suite. You may run `php -l <file>` and read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-89893: Quiz statistics report hides "Recalculate now" when recalculation tasks have exhausted their retries
+
+This was originally raised in [MDL-88534|https://moodle.atlassian.net/browse/MDL-88534?focusedCommentId=1172630]  before it released, but was never followed up on.
+
+To reproduce:
+
+# In site administration, set "Statistics recalculation debounce delay" to one hour
+# Create a course and enrol a student
+# Create a quiz containing two automatically graded true/false questions
+# Log in as the student and submit a quiz attempt
+# Log in as an administrator, open the quiz's "Results" page and select "Statistics"
+# Reload the report once after its initial calculation and leave the report open
+# In another tab, navigate to "Site administration" > "Server" > "Tasks" > "Ad hoc tasks", click "recalculate" under "quiz_statistics" and note the ID of the task created by the submission from 4.
+# Run the following SQL (replacing 123 with the task ID from 7.):
+{code:sql}UPDATE mdl_task_adhoc
+   SET attemptsavailable = 0,
+       faildelay = 86400,
+       nextruntime = 1,
+       firststartingtime = timecreated
+ WHERE id = 123
+   AND component = 'quiz_statistics';{code}
+This simulates a situation where a quiz statistics task has exhausted all its retries, and its scheduled run time has passed.
+# Return to the "Statistics" report and reload the page without submitting another attempt
+
+*Expected*: The "Recalculate now" button should be available.
+*Actual*: The "Recalculate now" button disappears and the report displays “A recalculation is scheduled and should be running as soon as possible.”
+
+What’s happening here is that the report counts tasks with no retries remaining as “pending”, even though cron won’t run them. So the message is misleading and hides the exact button you need to potentially fix the situation.

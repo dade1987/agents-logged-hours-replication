@@ -1,0 +1,74 @@
+diff --git a/public/admin/tool/recyclebin/classes/course_bin.php b/public/admin/tool/recyclebin/classes/course_bin.php
+index 0fdddc30dca..343f994ef1e 100644
+--- a/public/admin/tool/recyclebin/classes/course_bin.php
++++ b/public/admin/tool/recyclebin/classes/course_bin.php
+@@ -112,6 +112,13 @@ class course_bin extends base_bin {
+             return;
+         }
+ 
++        // Modules delegating a section (such as subsections) are not stored in the recycle bin,
++        // consistently with regular sections which are not stored either. The activities they
++        // contain are deleted individually and will be stored in the recycle bin on their own.
++        if (\core_courseformat\sectiondelegate::has_delegate_class('mod_' . $cminfo->modname)) {
++            return;
++        }
++
+         // As far as recycle bin is using MODE_AUTOMATED, it observes the backup_auto_storage
+         // settings (storing backups @ real location and potentially not including files).
+         // For recycle bin we want to ensure that backup files are always stored in Moodle file
+diff --git a/public/admin/tool/recyclebin/tests/course_bin_test.php b/public/admin/tool/recyclebin/tests/course_bin_test.php
+index 76b19844ba1..c76b5ed7fe3 100644
+--- a/public/admin/tool/recyclebin/tests/course_bin_test.php
++++ b/public/admin/tool/recyclebin/tests/course_bin_test.php
+@@ -119,6 +119,51 @@ final class course_bin_test extends \advanced_testcase {
+         $this->assertEquals(0, count($recyclebin->get_items()));
+     }
+ 
++    /**
++     * Test that deleting a subsection does not store the subsection itself in the recycle bin,
++     * but only the activities it contains.
++     */
++    public function test_delete_subsection(): void {
++        global $DB;
++
++        // Create a subsection with a couple of activities inside it.
++        $subsection = $this->getDataGenerator()->create_module('subsection', [
++            'course' => $this->course->id,
++            'section' => 1,
++        ]);
++        $modinfo = get_fast_modinfo($this->course->id);
++        $delegatedsection = $modinfo->get_cm($subsection->cmid)->get_delegated_section_info();
++        $this->assertNotNull($delegatedsection);
++
++        $page = $this->getDataGenerator()->create_module('page', [
++            'course' => $this->course->id,
++            'section' => $delegatedsection->sectionnum,
++        ]);
++        $book = $this->getDataGenerator()->create_module('book', [
++            'course' => $this->course->id,
++            'section' => $delegatedsection->sectionnum,
++        ]);
++
++        // Should have nothing in the recycle bin.
++        $this->assertEquals(0, $DB->count_records('tool_recyclebin_course'));
++
++        // Delete the subsection.
++        \core_courseformat\formatactions::cm($this->course->id)->delete($subsection->cmid);
++
++        // Only the activities inside the subsection should be in the recycle bin, not the subsection itself.
++        $recyclebin = new \tool_recyclebin\course_bin($this->course->id);
++        $items = $recyclebin->get_items();
++        $this->assertCount(2, $items);
++
++        $subsectionmoduleid = $DB->get_field('modules', 'id', ['name' => 'subsection'], MUST_EXIST);
++        $names = [];
++        foreach ($items as $item) {
++            $this->assertNotEquals($subsectionmoduleid, $item->module);
++            $names[] = $item->name;
++        }
++        $this->assertEqualsCanonicalizing([$page->name, $book->name], $names);
++    }
++
+     /**
+      * Test the cleanup task.
+      */

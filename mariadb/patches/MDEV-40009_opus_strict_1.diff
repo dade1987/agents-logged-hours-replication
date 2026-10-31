@@ -1,0 +1,82 @@
+diff --git a/mysql-test/main/path_bugs.result b/mysql-test/main/path_bugs.result
+index fd89b07f..21923fe6 100644
+--- a/mysql-test/main/path_bugs.result
++++ b/mysql-test/main/path_bugs.result
+@@ -14,4 +14,15 @@ c
+ drop database test1;
+ use test;
+ drop procedure p1;
++#
++# MDEV-40009 SIGSEGV in Sql_path::from_text
++#
++SET @save_path= @@path;
++SET NAMES swe7;
++SET PATH '`';
++SET NAMES utf8mb4;
++SELECT @@path;
++@@path
++`é`
++SET PATH @save_path;
+ # End of 12.3 tests
+diff --git a/mysql-test/main/path_bugs.test b/mysql-test/main/path_bugs.test
+index 2774c244..1f02d8f9 100644
+--- a/mysql-test/main/path_bugs.test
++++ b/mysql-test/main/path_bugs.test
+@@ -14,4 +14,14 @@ drop database test1;
+ use test;
+ drop procedure p1;
+ 
++--echo #
++--echo # MDEV-40009 SIGSEGV in Sql_path::from_text
++--echo #
++SET @save_path= @@path;
++SET NAMES swe7;
++SET PATH '`';
++SET NAMES utf8mb4;
++SELECT @@path;
++SET PATH @save_path;
++
+ --echo # End of 12.3 tests
+diff --git a/sql/sql_path.cc b/sql/sql_path.cc
+index 982fbffa..0454737d 100644
+--- a/sql/sql_path.cc
++++ b/sql/sql_path.cc
+@@ -283,6 +283,8 @@ bool Sql_path::from_text(const system_variables &sv, String *str)
+   while (curr < end)
+   {
+     auto len = cs->charlen(curr, end);
++    if (len <= 0)
++      goto err_bad_val; // Bad byte sequence
+ 
+     switch (state)
+     {
+diff --git a/sql/sys_vars.inl b/sql/sys_vars.inl
+index 0f8aa1eb..8fd122bf 100644
+--- a/sql/sys_vars.inl
++++ b/sql/sys_vars.inl
+@@ -3099,9 +3099,23 @@ class Sys_var_path: public sys_var
+ 
+   static bool from_item(THD *thd, Sql_path *path, Item *item)
+   {
+-    String *value, buffer;
+-    if (!(value= item->val_str_ascii(&buffer)))
++    StringBuffer<STRING_BUFFER_USUAL_SIZE> buffer, converted;
++    String *value;
++    uint32 dummy_offset;
++    if (!(value= item->val_str(&buffer)))
+       return true;
++    /*
++      Sql_path::from_text() parses the value as utf8mb3,
++      so convert it from the item character set (e.g. swe7, latin1).
++    */
++    if (String::needs_conversion(value->length(), value->charset(),
++                                 system_charset_info, &dummy_offset))
++    {
++      uint errors;
++      if (converted.copy(value, system_charset_info, &errors))
++        return true;
++      value= &converted;
++    }
+     return path->from_text(thd->variables, value);
+   }
+ 

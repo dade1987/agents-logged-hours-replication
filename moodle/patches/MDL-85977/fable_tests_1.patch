@@ -1,0 +1,304 @@
+diff --git a/.upgradenotes/MDL-85977-2026102612000000.yml b/.upgradenotes/MDL-85977-2026102612000000.yml
+new file mode 100644
+index 00000000000..fa929cc3103
+--- /dev/null
++++ b/.upgradenotes/MDL-85977-2026102612000000.yml
+@@ -0,0 +1,10 @@
++issueNumber: MDL-85977
++notes:
++  mod_bigbluebuttonbn:
++    - message: >
++        The list of recording formats that can be selected as "safe formats" (viewable by everyone)
++        is no longer hard-coded. It can be extended without modifying the source code by defining
++        $CFG->bigbluebuttonbn_recording_additional_formats (comma separated list of format names)
++        in config.php. New helper methods config::get_recording_formats(),
++        config::get_recording_safe_formats() and config::parse_recording_formats() have been added.
++      type: improved
+diff --git a/public/mod/bigbluebuttonbn/classes/local/config.php b/public/mod/bigbluebuttonbn/classes/local/config.php
+index 54b6dad5e59..e83c48faaa6 100644
+--- a/public/mod/bigbluebuttonbn/classes/local/config.php
++++ b/public/mod/bigbluebuttonbn/classes/local/config.php
+@@ -17,6 +17,7 @@
+ namespace mod_bigbluebuttonbn\local;
+ 
+ use mod_bigbluebuttonbn\instance;
++use mod_bigbluebuttonbn\local\bigbluebutton\recordings\recording_data;
+ use mod_bigbluebuttonbn\local\proxy\bigbluebutton_proxy;
+ use mod_bigbluebuttonbn\recording;
+ 
+@@ -47,6 +48,22 @@ class config {
+         'SHA512'
+     ];
+ 
++    /** @var string[] list of recording formats that are known by default (the official open source formats) */
++    public const DEFAULT_RECORDING_FORMATS = [
++        'notes',
++        'podcast',
++        'presentation',
++        'screenshare',
++        'statistics',
++        'video',
++    ];
++
++    /** @var string[] list of recording formats that are considered safe (viewable by everyone) by default */
++    public const DEFAULT_RECORDING_SAFE_FORMATS = [
++        'video',
++        'presentation',
++    ];
++
+     /**
+      * Returns moodle version.
+      *
+@@ -97,6 +114,8 @@ class config {
+             'recording_all_from_start_editable' => false,
+             'recording_hide_button_default' => false,
+             'recording_hide_button_editable' => false,
++            'recording_safe_formats' => implode(',', self::DEFAULT_RECORDING_SAFE_FORMATS),
++            'recording_additional_formats' => '',
+             'recording_protect_editable' => true,
+             'general_warning_message' => '',
+             'general_warning_roles' => 'editingteacher,teacher',
+@@ -159,6 +178,51 @@ class config {
+         return (string) self::defaultvalue($setting);
+     }
+ 
++    /**
++     * Parse a comma separated list of recording format names into a clean array of format identifiers.
++     *
++     * @param string $formats comma separated list of formats
++     * @return string[] list of unique, trimmed, non empty format identifiers
++     */
++    public static function parse_recording_formats(string $formats): array {
++        if (trim($formats) === '') {
++            return [];
++        }
++        $formatlist = str_getcsv($formats, escape: '\\');
++        $formatlist = array_map('trim', $formatlist);
++        $formatlist = array_filter($formatlist, fn($format) => $format !== '');
++        return array_values(array_unique($formatlist));
++    }
++
++    /**
++     * Get the list of all the recording formats that can be selected as safe formats.
++     *
++     * This list is composed of the official formats (see DEFAULT_RECORDING_FORMATS) and can be
++     * extended, without modifying the source code, by defining additional formats either through the
++     * $CFG->bigbluebuttonbn_recording_additional_formats variable in config.php (comma separated list)
++     * or through the $CFG->bigbluebuttonbn['recording_additional_formats'] array entry.
++     *
++     * @return string[] array indexed by format identifier and whose value is the format display name
++     */
++    public static function get_recording_formats(): array {
++        $additionalformats = self::parse_recording_formats(self::get('recording_additional_formats'));
++        $allformats = array_unique(array_merge(self::DEFAULT_RECORDING_FORMATS, $additionalformats));
++        $formats = [];
++        foreach ($allformats as $format) {
++            $formats[$format] = recording_data::type_text($format);
++        }
++        return $formats;
++    }
++
++    /**
++     * Get the list of recording formats that are considered safe, i.e. viewable by everyone.
++     *
++     * @return string[] list of safe format identifiers
++     */
++    public static function get_recording_safe_formats(): array {
++        return self::parse_recording_formats(self::get('recording_safe_formats'));
++    }
++
+     /**
+      * Validates if recording settings are enabled.
+      *
+diff --git a/public/mod/bigbluebuttonbn/classes/output/recording_row_playback.php b/public/mod/bigbluebuttonbn/classes/output/recording_row_playback.php
+index 32ee40b9883..bdb55e0eae4 100644
+--- a/public/mod/bigbluebuttonbn/classes/output/recording_row_playback.php
++++ b/public/mod/bigbluebuttonbn/classes/output/recording_row_playback.php
+@@ -112,12 +112,8 @@ class recording_row_playback implements renderable, templatable {
+             $this->recording->get('courseid'), 'mod/bigbluebuttonbn:managerecordings');
+         $canviewallformats = roles::has_capability_in_course(
+             $this->recording->get('courseid'), 'mod/bigbluebuttonbn:viewallrecordingformats');
+-        $issafeformat = false;
+         // Now check the list of safe formats.
+-        if ($safeformats = config::get('recording_safe_formats')) {
+-            $safeformatarray = str_getcsv($safeformats, escape: '\\');
+-            $issafeformat = in_array($playback['type'], $safeformatarray);
+-        }
++        $issafeformat = in_array($playback['type'], config::get_recording_safe_formats());
+         return ($canmanagerecordings && $canviewallformats) || $issafeformat;
+     }
+ }
+diff --git a/public/mod/bigbluebuttonbn/classes/settings.php b/public/mod/bigbluebuttonbn/classes/settings.php
+index 3d36118ae94..5bb8a638d5c 100644
+--- a/public/mod/bigbluebuttonbn/classes/settings.php
++++ b/public/mod/bigbluebuttonbn/classes/settings.php
+@@ -383,19 +383,14 @@ class settings {
+                 $item,
+                 $recordingsetting
+             );
+-            $recordingsafeformat = [
+-                'notes' => get_string('view_recording_format_notes', 'mod_bigbluebuttonbn'),
+-                'podcast' => get_string('view_recording_format_podcast', 'mod_bigbluebuttonbn'),
+-                'presentation' => get_string('view_recording_format_presentation', 'mod_bigbluebuttonbn'),
+-                'screenshare' => get_string('view_recording_format_screenshare', 'mod_bigbluebuttonbn'),
+-                'statistics' => get_string('view_recording_format_statistics', 'mod_bigbluebuttonbn'),
+-                'video' => get_string('view_recording_format_video', 'mod_bigbluebuttonbn'),
+-            ];
++            // The list of available formats can be extended through the
++            // $CFG->bigbluebuttonbn_recording_additional_formats setting in config.php.
++            $recordingsafeformat = config::get_recording_formats();
+             $item = new configmultiselect(
+                 'bigbluebuttonbn_recording_safe_formats',
+                 get_string('config_recording_safe_formats', 'mod_bigbluebuttonbn'),
+                 get_string('config_recording_safe_formats_description', 'mod_bigbluebuttonbn'),
+-                ['video', 'presentation'],
++                config::DEFAULT_RECORDING_SAFE_FORMATS,
+                 $recordingsafeformat
+             );
+             $this->add_conditional_element(
+diff --git a/public/mod/bigbluebuttonbn/lang/en/bigbluebuttonbn.php b/public/mod/bigbluebuttonbn/lang/en/bigbluebuttonbn.php
+index fe13f805d51..3b882e42967 100644
+--- a/public/mod/bigbluebuttonbn/lang/en/bigbluebuttonbn.php
++++ b/public/mod/bigbluebuttonbn/lang/en/bigbluebuttonbn.php
+@@ -163,7 +163,8 @@ $string['config_recording_refresh_period_description'] = 'How often should the B
+ $string['config_recording_safe_formats'] = 'Recording formats viewable by everyone';
+ $string['config_recording_safe_formats_description'] = 'Select the formats which are viewable by everyone.
+ All other formats are only viewable by teachers and other users with the mod/bigbluebuttonbn:viewallrecordingformats and
+- mod/bigbluebuttonbn:managerecordings capabilities.';
++ mod/bigbluebuttonbn:managerecordings capabilities.
++Additional formats can be added to this list by defining $CFG->bigbluebuttonbn_recording_additional_formats (comma separated list of format names) in config.php.';
+ $string['config_recordingready_enabled'] = 'Send recording available notification';
+ $string['config_recordingready_enabled_description'] = 'If enabled, a notification will be sent when a recording link is available. This feature requires the script post_publish_recording_ready_callback to be enabled on the BigBlueButton server.';
+ $string['config_recordings'] = 'Show recordings';
+diff --git a/public/mod/bigbluebuttonbn/tests/local/config_test.php b/public/mod/bigbluebuttonbn/tests/local/config_test.php
+new file mode 100644
+index 00000000000..03d704fc68a
+--- /dev/null
++++ b/public/mod/bigbluebuttonbn/tests/local/config_test.php
+@@ -0,0 +1,105 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace mod_bigbluebuttonbn\local;
++
++/**
++ * Tests for the config class.
++ *
++ * @package   mod_bigbluebuttonbn
++ * @copyright 2025 onwards, Blindside Networks Inc
++ * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ * @covers    \mod_bigbluebuttonbn\local\config
++ */
++final class config_test extends \advanced_testcase {
++
++    /**
++     * Test parsing of comma separated list of formats.
++     *
++     * @param string $formats
++     * @param array $expected
++     * @dataProvider parse_recording_formats_provider
++     */
++    public function test_parse_recording_formats(string $formats, array $expected): void {
++        $this->assertSame($expected, config::parse_recording_formats($formats));
++    }
++
++    /**
++     * Data provider for test_parse_recording_formats.
++     *
++     * @return array
++     */
++    public static function parse_recording_formats_provider(): array {
++        return [
++            'empty' => ['', []],
++            'spaces only' => ['   ', []],
++            'single' => ['video', ['video']],
++            'multiple' => ['video,presentation', ['video', 'presentation']],
++            'with spaces and duplicates' => [' video , presentation,video,, ', ['video', 'presentation']],
++        ];
++    }
++
++    /**
++     * Test that the default list of recording formats is returned when nothing is defined.
++     */
++    public function test_get_recording_formats_default(): void {
++        $this->resetAfterTest();
++        $formats = config::get_recording_formats();
++        $this->assertSame(config::DEFAULT_RECORDING_FORMATS, array_keys($formats));
++        $this->assertSame(get_string('view_recording_format_video', 'mod_bigbluebuttonbn'), $formats['video']);
++    }
++
++    /**
++     * Test that the list of recording formats can be extended through config.php.
++     */
++    public function test_get_recording_formats_additional(): void {
++        global $CFG;
++        $this->resetAfterTest();
++        $CFG->bigbluebuttonbn_recording_additional_formats = 'transcript, video,chat';
++        $formats = config::get_recording_formats();
++        $this->assertSame(
++            array_merge(config::DEFAULT_RECORDING_FORMATS, ['transcript', 'chat']),
++            array_keys($formats)
++        );
++        // Unknown formats get a capitalised label.
++        $this->assertSame('Transcript', $formats['transcript']);
++        $this->assertSame('Chat', $formats['chat']);
++    }
++
++    /**
++     * Test that the list of recording formats can also be extended through the $CFG->bigbluebuttonbn array.
++     */
++    public function test_get_recording_formats_additional_array(): void {
++        global $CFG;
++        $this->resetAfterTest();
++        $CFG->bigbluebuttonbn = ['recording_additional_formats' => 'transcript'];
++        $this->assertSame(
++            array_merge(config::DEFAULT_RECORDING_FORMATS, ['transcript']),
++            array_keys(config::get_recording_formats())
++        );
++    }
++
++    /**
++     * Test safe formats retrieval.
++     */
++    public function test_get_recording_safe_formats(): void {
++        $this->resetAfterTest();
++        set_config('bigbluebuttonbn_recording_safe_formats', 'video,presentation,transcript');
++        $this->assertSame(['video', 'presentation', 'transcript'], config::get_recording_safe_formats());
++        unset_config('bigbluebuttonbn_recording_safe_formats');
++        $this->assertSame(config::DEFAULT_RECORDING_SAFE_FORMATS, config::get_recording_safe_formats());
++    }
++}
+diff --git a/public/mod/bigbluebuttonbn/tests/output/recording_row_playback_test.php b/public/mod/bigbluebuttonbn/tests/output/recording_row_playback_test.php
+index 61738bf2dcd..0189ce29811 100644
+--- a/public/mod/bigbluebuttonbn/tests/output/recording_row_playback_test.php
++++ b/public/mod/bigbluebuttonbn/tests/output/recording_row_playback_test.php
+@@ -144,7 +144,15 @@ final class recording_row_playback_test extends \advanced_testcase {
+                 'role' => 'student',
+                 'canview' => ['video', 'presentation', 'settings'],
+                 'globalsettings' => (object) ['bigbluebuttonbn_recording_safe_formats' => 'video,presentation,settings']
+-            ]
++            ],
++            'student can see additional format declared in config.php and marked as safe' => [
++                'role' => 'student',
++                'canview' => ['video', 'presentation', 'settings'],
++                'globalsettings' => (object) [
++                    'bigbluebuttonbn_recording_additional_formats' => 'settings',
++                    'bigbluebuttonbn_recording_safe_formats' => 'video,presentation,settings',
++                ],
++            ],
+ 
+         ];
+     }

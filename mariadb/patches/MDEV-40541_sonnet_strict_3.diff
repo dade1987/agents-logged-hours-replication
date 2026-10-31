@@ -1,0 +1,19 @@
+diff --git a/sql/sql_acl.cc b/sql/sql_acl.cc
+index d4a7606d..0297334a 100644
+--- a/sql/sql_acl.cc
++++ b/sql/sql_acl.cc
+@@ -3704,7 +3704,13 @@ privilege_t acl_get(const char *host, const char *ip,
+   acl_entry *entry;
+   DBUG_ENTER("acl_get");
+ 
+-  tmp_db= strmov(strmov(key, safe_str(ip)) + 1, user) + 1;
++  /*
++    Roles are looked up with host="" and ip="", which would otherwise give
++    the same cache key as a user connected via a socket/pipe with the
++    same name. Use a marker that cannot be a valid ip in the key for roles.
++  */
++  const char *key_ip= (host && !host[0] && ip && !ip[0]) ? "\1" : safe_str(ip);
++  tmp_db= strmov(strmov(key, key_ip) + 1, user) + 1;
+   end= strnmov(tmp_db, db, key + sizeof(key) - tmp_db);
+ 
+   if (end >= key + sizeof(key)) // db name was truncated

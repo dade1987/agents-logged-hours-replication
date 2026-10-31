@@ -1,0 +1,113 @@
+diff --git a/mysql-test/suite/innodb/r/import_bugs.result b/mysql-test/suite/innodb/r/import_bugs.result
+index 20e70f03..c764f047 100644
+--- a/mysql-test/suite/innodb/r/import_bugs.result
++++ b/mysql-test/suite/innodb/r/import_bugs.result
+@@ -39,6 +39,9 @@ id INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,
+ PRIMARY KEY (id)
+ ) ENGINE=INNODB;
+ CREATE TABLE t2 LIKE t1;
++connect mvcc,localhost,root;
++START TRANSACTION WITH CONSISTENT SNAPSHOT;
++connection default;
+ ALTER TABLE t2 DISCARD TABLESPACE;
+ INSERT INTO t1() VALUES();
+ INSERT INTO t1() VALUES();
+@@ -64,6 +67,11 @@ id
+ 3
+ 4
+ 5
++connection mvcc;
++SELECT * FROM t2;
++ERROR HY000: Table definition has changed, please retry transaction
++disconnect mvcc;
++connection default;
+ DROP TABLE t2;
+ #
+ # MDEV-34181  Instant table aborts after discard tablespace
+diff --git a/mysql-test/suite/innodb/r/mvcc.result b/mysql-test/suite/innodb/r/mvcc.result
+index 215b2165..fbee79b6 100644
+--- a/mysql-test/suite/innodb/r/mvcc.result
++++ b/mysql-test/suite/innodb/r/mvcc.result
+@@ -20,10 +20,8 @@ ALTER TABLE t1 DISCARD TABLESPACE;
+ ALTER TABLE t1 IMPORT TABLESPACE;
+ disconnect con1;
+ connection default;
+-# FIXME: Block this with ER_TABLE_DEF_CHANGED
+ SELECT * FROM t1;
+-a
+-0
++ERROR HY000: Table definition has changed, please retry transaction
+ COMMIT;
+ SELECT * FROM t1;
+ a
+diff --git a/mysql-test/suite/innodb/t/import_bugs.test b/mysql-test/suite/innodb/t/import_bugs.test
+index 1b7edcf8..e50effbd 100644
+--- a/mysql-test/suite/innodb/t/import_bugs.test
++++ b/mysql-test/suite/innodb/t/import_bugs.test
+@@ -53,6 +53,10 @@ CREATE TABLE t1(
+ 
+ CREATE TABLE t2 LIKE t1;
+ 
++--connect mvcc,localhost,root
++START TRANSACTION WITH CONSISTENT SNAPSHOT;
++--connection default
++
+ ALTER TABLE t2 DISCARD TABLESPACE;
+ 
+ INSERT INTO t1() VALUES();
+@@ -80,6 +84,12 @@ INSERT INTO t2() VALUES();
+ INSERT INTO t2() VALUES();
+ 
+ SELECT * FROM t2 ORDER BY id;
++
++--connection mvcc
++--error ER_TABLE_DEF_CHANGED
++SELECT * FROM t2;
++--disconnect mvcc
++--connection default
+ DROP TABLE t2;
+ 
+ --echo #
+diff --git a/mysql-test/suite/innodb/t/mvcc.test b/mysql-test/suite/innodb/t/mvcc.test
+index 7c37718c..dca702fc 100644
+--- a/mysql-test/suite/innodb/t/mvcc.test
++++ b/mysql-test/suite/innodb/t/mvcc.test
+@@ -43,7 +43,7 @@ ALTER TABLE t1 IMPORT TABLESPACE;
+ disconnect con1;
+ 
+ connection default;
+---echo # FIXME: Block this with ER_TABLE_DEF_CHANGED
++--error ER_TABLE_DEF_CHANGED
+ SELECT * FROM t1;
+ COMMIT;
+ SELECT * FROM t1;
+diff --git a/storage/innobase/row/row0import.cc b/storage/innobase/row/row0import.cc
+index c589b8f2..036bb805 100644
+--- a/storage/innobase/row/row0import.cc
++++ b/storage/innobase/row/row0import.cc
+@@ -2208,6 +2208,14 @@ static void reload_fts_table(row_prebuilt_t *prebuilt,
+   prebuilt->table=
+     dict_table_open_on_id(id, true, DICT_TABLE_OP_NORMAL);
+   prebuilt->table->space= table->space;
++  /* Prevent any older read views from accessing the imported data;
++  see row_merge_is_index_usable(). */
++  const trx_id_t trx_id= table->def_trx_id;
++  if (prebuilt->table->def_trx_id < trx_id)
++    prebuilt->table->def_trx_id= trx_id;
++  for (dict_index_t *index= UT_LIST_GET_FIRST(prebuilt->table->indexes);
++       index; index= UT_LIST_GET_NEXT(indexes, index))
++    index->trx_id= trx_id;
+ }
+ 
+ /** Clean up after import tablespace.
+@@ -3750,6 +3758,10 @@ row_import_update_index_root(trx_t* trx, dict_table_t* table, bool reset)
+ 	     index != 0;
+ 	     index = dict_table_get_next_index(index)) {
+ 
++		/* Prevent any older read views from accessing the
++		discarded or imported data; see row_merge_is_index_usable(). */
++		index->trx_id = trx->id;
++
+ 		pars_info_t*	info;
+ 		ib_uint32_t	page;
+ 		ib_uint32_t	space;

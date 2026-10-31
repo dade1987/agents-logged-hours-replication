@@ -1,0 +1,602 @@
+Logging: /home/user/mdb_src/mysql-test/mariadb-test-run.pl  --vardir=/home/mtr/var/t --force --parallel=4 --retry=0 main.partition_range_interval
+VS config: 
+vardir: /home/mtr/var/t
+Removing old var directory...
+Creating var directory '/home/mtr/var/t'...
+Checking supported features...
+MariaDB Version 13.1.2-MariaDB-debug
+ - SSL connections supported
+ - binaries are debug compiled
+Collecting tests...
+Installing system database...
+
+==============================================================================
+
+TEST                                  WORKER RESULT   TIME (ms) or COMMENT
+--------------------------------------------------------------------------
+
+worker[01] Using MTR_BUILD_THREAD 300, with reserved ports 19000..19029
+worker[03] Using MTR_BUILD_THREAD 302, with reserved ports 19060..19089
+worker[02] Using MTR_BUILD_THREAD 301, with reserved ports 19030..19059
+worker[04] Using MTR_BUILD_THREAD 303, with reserved ports 19090..19119
+main.partition_range_interval            w1 [ fail ]
+        Test ended at 2026-10-29 01:36:03
+
+CURRENT_TEST: main.partition_range_interval
+mysqltest: At line 1062: query 'CREATE PROCEDURE p(v INT)
+CREATE TABLE t1(c DATE) PARTITION BY RANGE COLUMNS(c)
+INTERVAL v DAY
+(PARTITION p0 VALUES LESS THAN ('2000-01-01'))' failed with wrong errno <Unknown> (2013): 'Lost connection to server during query', instead of ER_PART_WRONG_VALUE (4127)...
+
+The result from queries just before the failure was:
+< snip >
+PARTITION p0 VALUES LESS THAN ('2026-04-20')
+);
+ERROR HY000: Wrong parameters for partitioned `t1`: wrong value for 'INTERVAL'
+#
+# MDEV-40978 PREPARE with INTERVAL ? in Partition DDL Crashes the Server (DoS)
+#
+PREPARE s FROM 'CREATE TABLE t1(c DATE)
+  PARTITION BY RANGE COLUMNS(c)
+  INTERVAL ? DAY
+  (PARTITION p0 VALUES LESS THAN ("2000-01-01"))';
+ERROR HY000: Wrong parameters for partitioned `t1`: wrong value for 'INTERVAL'
+PREPARE s FROM 'CREATE TABLE t1(c DATE)
+  PARTITION BY RANGE COLUMNS(c)
+  INTERVAL (1 + ?) DAY
+  (PARTITION p0 VALUES LESS THAN ("2000-01-01"))';
+ERROR HY000: Wrong parameters for partitioned `t1`: wrong value for 'INTERVAL'
+CREATE PROCEDURE p(v INT)
+CREATE TABLE t1(c DATE) PARTITION BY RANGE COLUMNS(c)
+INTERVAL v DAY
+(PARTITION p0 VALUES LESS THAN ('2000-01-01'));
+
+More results from queries before failure can be found in /home/mtr/var/t/1/log/partition_range_interval.log
+
+
+Server [mysqld.1 - pid: 18121, winpid: 18121, exit: 256] failed during test run
+Server log from this test:
+----------SERVER LOG START-----------
+$ /home/user/mdb_build_dbg/sql/mariadbd --defaults-group-suffix=.1 --defaults-file=/home/mtr/var/t/1/my.cnf --log-output=file --loose-enable-partition --innodb --innodb-cmpmem --innodb-cmp-per-index --innodb-trx --innodb-locks --innodb-lock-waits --innodb-metrics --innodb-buffer-pool-stats --innodb-buffer-page --innodb-buffer-page-lru --innodb-sys-columns --innodb-sys-fields --innodb-sys-foreign --innodb-sys-foreign-cols --innodb-sys-indexes --innodb-sys-tables --innodb-sys-virtual --loose-sequence --core-file --loose-debug-sync-timeout=300
+2026-10-29  1:35:40 0 [Warning] Could not increase number of max_open_files to more than 1024 (request: 32186)
+2026-10-29  1:35:40 0 [Warning] Changed limits: max_open_files: 1024  max_connections: 151 (was 151)  table_cache: 421 (was 2000)
+2026-10-29  1:35:40 0 [Note] Starting MariaDB 13.1.2-MariaDB-debug-log source revision 5ab51d6248bb6dc2c5a8c3d3cd7a8d2d721224d8 server_uid NzS151uu8ZVD58aPAFsNZrW2jyI= as process 18122
+2026-10-29  1:35:40 0 [Note] Help others discover MariaDB. Star it on GitHub: https://github.com/MariaDB/server
+2026-10-29  1:35:40 0 [Note] InnoDB: !!!!!!!! UNIV_DEBUG switched on !!!!!!!!!
+2026-10-29  1:35:40 0 [Note] InnoDB: Compressed tables use zlib 1.3
+2026-10-29  1:35:40 0 [Note] InnoDB: Number of transaction pools: 1
+2026-10-29  1:35:40 0 [Note] InnoDB: Using AVX512 instructions
+2026-10-29  1:35:40 0 [Note] InnoDB: innodb_buffer_pool_size_max=8388608m, innodb_buffer_pool_size=8m
+2026-10-29  1:35:40 0 [Note] InnoDB: Completed initialization of buffer pool
+2026-10-29  1:35:40 0 [Note] InnoDB: File system buffers for log disabled (block size=4096 bytes)
+2026-10-29  1:35:40 0 [Note] InnoDB: End of log at LSN=54747
+2026-10-29  1:35:40 0 [Note] InnoDB: Opened 3 undo tablespaces
+2026-10-29  1:35:40 0 [Note] InnoDB: 128 rollback segments in 3 undo tablespaces are active.
+2026-10-29  1:35:40 0 [Note] InnoDB: Setting file './ibtmp1' size to 12.000MiB. Physically writing the file full; Please wait ...
+2026-10-29  1:35:40 0 [Note] InnoDB: File './ibtmp1' size is now 12.000MiB.
+2026-10-29  1:35:40 0 [Note] InnoDB: log sequence number 54747; transaction id 16
+2026-10-29  1:35:40 0 [Note] InnoDB: Loading buffer pool(s) from /home/mtr/var/t/1/mysqld.1/data/ib_buffer_pool
+2026-10-29  1:35:40 0 [Note] Plugin 'INNODB_FT_CONFIG' is disabled.
+2026-10-29  1:35:40 0 [Note] Plugin 'INNODB_SYS_TABLESTATS' is disabled.
+2026-10-29  1:35:40 0 [Note] Plugin 'INNODB_FT_DELETED' is disabled.
+2026-10-29  1:35:40 0 [Note] Plugin 'INNODB_FT_BEING_DELETED' is disabled.
+2026-10-29  1:35:40 0 [Note] Plugin 'THREAD_POOL_WAITS' is disabled.
+2026-10-29  1:35:40 0 [Note] Plugin 'THREAD_POOL_QUEUES' is disabled.
+2026-10-29  1:35:40 0 [Note] Plugin 'INNODB_CMP' is disabled.
+2026-10-29  1:35:40 0 [Note] Plugin 'INNODB_CMPMEM_RESET' is disabled.
+2026-10-29  1:35:40 0 [Note] Plugin 'FEEDBACK' is disabled.
+2026-10-29  1:35:40 0 [Note] Plugin 'INNODB_FT_INDEX_TABLE' is disabled.
+2026-10-29  1:35:40 0 [Note] Plugin 'INNODB_CMP_PER_INDEX_RESET' is disabled.
+2026-10-29  1:35:40 0 [Note] Plugin 'THREAD_POOL_GROUPS' is disabled.
+2026-10-29  1:35:40 0 [Note] Plugin 'INNODB_CMP_RESET' is disabled.
+2026-10-29  1:35:40 0 [Note] Plugin 'INNODB_FT_INDEX_CACHE' is disabled.
+2026-10-29  1:35:40 0 [Note] Plugin 'INNODB_FT_DEFAULT_STOPWORD' is disabled.
+2026-10-29  1:35:40 0 [Note] InnoDB: Buffer pool(s) load completed at 261029  1:35:40
+2026-10-29  1:35:40 0 [Note] Plugin 'INNODB_SYS_TABLESPACES' is disabled.
+2026-10-29  1:35:40 0 [Note] Plugin 'user_variables' is disabled.
+2026-10-29  1:35:40 0 [Note] Plugin 'INNODB_TABLESPACES_ENCRYPTION' is disabled.
+2026-10-29  1:35:40 0 [Note] Plugin 'THREAD_POOL_STATS' is disabled.
+2026-10-29  1:35:40 0 [Note] Plugin 'unix_socket' is disabled.
+2026-10-29  1:35:40 0 [Warning] /home/user/mdb_build_dbg/sql/mariadbd: unknown option '--loose-pam-debug'
+2026-10-29  1:35:40 0 [Warning] /home/user/mdb_build_dbg/sql/mariadbd: unknown option '--loose-aria'
+2026-10-29  1:35:40 0 [Note] Server socket created on IP: '127.0.0.1', port: '19000'.
+2026-10-29  1:35:40 0 [Note] mariadbd: Event Scheduler: Loaded 0 events
+2026-10-29  1:35:40 0 [Note] /home/user/mdb_build_dbg/sql/mariadbd: ready for connections.
+Version: '13.1.2-MariaDB-debug-log'  socket: '/home/mtr/var/t/tmp/1/mysqld.1.sock'  port: 19000  Source distribution
+2026-10-29  1:35:43 4 [ERROR] InnoDB: Operating system error number 17 in a file operation.
+2026-10-29  1:35:43 4 [ERROR] InnoDB: Error number 17 means 'File exists'
+2026-10-29  1:35:43 4 [Note] InnoDB: Some operating system error numbers are described at https://mariadb.com/docs/server/reference/error-codes/operating-system-error-codes
+2026-10-29  1:35:43 4 [ERROR] InnoDB: The file './test/t1#P#p1.ibd' already exists though the corresponding table did not exist in the InnoDB data dictionary. You can resolve the problem by removing the file.
+261029  1:35:43 [ERROR] /home/user/mdb_build_dbg/sql/mariadbd got signal 11 ;
+Sorry, we probably made a mistake, and this is a bug.
+
+Your assistance in bug reporting will enable us to fix this for the next release.
+To report this bug, see https://mariadb.com/docs/general-resources/community/community/bug-tracking/reporting-bugs about how to report
+a bug on https://jira.mariadb.org/.
+
+Please include the information from the server start above, to the end of the
+information below.
+
+Server version: 13.1.2-MariaDB-debug-log source revision: 5ab51d6248bb6dc2c5a8c3d3cd7a8d2d721224d8
+
+The information page at https://mariadb.com/docs/server/reference/product-development/mariadb-fault-finding/how-to-produce-a-full-stack-trace-for-mariadbdcontains instructions to obtain a better version of the backtrace below.
+Following these instructions will help MariaDB developers provide a fix quicker.
+
+Attempting backtrace. Include this in the bug report.
+(note: Retrieving this information may fail)
+
+Thread pointer: 0x7767b4000dd0
+stack_bottom = 0x7f67e146c000 thread_stack 0x49000
+/home/user/mdb_build_dbg/sql/mariadbd(my_print_stacktrace+0x44)[0x5591178b8448]
+/home/user/mdb_build_dbg/sql/mariadbd(handle_fatal_signal+0x28d)[0x559116df8b29]
+libc_sigaction.c:0(__restore_rt)[0x7f67e9045330]
+sql/sql_array.h:71(Bounds_checked_array<Item_field*>::operator[](unsigned long) const)[0x5591167c1bf0]
+sql/sp_rcontext.h:234(sp_rcontext::get_variable(unsigned int) const)[0x5591167c13df]
+sql/item.cc:1891(Item_splocal::get_variable(sp_rcontext*) const)[0x559116e2643e]
+sql/item.cc:1897(Item_splocal::fix_fields(THD*, Item**))[0x559116e264fc]
+sql/item.h:1149(Item::fix_fields_if_needed(THD*, Item**))[0x55911677ec82]
+sql/item.h:1158(Item::fix_fields_if_needed_for_scalar(THD*, Item**))[0x55911677ecbb]
+sql/sql_partition_auto_interval.cc:405(partition_info::set_range_interval(THD*, Item*, interval_type, char const*))[0x55911692d8da]
+sql/sql_yacc.yy:5182(MYSQLparse(THD*))[0x559116d1bf50]
+sql/sql_parse.cc:10351(parse_sql(THD*, Parser_state*, Object_creation_ctx*, bool))[0x55911690d6b0]
+sql/sql_parse.cc:7907(mysql_parse(THD*, char*, unsigned int, Parser_state*))[0x559116907b5a]
+sql/sql_parse.cc:1905(dispatch_command(enum_server_command, THD*, char*, unsigned int, bool))[0x5591168f6944]
+sql/sql_parse.cc:1437(do_command(THD*, bool))[0x5591168f568b]
+sql/sql_connect.cc:1514(do_handle_one_connection(CONNECT*, bool))[0x559116b48274]
+sql/sql_connect.cc:1428(handle_one_connection)[0x559116b48000]
+perfschema/pfs.cc:2200(pfs_spawn_thread)[0x5591171c22ac]
+nptl/pthread_create.c:447(start_thread)[0x7f67e909cb84]
+x86_64/clone3.S:80(clone3)[0x7f67e9129ecc]
+
+Connection ID (thread ID): 4
+Status: NOT_KILLED
+Query (0x7767b4018180): CREATE PROCEDURE p(v INT)
+CREATE TABLE t1(c DATE) PARTITION BY RANGE COLUMNS(c)
+INTERVAL v DAY
+(PARTITION p0 VALUES LESS THAN ('2000-01-01'))
+
+Optimizer switch: index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,index_merge_sort_intersection=off,index_condition_pushdown=on,derived_merge=on,derived_with_keys=on,firstmatch=on,loosescan=on,duplicateweedout=on,materialization=on,in_to_exists=on,semijoin=on,partial_match_rowid_merge=on,partial_match_table_scan=on,subquery_cache=on,mrr=off,mrr_cost_based=off,mrr_sort_keys=off,outer_join_with_cache=on,semijoin_with_cache=on,join_cache_incremental=on,join_cache_hashed=on,join_cache_bka=on,optimize_join_buffer_size=on,table_elimination=on,extended_keys=on,exists_to_in=on,orderby_uses_equalities=on,condition_pushdown_for_derived=on,split_materialized=on,condition_pushdown_for_subquery=on,rowid_filter=on,condition_pushdown_from_having=on,not_null_range_scan=off,hash_join_cardinality=on,cset_narrowing=on,sargable_casefold=on,reorder_outer_joins=off
+
+Writing a core file...
+Working directory at /home/mtr/var/t/1/mysqld.1/data
+Resource Limits (excludes unlimited resources):
+Limit                     Soft Limit           Hard Limit           Units     
+Max stack size            8388608              unlimited            bytes     
+Max processes             64279                64279                processes 
+Max open files            1024                 1024                 files     
+Max locked memory         8388608              8388608              bytes     
+Max pending signals       64279                64279                signals   
+Max msgqueue size         819200               819200               bytes     
+Max nice priority         0                    0                    
+Max realtime priority     0                    0                    
+Core pattern: core
+
+Kernel version: Linux version 6.18.44-fc-v185 (builder@sandboxing) (gcc (GCC) 15.3.0, GNU ld (GNU Binutils) 2.46) #1 SMP PREEMPT_DYNAMIC @0
+
+----------SERVER LOG END-------------
+
+
+ - found 'core' (0/5)
+Core generated by '/home/user/mdb_build_dbg/sql/mariadbd'
+Output from gdb follows. The first stack trace is from the failing thread.
+The following stack traces are from all threads (so the failing one is
+duplicated).
+--------------------------
+
+warning: Can't open file /home/mtr/var/t/1/mysqld.1/data/tc.log during file-backed mapping note processing
+[New LWP 18136]
+[New LWP 18123]
+[New LWP 18129]
+[New LWP 18126]
+[New LWP 18132]
+[New LWP 18127]
+[New LWP 18143]
+[New LWP 18130]
+[New LWP 18140]
+[New LWP 18131]
+[New LWP 18144]
+[New LWP 18141]
+[New LWP 18128]
+[New LWP 18122]
+[New LWP 18139]
+[New LWP 18124]
+[New LWP 18125]
+[New LWP 18133]
+[New LWP 18142]
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+Core was generated by `/home/user/mdb_build_dbg/sql/mariadbd --defaults-group-suffix=.1 --defaults-fil'.
+Program terminated with signal SIGSEGV, Segmentation fault.
+#0  __pthread_kill_implementation (no_tid=0, signo=11, threadid=<optimized out>) at ./nptl/pthread_kill.c:44
+
+warning: 44	./nptl/pthread_kill.c: No such file or directory
+[Current thread is 1 (Thread 0x7f67e146b6c0 (LWP 18136))]
+
+Thread 19 (Thread 0x7767d0ff96c0 (LWP 18142)):
+#0  0x00007f67e9098e51 in __futex_abstimed_wait_common64 (private=1, cancel=true, abstime=0x7767d0ff8a50, op=137, expected=0, futex_word=0x5591501cab1c) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=1, abstime=0x7767d0ff8a50, clockid=21905, expected=0, futex_word=0x5591501cab1c) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5591501cab1c, expected=expected@entry=0, clockid=clockid@entry=1, abstime=abstime@entry=0x7767d0ff8a50, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007f67e909c1f6 in __pthread_cond_wait_common (abstime=<optimized out>, clockid=<optimized out>, mutex=0x5591501ca588, cond=0x5591501caaf0) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_clockwait64 (abstime=<optimized out>, clockid=<optimized out>, mutex=0x5591501ca588, cond=0x5591501caaf0) at ./nptl/pthread_cond_wait.c:691
+#5  ___pthread_cond_clockwait64 (cond=0x5591501caaf0, mutex=0x5591501ca588, clockid=<optimized out>, abstime=<optimized out>) at ./nptl/pthread_cond_wait.c:679
+#6  0x000055911780a7a9 in std::__condvar::wait_until (this=0x5591501caaf0, __m=..., __clock=1, __abs_time=...) at /usr/include/c++/13/bits/std_mutex.h:185
+#7  0x000055911780d5a5 in std::condition_variable::__wait_until_impl<std::chrono::duration<long, std::ratio<1l, 1000000000l> > > (this=0x5591501caaf0, __lock=..., __atime=std::chrono::_V2::steady_clock time_point = { 19534790685501ns }) at /usr/include/c++/13/condition_variable:203
+#8  0x000055911780c6bd in std::condition_variable::wait_until<std::chrono::duration<long, std::ratio<1l, 1000000000l> > > (this=0x5591501caaf0, __lock=..., __atime=std::chrono::_V2::steady_clock time_point = { 19534790685501ns }) at /usr/include/c++/13/condition_variable:113
+#9  0x000055911780b939 in std::condition_variable::wait_for<long, std::ratio<1l, 1000l> > (this=0x5591501caaf0, __lock=..., __rtime=std::chrono::duration = { 60000ms }) at /usr/include/c++/13/condition_variable:165
+#10 0x0000559117808aa1 in tpool::thread_pool_generic::wait_for_tasks (this=0x5591501ca400, lk=..., thread_data=0x5591501caaf0) at /home/user/mdb_src/tpool/tpool_generic.cc:431
+#11 0x0000559117808cbb in tpool::thread_pool_generic::get_task (this=0x5591501ca400, thread_var=0x5591501caaf0, t=0x7767d0ff8ba0) at /home/user/mdb_src/tpool/tpool_generic.cc:484
+#12 0x00005591178090a2 in tpool::thread_pool_generic::worker_main (this=0x5591501ca400, thread_var=0x5591501caaf0) at /home/user/mdb_src/tpool/tpool_generic.cc:529
+#13 0x0000559117811364 in std::__invoke_impl<void, void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> (__f=@0x7f67d8002918: (void (tpool::thread_pool_generic::*)(class tpool::thread_pool_generic * const, struct tpool::worker_data *)) 0x559117808f14 <tpool::thread_pool_generic::worker_main(tpool::worker_data*)>, __t=@0x7f67d8002910: 0x5591501ca400) at /usr/include/c++/13/bits/invoke.h:74
+#14 0x000055911781126a in std::__invoke<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> (__fn=@0x7f67d8002918: (void (tpool::thread_pool_generic::*)(class tpool::thread_pool_generic * const, struct tpool::worker_data *)) 0x559117808f14 <tpool::thread_pool_generic::worker_main(tpool::worker_data*)>) at /usr/include/c++/13/bits/invoke.h:96
+#15 0x0000559117811189 in std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> >::_M_invoke<0ul, 1ul, 2ul> (this=0x7f67d8002908) at /usr/include/c++/13/bits/std_thread.h:292
+#16 0x0000559117811122 in std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> >::operator() (this=0x7f67d8002908) at /usr/include/c++/13/bits/std_thread.h:299
+#17 0x0000559117811102 in std::thread::_State_impl<std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> > >::_M_run (this=0x7f67d8002900) at /usr/include/c++/13/bits/std_thread.h:244
+#18 0x00007f67e94ecdb4 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#19 0x00007f67e909cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#20 0x00007f67e9129ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 18 (Thread 0x7f67e14b66c0 (LWP 18133)):
+#0  0x00007f67e9098e51 in __futex_abstimed_wait_common64 (private=5, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x5591189902cc <COND_slave_deadlock_handler+44>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=5, abstime=0x0, clockid=0, expected=0, futex_word=0x5591189902cc <COND_slave_deadlock_handler+44>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5591189902cc <COND_slave_deadlock_handler+44>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007f67e909b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x559118992aa8 <LOCK_slave_deadlock_handler+40>, cond=0x5591189902a0 <COND_slave_deadlock_handler>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x5591189902a0 <COND_slave_deadlock_handler>, mutex=0x559118992aa8 <LOCK_slave_deadlock_handler+40>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00005591178bc9b8 in safe_cond_wait (cond=0x5591189902a0 <COND_slave_deadlock_handler>, mp=0x559118992a80 <LOCK_slave_deadlock_handler>, file=0x559117fd82d8 "/home/user/mdb_src/mysys/my_thr_init.c", line=580) at /home/user/mdb_src/mysys/thr_mutex.c:490
+#6  0x00005591178b6997 in psi_cond_wait (that=0x5591189902a0 <COND_slave_deadlock_handler>, mutex=0x559118992a80 <LOCK_slave_deadlock_handler>, file=0x5591179ee4c0 "/home/user/mdb_src/sql/slave.cc", line=500) at /home/user/mdb_src/mysys/my_thr_init.c:580
+#7  0x000055911678014f in inline_mysql_cond_wait (that=0x5591189902a0 <COND_slave_deadlock_handler>, mutex=0x559118992a80 <LOCK_slave_deadlock_handler>, src_file=0x5591179ee4c0 "/home/user/mdb_src/sql/slave.cc", src_line=500) at /home/user/mdb_src/include/mysql/psi/mysql_thread.h:1070
+#8  0x0000559116781920 in slave_deadlock_handler (arg=0x0) at /home/user/mdb_src/sql/slave.cc:500
+#9  0x00005591171c22ac in pfs_spawn_thread (arg=0x559150852030) at /home/user/mdb_src/storage/perfschema/pfs.cc:2198
+#10 0x00007f67e909cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#11 0x00007f67e9129ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 17 (Thread 0x7f67e254e6c0 (LWP 18125)):
+#0  0x00007f67e9098e51 in __futex_abstimed_wait_common64 (private=889192703, cancel=true, abstime=0x7f67e254da50, op=137, expected=0, futex_word=0x5591501ca6bc) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=889192703, abstime=0x7f67e254da50, clockid=87829761, expected=0, futex_word=0x5591501ca6bc) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5591501ca6bc, expected=expected@entry=0, clockid=clockid@entry=1, abstime=abstime@entry=0x7f67e254da50, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007f67e909c1f6 in __pthread_cond_wait_common (abstime=<optimized out>, clockid=<optimized out>, mutex=0x5591501ca588, cond=0x5591501ca690) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_clockwait64 (abstime=<optimized out>, clockid=<optimized out>, mutex=0x5591501ca588, cond=0x5591501ca690) at ./nptl/pthread_cond_wait.c:691
+#5  ___pthread_cond_clockwait64 (cond=0x5591501ca690, mutex=0x5591501ca588, clockid=<optimized out>, abstime=<optimized out>) at ./nptl/pthread_cond_wait.c:679
+#6  0x000055911780a7a9 in std::__condvar::wait_until (this=0x5591501ca690, __m=..., __clock=1, __abs_time=...) at /usr/include/c++/13/bits/std_mutex.h:185
+#7  0x000055911780d5a5 in std::condition_variable::__wait_until_impl<std::chrono::duration<long, std::ratio<1l, 1000000000l> > > (this=0x5591501ca690, __lock=..., __atime=std::chrono::_V2::steady_clock time_point = { 19516796976513ns }) at /usr/include/c++/13/condition_variable:203
+#8  0x000055911780c6bd in std::condition_variable::wait_until<std::chrono::duration<long, std::ratio<1l, 1000000000l> > > (this=0x5591501ca690, __lock=..., __atime=std::chrono::_V2::steady_clock time_point = { 19516796976513ns }) at /usr/include/c++/13/condition_variable:113
+#9  0x000055911780b939 in std::condition_variable::wait_for<long, std::ratio<1l, 1000l> > (this=0x5591501ca690, __lock=..., __rtime=std::chrono::duration = { 60000ms }) at /usr/include/c++/13/condition_variable:165
+#10 0x0000559117808aa1 in tpool::thread_pool_generic::wait_for_tasks (this=0x5591501ca400, lk=..., thread_data=0x5591501ca690) at /home/user/mdb_src/tpool/tpool_generic.cc:431
+#11 0x0000559117808cbb in tpool::thread_pool_generic::get_task (this=0x5591501ca400, thread_var=0x5591501ca690, t=0x7f67e254dba0) at /home/user/mdb_src/tpool/tpool_generic.cc:484
+#12 0x00005591178090a2 in tpool::thread_pool_generic::worker_main (this=0x5591501ca400, thread_var=0x5591501ca690) at /home/user/mdb_src/tpool/tpool_generic.cc:529
+#13 0x0000559117811364 in std::__invoke_impl<void, void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> (__f=@0x7f67dc003578: (void (tpool::thread_pool_generic::*)(class tpool::thread_pool_generic * const, struct tpool::worker_data *)) 0x559117808f14 <tpool::thread_pool_generic::worker_main(tpool::worker_data*)>, __t=@0x7f67dc003570: 0x5591501ca400) at /usr/include/c++/13/bits/invoke.h:74
+#14 0x000055911781126a in std::__invoke<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> (__fn=@0x7f67dc003578: (void (tpool::thread_pool_generic::*)(class tpool::thread_pool_generic * const, struct tpool::worker_data *)) 0x559117808f14 <tpool::thread_pool_generic::worker_main(tpool::worker_data*)>) at /usr/include/c++/13/bits/invoke.h:96
+#15 0x0000559117811189 in std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> >::_M_invoke<0ul, 1ul, 2ul> (this=0x7f67dc003568) at /usr/include/c++/13/bits/std_thread.h:292
+#16 0x0000559117811122 in std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> >::operator() (this=0x7f67dc003568) at /usr/include/c++/13/bits/std_thread.h:299
+#17 0x0000559117811102 in std::thread::_State_impl<std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> > >::_M_run (this=0x7f67dc003560) at /usr/include/c++/13/bits/std_thread.h:244
+#18 0x00007f67e94ecdb4 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#19 0x00007f67e909cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#20 0x00007f67e9129ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 16 (Thread 0x7f67e31506c0 (LWP 18124)):
+#0  0x00007f67e9098e51 in __futex_abstimed_wait_common64 (private=21905, cancel=true, abstime=0x7f67e314fba0, op=393, expected=0, futex_word=0x5591191e2588 <COND_checkpoint+40>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=21905, abstime=0x7f67e314fba0, clockid=0, expected=0, futex_word=0x5591191e2588 <COND_checkpoint+40>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5591191e2588 <COND_checkpoint+40>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x7f67e314fba0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007f67e909bd6e in __pthread_cond_wait_common (abstime=0x7f67e314fba0, clockid=0, mutex=0x5591191e24c8 <LOCK_checkpoint+40>, cond=0x5591191e2560 <COND_checkpoint>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_timedwait64 (cond=0x5591191e2560 <COND_checkpoint>, mutex=0x5591191e24c8 <LOCK_checkpoint+40>, abstime=0x7f67e314fba0) at ./nptl/pthread_cond_wait.c:652
+#5  0x00005591178bcd7d in safe_cond_timedwait (cond=0x5591191e2560 <COND_checkpoint>, mp=0x5591191e24a0 <LOCK_checkpoint>, abstime=0x7f67e314fba0, file=0x559117fd82d8 "/home/user/mdb_src/mysys/my_thr_init.c", line=593) at /home/user/mdb_src/mysys/thr_mutex.c:544
+#6  0x00005591178b6a4a in psi_cond_timedwait (that=0x5591191e2560 <COND_checkpoint>, mutex=0x5591191e24a0 <LOCK_checkpoint>, abstime=0x7f67e314fba0, file=0x559117d54c78 "/home/user/mdb_src/storage/maria/ma_servicethread.c", line=115) at /home/user/mdb_src/mysys/my_thr_init.c:593
+#7  0x000055911710822c in inline_mysql_cond_timedwait (that=0x5591191e2560 <COND_checkpoint>, mutex=0x5591191e24a0 <LOCK_checkpoint>, abstime=0x7f67e314fba0, src_file=0x559117d54c78 "/home/user/mdb_src/storage/maria/ma_servicethread.c", src_line=115) at /home/user/mdb_src/include/mysql/psi/mysql_thread.h:1086
+#8  0x00005591171087a0 in my_service_thread_sleep (control=0x559118778780 <checkpoint_control>, sleep_time=29000000000) at /home/user/mdb_src/storage/maria/ma_servicethread.c:115
+#9  0x00005591170fbacd in ma_checkpoint_background (arg=0x1e) at /home/user/mdb_src/storage/maria/ma_checkpoint.c:760
+#10 0x00005591171c22ac in pfs_spawn_thread (arg=0x5591501b3e80) at /home/user/mdb_src/storage/perfschema/pfs.cc:2198
+#11 0x00007f67e909cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#12 0x00007f67e9129ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 15 (Thread 0x7767d27fc6c0 (LWP 18139)):
+#0  0x00007f67e9098e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x7767d27fba50, op=137, expected=0, futex_word=0x5591501ca93c) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x7767d27fba50, clockid=0, expected=0, futex_word=0x5591501ca93c) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5591501ca93c, expected=expected@entry=0, clockid=clockid@entry=1, abstime=abstime@entry=0x7767d27fba50, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007f67e909c1f6 in __pthread_cond_wait_common (abstime=<optimized out>, clockid=<optimized out>, mutex=0x5591501ca588, cond=0x5591501ca910) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_clockwait64 (abstime=<optimized out>, clockid=<optimized out>, mutex=0x5591501ca588, cond=0x5591501ca910) at ./nptl/pthread_cond_wait.c:691
+#5  ___pthread_cond_clockwait64 (cond=0x5591501ca910, mutex=0x5591501ca588, clockid=<optimized out>, abstime=<optimized out>) at ./nptl/pthread_cond_wait.c:679
+#6  0x000055911780a7a9 in std::__condvar::wait_until (this=0x5591501ca910, __m=..., __clock=1, __abs_time=...) at /usr/include/c++/13/bits/std_mutex.h:185
+#7  0x000055911780d5a5 in std::condition_variable::__wait_until_impl<std::chrono::duration<long, std::ratio<1l, 1000000000l> > > (this=0x5591501ca910, __lock=..., __atime=std::chrono::_V2::steady_clock time_point = { 19516797334049ns }) at /usr/include/c++/13/condition_variable:203
+#8  0x000055911780c6bd in std::condition_variable::wait_until<std::chrono::duration<long, std::ratio<1l, 1000000000l> > > (this=0x5591501ca910, __lock=..., __atime=std::chrono::_V2::steady_clock time_point = { 19516797334049ns }) at /usr/include/c++/13/condition_variable:113
+#9  0x000055911780b939 in std::condition_variable::wait_for<long, std::ratio<1l, 1000l> > (this=0x5591501ca910, __lock=..., __rtime=std::chrono::duration = { 60000ms }) at /usr/include/c++/13/condition_variable:165
+#10 0x0000559117808aa1 in tpool::thread_pool_generic::wait_for_tasks (this=0x5591501ca400, lk=..., thread_data=0x5591501ca910) at /home/user/mdb_src/tpool/tpool_generic.cc:431
+#11 0x0000559117808cbb in tpool::thread_pool_generic::get_task (this=0x5591501ca400, thread_var=0x5591501ca910, t=0x7767d27fbba0) at /home/user/mdb_src/tpool/tpool_generic.cc:484
+#12 0x00005591178090a2 in tpool::thread_pool_generic::worker_main (this=0x5591501ca400, thread_var=0x5591501ca910) at /home/user/mdb_src/tpool/tpool_generic.cc:529
+#13 0x0000559117811364 in std::__invoke_impl<void, void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> (__f=@0x7f67d80029a8: (void (tpool::thread_pool_generic::*)(class tpool::thread_pool_generic * const, struct tpool::worker_data *)) 0x559117808f14 <tpool::thread_pool_generic::worker_main(tpool::worker_data*)>, __t=@0x7f67d80029a0: 0x5591501ca400) at /usr/include/c++/13/bits/invoke.h:74
+#14 0x000055911781126a in std::__invoke<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> (__fn=@0x7f67d80029a8: (void (tpool::thread_pool_generic::*)(class tpool::thread_pool_generic * const, struct tpool::worker_data *)) 0x559117808f14 <tpool::thread_pool_generic::worker_main(tpool::worker_data*)>) at /usr/include/c++/13/bits/invoke.h:96
+#15 0x0000559117811189 in std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> >::_M_invoke<0ul, 1ul, 2ul> (this=0x7f67d8002998) at /usr/include/c++/13/bits/std_thread.h:292
+#16 0x0000559117811122 in std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> >::operator() (this=0x7f67d8002998) at /usr/include/c++/13/bits/std_thread.h:299
+#17 0x0000559117811102 in std::thread::_State_impl<std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> > >::_M_run (this=0x7f67d8002990) at /usr/include/c++/13/bits/std_thread.h:244
+#18 0x00007f67e94ecdb4 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#19 0x00007f67e909cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#20 0x00007f67e9129ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 14 (Thread 0x7f67e9d93940 (LWP 18122)):
+#0  0x00007f67e911b79d in __GI___poll (fds=0x55915080a240, nfds=3, timeout=-1) at ../sysdeps/unix/sysv/linux/poll.c:29
+#1  0x00005591166ed602 in handle_connections_sockets () at /home/user/mdb_src/sql/mysqld.cc:6799
+#2  0x00005591166ebe45 in run_main_loop () at /home/user/mdb_src/sql/mysqld.cc:6077
+#3  0x00005591166ecab0 in mysqld_main (argc=159, argv=0x55914fd7d900) at /home/user/mdb_src/sql/mysqld.cc:6499
+#4  0x00005591166dec6d in main (argc=25, argv=0x7ffe2d062158) at /home/user/mdb_src/sql/main.cc:34
+
+Thread 13 (Thread 0x7767d3fff6c0 (LWP 18128)):
+#0  0x00007f67e9098e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x7767d3ffea50, op=137, expected=0, futex_word=0x5591501ca758) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x7767d3ffea50, clockid=0, expected=0, futex_word=0x5591501ca758) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5591501ca758, expected=expected@entry=0, clockid=clockid@entry=1, abstime=abstime@entry=0x7767d3ffea50, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007f67e909c1f6 in __pthread_cond_wait_common (abstime=<optimized out>, clockid=<optimized out>, mutex=0x5591501ca588, cond=0x5591501ca730) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_clockwait64 (abstime=<optimized out>, clockid=<optimized out>, mutex=0x5591501ca588, cond=0x5591501ca730) at ./nptl/pthread_cond_wait.c:691
+#5  ___pthread_cond_clockwait64 (cond=0x5591501ca730, mutex=0x5591501ca588, clockid=<optimized out>, abstime=<optimized out>) at ./nptl/pthread_cond_wait.c:679
+#6  0x000055911780a7a9 in std::__condvar::wait_until (this=0x5591501ca730, __m=..., __clock=1, __abs_time=...) at /usr/include/c++/13/bits/std_mutex.h:185
+#7  0x000055911780d5a5 in std::condition_variable::__wait_until_impl<std::chrono::duration<long, std::ratio<1l, 1000000000l> > > (this=0x5591501ca730, __lock=..., __atime=std::chrono::_V2::steady_clock time_point = { 19516797693572ns }) at /usr/include/c++/13/condition_variable:203
+#8  0x000055911780c6bd in std::condition_variable::wait_until<std::chrono::duration<long, std::ratio<1l, 1000000000l> > > (this=0x5591501ca730, __lock=..., __atime=std::chrono::_V2::steady_clock time_point = { 19516797693572ns }) at /usr/include/c++/13/condition_variable:113
+#9  0x000055911780b939 in std::condition_variable::wait_for<long, std::ratio<1l, 1000l> > (this=0x5591501ca730, __lock=..., __rtime=std::chrono::duration = { 60000ms }) at /usr/include/c++/13/condition_variable:165
+#10 0x0000559117808aa1 in tpool::thread_pool_generic::wait_for_tasks (this=0x5591501ca400, lk=..., thread_data=0x5591501ca730) at /home/user/mdb_src/tpool/tpool_generic.cc:431
+#11 0x0000559117808cbb in tpool::thread_pool_generic::get_task (this=0x5591501ca400, thread_var=0x5591501ca730, t=0x7767d3ffeba0) at /home/user/mdb_src/tpool/tpool_generic.cc:484
+#12 0x00005591178090a2 in tpool::thread_pool_generic::worker_main (this=0x5591501ca400, thread_var=0x5591501ca730) at /home/user/mdb_src/tpool/tpool_generic.cc:529
+#13 0x0000559117811364 in std::__invoke_impl<void, void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> (__f=@0x7f67dc0036f8: (void (tpool::thread_pool_generic::*)(class tpool::thread_pool_generic * const, struct tpool::worker_data *)) 0x559117808f14 <tpool::thread_pool_generic::worker_main(tpool::worker_data*)>, __t=@0x7f67dc0036f0: 0x5591501ca400) at /usr/include/c++/13/bits/invoke.h:74
+#14 0x000055911781126a in std::__invoke<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> (__fn=@0x7f67dc0036f8: (void (tpool::thread_pool_generic::*)(class tpool::thread_pool_generic * const, struct tpool::worker_data *)) 0x559117808f14 <tpool::thread_pool_generic::worker_main(tpool::worker_data*)>) at /usr/include/c++/13/bits/invoke.h:96
+#15 0x0000559117811189 in std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> >::_M_invoke<0ul, 1ul, 2ul> (this=0x7f67dc0036e8) at /usr/include/c++/13/bits/std_thread.h:292
+#16 0x0000559117811122 in std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> >::operator() (this=0x7f67dc0036e8) at /usr/include/c++/13/bits/std_thread.h:299
+#17 0x0000559117811102 in std::thread::_State_impl<std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> > >::_M_run (this=0x7f67dc0036e0) at /usr/include/c++/13/bits/std_thread.h:244
+#18 0x00007f67e94ecdb4 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#19 0x00007f67e909cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#20 0x00007f67e9129ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 12 (Thread 0x7767d17fa6c0 (LWP 18141)):
+#0  0x00007f67e9098e51 in __futex_abstimed_wait_common64 (private=-780167040, cancel=true, abstime=0x7767d17f9a50, op=137, expected=0, futex_word=0x5591501caa7c) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=-780167040, abstime=0x7767d17f9a50, clockid=30567, expected=0, futex_word=0x5591501caa7c) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5591501caa7c, expected=expected@entry=0, clockid=clockid@entry=1, abstime=abstime@entry=0x7767d17f9a50, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007f67e909c1f6 in __pthread_cond_wait_common (abstime=<optimized out>, clockid=<optimized out>, mutex=0x5591501ca588, cond=0x5591501caa50) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_clockwait64 (abstime=<optimized out>, clockid=<optimized out>, mutex=0x5591501ca588, cond=0x5591501caa50) at ./nptl/pthread_cond_wait.c:691
+#5  ___pthread_cond_clockwait64 (cond=0x5591501caa50, mutex=0x5591501ca588, clockid=<optimized out>, abstime=<optimized out>) at ./nptl/pthread_cond_wait.c:679
+#6  0x000055911780a7a9 in std::__condvar::wait_until (this=0x5591501caa50, __m=..., __clock=1, __abs_time=...) at /usr/include/c++/13/bits/std_mutex.h:185
+#7  0x000055911780d5a5 in std::condition_variable::__wait_until_impl<std::chrono::duration<long, std::ratio<1l, 1000000000l> > > (this=0x5591501caa50, __lock=..., __atime=std::chrono::_V2::steady_clock time_point = { 19516797680666ns }) at /usr/include/c++/13/condition_variable:203
+#8  0x000055911780c6bd in std::condition_variable::wait_until<std::chrono::duration<long, std::ratio<1l, 1000000000l> > > (this=0x5591501caa50, __lock=..., __atime=std::chrono::_V2::steady_clock time_point = { 19516797680666ns }) at /usr/include/c++/13/condition_variable:113
+#9  0x000055911780b939 in std::condition_variable::wait_for<long, std::ratio<1l, 1000l> > (this=0x5591501caa50, __lock=..., __rtime=std::chrono::duration = { 60000ms }) at /usr/include/c++/13/condition_variable:165
+#10 0x0000559117808aa1 in tpool::thread_pool_generic::wait_for_tasks (this=0x5591501ca400, lk=..., thread_data=0x5591501caa50) at /home/user/mdb_src/tpool/tpool_generic.cc:431
+#11 0x0000559117808cbb in tpool::thread_pool_generic::get_task (this=0x5591501ca400, thread_var=0x5591501caa50, t=0x7767d17f9ba0) at /home/user/mdb_src/tpool/tpool_generic.cc:484
+#12 0x00005591178090a2 in tpool::thread_pool_generic::worker_main (this=0x5591501ca400, thread_var=0x5591501caa50) at /home/user/mdb_src/tpool/tpool_generic.cc:529
+#13 0x0000559117811364 in std::__invoke_impl<void, void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> (__f=@0x7f67d8002948: (void (tpool::thread_pool_generic::*)(class tpool::thread_pool_generic * const, struct tpool::worker_data *)) 0x559117808f14 <tpool::thread_pool_generic::worker_main(tpool::worker_data*)>, __t=@0x7f67d8002940: 0x5591501ca400) at /usr/include/c++/13/bits/invoke.h:74
+#14 0x000055911781126a in std::__invoke<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> (__fn=@0x7f67d8002948: (void (tpool::thread_pool_generic::*)(class tpool::thread_pool_generic * const, struct tpool::worker_data *)) 0x559117808f14 <tpool::thread_pool_generic::worker_main(tpool::worker_data*)>) at /usr/include/c++/13/bits/invoke.h:96
+#15 0x0000559117811189 in std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> >::_M_invoke<0ul, 1ul, 2ul> (this=0x7f67d8002938) at /usr/include/c++/13/bits/std_thread.h:292
+#16 0x0000559117811122 in std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> >::operator() (this=0x7f67d8002938) at /usr/include/c++/13/bits/std_thread.h:299
+#17 0x0000559117811102 in std::thread::_State_impl<std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> > >::_M_run (this=0x7f67d8002930) at /usr/include/c++/13/bits/std_thread.h:244
+#18 0x00007f67e94ecdb4 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#19 0x00007f67e909cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#20 0x00007f67e9129ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 11 (Thread 0x77679f7fe6c0 (LWP 18144)):
+#0  0x00007f67e9098e51 in __futex_abstimed_wait_common64 (private=-1619011456, cancel=true, abstime=0x77679f7fda50, op=137, expected=0, futex_word=0x5591501cac58) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=-1619011456, abstime=0x77679f7fda50, clockid=30567, expected=0, futex_word=0x5591501cac58) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5591501cac58, expected=expected@entry=0, clockid=clockid@entry=1, abstime=abstime@entry=0x77679f7fda50, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007f67e909c1f6 in __pthread_cond_wait_common (abstime=<optimized out>, clockid=<optimized out>, mutex=0x5591501ca588, cond=0x5591501cac30) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_clockwait64 (abstime=<optimized out>, clockid=<optimized out>, mutex=0x5591501ca588, cond=0x5591501cac30) at ./nptl/pthread_cond_wait.c:691
+#5  ___pthread_cond_clockwait64 (cond=0x5591501cac30, mutex=0x5591501ca588, clockid=<optimized out>, abstime=<optimized out>) at ./nptl/pthread_cond_wait.c:679
+#6  0x000055911780a7a9 in std::__condvar::wait_until (this=0x5591501cac30, __m=..., __clock=1, __abs_time=...) at /usr/include/c++/13/bits/std_mutex.h:185
+#7  0x000055911780d5a5 in std::condition_variable::__wait_until_impl<std::chrono::duration<long, std::ratio<1l, 1000000000l> > > (this=0x5591501cac30, __lock=..., __atime=std::chrono::_V2::steady_clock time_point = { 19516797285369ns }) at /usr/include/c++/13/condition_variable:203
+#8  0x000055911780c6bd in std::condition_variable::wait_until<std::chrono::duration<long, std::ratio<1l, 1000000000l> > > (this=0x5591501cac30, __lock=..., __atime=std::chrono::_V2::steady_clock time_point = { 19516797285369ns }) at /usr/include/c++/13/condition_variable:113
+#9  0x000055911780b939 in std::condition_variable::wait_for<long, std::ratio<1l, 1000l> > (this=0x5591501cac30, __lock=..., __rtime=std::chrono::duration = { 60000ms }) at /usr/include/c++/13/condition_variable:165
+#10 0x0000559117808aa1 in tpool::thread_pool_generic::wait_for_tasks (this=0x5591501ca400, lk=..., thread_data=0x5591501cac30) at /home/user/mdb_src/tpool/tpool_generic.cc:431
+#11 0x0000559117808cbb in tpool::thread_pool_generic::get_task (this=0x5591501ca400, thread_var=0x5591501cac30, t=0x77679f7fdba0) at /home/user/mdb_src/tpool/tpool_generic.cc:484
+#12 0x00005591178090a2 in tpool::thread_pool_generic::worker_main (this=0x5591501ca400, thread_var=0x5591501cac30) at /home/user/mdb_src/tpool/tpool_generic.cc:529
+#13 0x0000559117811364 in std::__invoke_impl<void, void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> (__f=@0x7f67d80029d8: (void (tpool::thread_pool_generic::*)(class tpool::thread_pool_generic * const, struct tpool::worker_data *)) 0x559117808f14 <tpool::thread_pool_generic::worker_main(tpool::worker_data*)>, __t=@0x7f67d80029d0: 0x5591501ca400) at /usr/include/c++/13/bits/invoke.h:74
+#14 0x000055911781126a in std::__invoke<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> (__fn=@0x7f67d80029d8: (void (tpool::thread_pool_generic::*)(class tpool::thread_pool_generic * const, struct tpool::worker_data *)) 0x559117808f14 <tpool::thread_pool_generic::worker_main(tpool::worker_data*)>) at /usr/include/c++/13/bits/invoke.h:96
+#15 0x0000559117811189 in std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> >::_M_invoke<0ul, 1ul, 2ul> (this=0x7f67d80029c8) at /usr/include/c++/13/bits/std_thread.h:292
+#16 0x0000559117811122 in std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> >::operator() (this=0x7f67d80029c8) at /usr/include/c++/13/bits/std_thread.h:299
+#17 0x0000559117811102 in std::thread::_State_impl<std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> > >::_M_run (this=0x7f67d80029c0) at /usr/include/c++/13/bits/std_thread.h:244
+#18 0x00007f67e94ecdb4 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#19 0x00007f67e909cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#20 0x00007f67e9129ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 10 (Thread 0x7f67e154c6c0 (LWP 18131)):
+#0  0x00007f67e9098e51 in __futex_abstimed_wait_common64 (private=32615, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x55911899a1a8 <COND_manager+40>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=32615, abstime=0x0, clockid=0, expected=0, futex_word=0x55911899a1a8 <COND_manager+40>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x55911899a1a8 <COND_manager+40>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007f67e909b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x55911899a0e8 <LOCK_manager+40>, cond=0x55911899a180 <COND_manager>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x55911899a180 <COND_manager>, mutex=0x55911899a0e8 <LOCK_manager+40>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00005591178bc9b8 in safe_cond_wait (cond=0x55911899a180 <COND_manager>, mp=0x55911899a0c0 <LOCK_manager>, file=0x559117fd82d8 "/home/user/mdb_src/mysys/my_thr_init.c", line=580) at /home/user/mdb_src/mysys/thr_mutex.c:490
+#6  0x00005591178b6997 in psi_cond_wait (that=0x55911899a180 <COND_manager>, mutex=0x55911899a0c0 <LOCK_manager>, file=0x559117a30040 "/home/user/mdb_src/sql/sql_manager.cc", line=110) at /home/user/mdb_src/mysys/my_thr_init.c:580
+#7  0x00005591168eb5c3 in inline_mysql_cond_wait (that=0x55911899a180 <COND_manager>, mutex=0x55911899a0c0 <LOCK_manager>, src_file=0x559117a30040 "/home/user/mdb_src/sql/sql_manager.cc", src_line=110) at /home/user/mdb_src/include/mysql/psi/mysql_thread.h:1070
+#8  0x00005591168ebab5 in handle_manager (arg=0x0) at /home/user/mdb_src/sql/sql_manager.cc:110
+#9  0x00005591171c22ac in pfs_spawn_thread (arg=0x5591503aa8b0) at /home/user/mdb_src/storage/perfschema/pfs.cc:2198
+#10 0x00007f67e909cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#11 0x00007f67e9129ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 9 (Thread 0x7767d1ffb6c0 (LWP 18140)):
+#0  0x00007f67e9098e51 in __futex_abstimed_wait_common64 (private=-771774336, cancel=true, abstime=0x7767d1ffaa50, op=137, expected=0, futex_word=0x5591501ca9dc) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=-771774336, abstime=0x7767d1ffaa50, clockid=30567, expected=0, futex_word=0x5591501ca9dc) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5591501ca9dc, expected=expected@entry=0, clockid=clockid@entry=1, abstime=abstime@entry=0x7767d1ffaa50, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007f67e909c1f6 in __pthread_cond_wait_common (abstime=<optimized out>, clockid=<optimized out>, mutex=0x5591501ca588, cond=0x5591501ca9b0) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_clockwait64 (abstime=<optimized out>, clockid=<optimized out>, mutex=0x5591501ca588, cond=0x5591501ca9b0) at ./nptl/pthread_cond_wait.c:691
+#5  ___pthread_cond_clockwait64 (cond=0x5591501ca9b0, mutex=0x5591501ca588, clockid=<optimized out>, abstime=<optimized out>) at ./nptl/pthread_cond_wait.c:679
+#6  0x000055911780a7a9 in std::__condvar::wait_until (this=0x5591501ca9b0, __m=..., __clock=1, __abs_time=...) at /usr/include/c++/13/bits/std_mutex.h:185
+#7  0x000055911780d5a5 in std::condition_variable::__wait_until_impl<std::chrono::duration<long, std::ratio<1l, 1000000000l> > > (this=0x5591501ca9b0, __lock=..., __atime=std::chrono::_V2::steady_clock time_point = { 19515546642058ns }) at /usr/include/c++/13/condition_variable:203
+#8  0x000055911780c6bd in std::condition_variable::wait_until<std::chrono::duration<long, std::ratio<1l, 1000000000l> > > (this=0x5591501ca9b0, __lock=..., __atime=std::chrono::_V2::steady_clock time_point = { 19515546642058ns }) at /usr/include/c++/13/condition_variable:113
+#9  0x000055911780b939 in std::condition_variable::wait_for<long, std::ratio<1l, 1000l> > (this=0x5591501ca9b0, __lock=..., __rtime=std::chrono::duration = { 60000ms }) at /usr/include/c++/13/condition_variable:165
+#10 0x0000559117808aa1 in tpool::thread_pool_generic::wait_for_tasks (this=0x5591501ca400, lk=..., thread_data=0x5591501ca9b0) at /home/user/mdb_src/tpool/tpool_generic.cc:431
+#11 0x0000559117808cbb in tpool::thread_pool_generic::get_task (this=0x5591501ca400, thread_var=0x5591501ca9b0, t=0x7767d1ffaba0) at /home/user/mdb_src/tpool/tpool_generic.cc:484
+#12 0x00005591178090a2 in tpool::thread_pool_generic::worker_main (this=0x5591501ca400, thread_var=0x5591501ca9b0) at /home/user/mdb_src/tpool/tpool_generic.cc:529
+#13 0x0000559117811364 in std::__invoke_impl<void, void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> (__f=@0x7f67d8002978: (void (tpool::thread_pool_generic::*)(class tpool::thread_pool_generic * const, struct tpool::worker_data *)) 0x559117808f14 <tpool::thread_pool_generic::worker_main(tpool::worker_data*)>, __t=@0x7f67d8002970: 0x5591501ca400) at /usr/include/c++/13/bits/invoke.h:74
+#14 0x000055911781126a in std::__invoke<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> (__fn=@0x7f67d8002978: (void (tpool::thread_pool_generic::*)(class tpool::thread_pool_generic * const, struct tpool::worker_data *)) 0x559117808f14 <tpool::thread_pool_generic::worker_main(tpool::worker_data*)>) at /usr/include/c++/13/bits/invoke.h:96
+#15 0x0000559117811189 in std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> >::_M_invoke<0ul, 1ul, 2ul> (this=0x7f67d8002968) at /usr/include/c++/13/bits/std_thread.h:292
+#16 0x0000559117811122 in std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> >::operator() (this=0x7f67d8002968) at /usr/include/c++/13/bits/std_thread.h:299
+#17 0x0000559117811102 in std::thread::_State_impl<std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> > >::_M_run (this=0x7f67d8002960) at /usr/include/c++/13/bits/std_thread.h:244
+#18 0x00007f67e94ecdb4 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#19 0x00007f67e909cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#20 0x00007f67e9129ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 8 (Thread 0x7767d2ffd6c0 (LWP 18130)):
+#0  0x00007f67e9098e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x7767d2ffca50, op=137, expected=0, futex_word=0x5591501ca898) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x7767d2ffca50, clockid=0, expected=0, futex_word=0x5591501ca898) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5591501ca898, expected=expected@entry=0, clockid=clockid@entry=1, abstime=abstime@entry=0x7767d2ffca50, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007f67e909c1f6 in __pthread_cond_wait_common (abstime=<optimized out>, clockid=<optimized out>, mutex=0x5591501ca588, cond=0x5591501ca870) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_clockwait64 (abstime=<optimized out>, clockid=<optimized out>, mutex=0x5591501ca588, cond=0x5591501ca870) at ./nptl/pthread_cond_wait.c:691
+#5  ___pthread_cond_clockwait64 (cond=0x5591501ca870, mutex=0x5591501ca588, clockid=<optimized out>, abstime=<optimized out>) at ./nptl/pthread_cond_wait.c:679
+#6  0x000055911780a7a9 in std::__condvar::wait_until (this=0x5591501ca870, __m=..., __clock=1, __abs_time=...) at /usr/include/c++/13/bits/std_mutex.h:185
+#7  0x000055911780d5a5 in std::condition_variable::__wait_until_impl<std::chrono::duration<long, std::ratio<1l, 1000000000l> > > (this=0x5591501ca870, __lock=..., __atime=std::chrono::_V2::steady_clock time_point = { 19516797321273ns }) at /usr/include/c++/13/condition_variable:203
+#8  0x000055911780c6bd in std::condition_variable::wait_until<std::chrono::duration<long, std::ratio<1l, 1000000000l> > > (this=0x5591501ca870, __lock=..., __atime=std::chrono::_V2::steady_clock time_point = { 19516797321273ns }) at /usr/include/c++/13/condition_variable:113
+#9  0x000055911780b939 in std::condition_variable::wait_for<long, std::ratio<1l, 1000l> > (this=0x5591501ca870, __lock=..., __rtime=std::chrono::duration = { 60000ms }) at /usr/include/c++/13/condition_variable:165
+#10 0x0000559117808aa1 in tpool::thread_pool_generic::wait_for_tasks (this=0x5591501ca400, lk=..., thread_data=0x5591501ca870) at /home/user/mdb_src/tpool/tpool_generic.cc:431
+#11 0x0000559117808cbb in tpool::thread_pool_generic::get_task (this=0x5591501ca400, thread_var=0x5591501ca870, t=0x7767d2ffcba0) at /home/user/mdb_src/tpool/tpool_generic.cc:484
+#12 0x00005591178090a2 in tpool::thread_pool_generic::worker_main (this=0x5591501ca400, thread_var=0x5591501ca870) at /home/user/mdb_src/tpool/tpool_generic.cc:529
+#13 0x0000559117811364 in std::__invoke_impl<void, void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> (__f=@0x7f67d8002a68: (void (tpool::thread_pool_generic::*)(class tpool::thread_pool_generic * const, struct tpool::worker_data *)) 0x559117808f14 <tpool::thread_pool_generic::worker_main(tpool::worker_data*)>, __t=@0x7f67d8002a60: 0x5591501ca400) at /usr/include/c++/13/bits/invoke.h:74
+#14 0x000055911781126a in std::__invoke<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> (__fn=@0x7f67d8002a68: (void (tpool::thread_pool_generic::*)(class tpool::thread_pool_generic * const, struct tpool::worker_data *)) 0x559117808f14 <tpool::thread_pool_generic::worker_main(tpool::worker_data*)>) at /usr/include/c++/13/bits/invoke.h:96
+#15 0x0000559117811189 in std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> >::_M_invoke<0ul, 1ul, 2ul> (this=0x7f67d8002a58) at /usr/include/c++/13/bits/std_thread.h:292
+#16 0x0000559117811122 in std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> >::operator() (this=0x7f67d8002a58) at /usr/include/c++/13/bits/std_thread.h:299
+#17 0x0000559117811102 in std::thread::_State_impl<std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> > >::_M_run (this=0x7f67d8002a50) at /usr/include/c++/13/bits/std_thread.h:244
+#18 0x00007f67e94ecdb4 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#19 0x00007f67e909cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#20 0x00007f67e9129ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 7 (Thread 0x77679ffff6c0 (LWP 18143)):
+#0  0x00007f67e9098e51 in __futex_abstimed_wait_common64 (private=-1610618752, cancel=true, abstime=0x77679fffea50, op=137, expected=0, futex_word=0x5591501cabb8) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=-1610618752, abstime=0x77679fffea50, clockid=30567, expected=0, futex_word=0x5591501cabb8) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5591501cabb8, expected=expected@entry=0, clockid=clockid@entry=1, abstime=abstime@entry=0x77679fffea50, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007f67e909c1f6 in __pthread_cond_wait_common (abstime=<optimized out>, clockid=<optimized out>, mutex=0x5591501ca588, cond=0x5591501cab90) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_clockwait64 (abstime=<optimized out>, clockid=<optimized out>, mutex=0x5591501ca588, cond=0x5591501cab90) at ./nptl/pthread_cond_wait.c:691
+#5  ___pthread_cond_clockwait64 (cond=0x5591501cab90, mutex=0x5591501ca588, clockid=<optimized out>, abstime=<optimized out>) at ./nptl/pthread_cond_wait.c:679
+#6  0x000055911780a7a9 in std::__condvar::wait_until (this=0x5591501cab90, __m=..., __clock=1, __abs_time=...) at /usr/include/c++/13/bits/std_mutex.h:185
+#7  0x000055911780d5a5 in std::condition_variable::__wait_until_impl<std::chrono::duration<long, std::ratio<1l, 1000000000l> > > (this=0x5591501cab90, __lock=..., __atime=std::chrono::_V2::steady_clock time_point = { 19516797270272ns }) at /usr/include/c++/13/condition_variable:203
+#8  0x000055911780c6bd in std::condition_variable::wait_until<std::chrono::duration<long, std::ratio<1l, 1000000000l> > > (this=0x5591501cab90, __lock=..., __atime=std::chrono::_V2::steady_clock time_point = { 19516797270272ns }) at /usr/include/c++/13/condition_variable:113
+#9  0x000055911780b939 in std::condition_variable::wait_for<long, std::ratio<1l, 1000l> > (this=0x5591501cab90, __lock=..., __rtime=std::chrono::duration = { 60000ms }) at /usr/include/c++/13/condition_variable:165
+#10 0x0000559117808aa1 in tpool::thread_pool_generic::wait_for_tasks (this=0x5591501ca400, lk=..., thread_data=0x5591501cab90) at /home/user/mdb_src/tpool/tpool_generic.cc:431
+#11 0x0000559117808cbb in tpool::thread_pool_generic::get_task (this=0x5591501ca400, thread_var=0x5591501cab90, t=0x77679fffeba0) at /home/user/mdb_src/tpool/tpool_generic.cc:484
+#12 0x00005591178090a2 in tpool::thread_pool_generic::worker_main (this=0x5591501ca400, thread_var=0x5591501cab90) at /home/user/mdb_src/tpool/tpool_generic.cc:529
+#13 0x0000559117811364 in std::__invoke_impl<void, void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> (__f=@0x7767c0000f98: (void (tpool::thread_pool_generic::*)(class tpool::thread_pool_generic * const, struct tpool::worker_data *)) 0x559117808f14 <tpool::thread_pool_generic::worker_main(tpool::worker_data*)>, __t=@0x7767c0000f90: 0x5591501ca400) at /usr/include/c++/13/bits/invoke.h:74
+#14 0x000055911781126a in std::__invoke<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> (__fn=@0x7767c0000f98: (void (tpool::thread_pool_generic::*)(class tpool::thread_pool_generic * const, struct tpool::worker_data *)) 0x559117808f14 <tpool::thread_pool_generic::worker_main(tpool::worker_data*)>) at /usr/include/c++/13/bits/invoke.h:96
+#15 0x0000559117811189 in std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> >::_M_invoke<0ul, 1ul, 2ul> (this=0x7767c0000f88) at /usr/include/c++/13/bits/std_thread.h:292
+#16 0x0000559117811122 in std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> >::operator() (this=0x7767c0000f88) at /usr/include/c++/13/bits/std_thread.h:299
+#17 0x0000559117811102 in std::thread::_State_impl<std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> > >::_M_run (this=0x7767c0000f80) at /usr/include/c++/13/bits/std_thread.h:244
+#18 0x00007f67e94ecdb4 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#19 0x00007f67e909cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#20 0x00007f67e9129ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 6 (Thread 0x7f67e0bf56c0 (LWP 18127)):
+#0  0x00007f67e9098e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x5591502dfc2c) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x5591502dfc2c) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5591502dfc2c, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007f67e909b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x5591502dfb78, cond=0x5591502dfc00) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x5591502dfc00, mutex=0x5591502dfb78) at ./nptl/pthread_cond_wait.c:627
+#5  0x00005591178bc9b8 in safe_cond_wait (cond=0x5591502dfc00, mp=0x5591502dfb50, file=0x559117f94150 "/home/user/mdb_src/storage/innobase/fsp/fsp_binlog.cc", line=804) at /home/user/mdb_src/mysys/thr_mutex.c:490
+#6  0x0000559117789da0 in fsp_binlog_page_fifo::flush_thread_run (this=0x5591502dfb50) at /home/user/mdb_src/storage/innobase/fsp/fsp_binlog.cc:804
+#7  0x0000559117789af5 in operator() (__closure=0x5591503f3e28) at /home/user/mdb_src/storage/innobase/fsp/fsp_binlog.cc:751
+#8  0x000055911779175c in std::__invoke_impl<void, fsp_binlog_page_fifo::start_flush_thread()::<lambda()> >(std::__invoke_other, struct {...} &&) (__f=...) at /usr/include/c++/13/bits/invoke.h:61
+#9  0x000055911779171f in std::__invoke<fsp_binlog_page_fifo::start_flush_thread()::<lambda()> >(struct {...} &&) (__fn=...) at /usr/include/c++/13/bits/invoke.h:96
+#10 0x00005591177916cc in std::thread::_Invoker<std::tuple<fsp_binlog_page_fifo::start_flush_thread()::<lambda()> > >::_M_invoke<0>(std::_Index_tuple<0>) (this=0x5591503f3e28) at /usr/include/c++/13/bits/std_thread.h:292
+#11 0x00005591177916a0 in std::thread::_Invoker<std::tuple<fsp_binlog_page_fifo::start_flush_thread()::<lambda()> > >::operator()(void) (this=0x5591503f3e28) at /usr/include/c++/13/bits/std_thread.h:299
+#12 0x0000559117791684 in std::thread::_State_impl<std::thread::_Invoker<std::tuple<fsp_binlog_page_fifo::start_flush_thread()::<lambda()> > > >::_M_run(void) (this=0x5591503f3e20) at /usr/include/c++/13/bits/std_thread.h:244
+#13 0x00007f67e94ecdb4 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#14 0x00007f67e909cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#15 0x00007f67e9129ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 5 (Thread 0x7f67e15016c0 (LWP 18132)):
+#0  0x00007f67e9045fc8 in __GI___sigtimedwait (set=0x7f67e1500bf0, info=0x7f67e1500b30, timeout=0x0) at ../sysdeps/unix/sysv/linux/sigtimedwait.c:31
+#1  0x00005591166ded82 in my_sigwait (set=0x7f67e1500bf0, sig=0x7f67e1500bd8, code=0x7f67e1500bdc) at /home/user/mdb_src/include/my_pthread.h:180
+#2  0x00005591166e5a27 in signal_hand () at /home/user/mdb_src/sql/mysqld.cc:3431
+#3  0x00005591171c22ac in pfs_spawn_thread (arg=0x5591507ef960) at /home/user/mdb_src/storage/perfschema/pfs.cc:2198
+#4  0x00007f67e909cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#5  0x00007f67e9129ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 4 (Thread 0x7f67e1d4d6c0 (LWP 18126)):
+#0  0x00007f67e9098e51 in __futex_abstimed_wait_common64 (private=250, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x5591187a2db8 <buf_pool+1144>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=250, abstime=0x0, clockid=0, expected=0, futex_word=0x5591187a2db8 <buf_pool+1144>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5591187a2db8 <buf_pool+1144>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007f67e909b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x5591187a2ca8 <buf_pool+872>, cond=0x5591187a2d90 <buf_pool+1104>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x5591187a2d90 <buf_pool+1104>, mutex=0x5591187a2ca8 <buf_pool+872>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00005591178bc9b8 in safe_cond_wait (cond=0x5591187a2d90 <buf_pool+1104>, mp=0x5591187a2c80 <buf_pool+832>, file=0x559117f40b38 "/home/user/mdb_src/storage/innobase/buf/buf0flu.cc", line=2859) at /home/user/mdb_src/mysys/thr_mutex.c:490
+#6  0x00005591176bc41f in buf_flush_page_cleaner () at /home/user/mdb_src/storage/innobase/buf/buf0flu.cc:2859
+#7  0x00005591176c3e37 in std::__invoke_impl<void, void (*)() noexcept>(std::__invoke_other, void (*&&)() noexcept) (__f=@0x55915029bd28: 0x5591176bbf87 <buf_flush_page_cleaner()>) at /usr/include/c++/13/bits/invoke.h:61
+#8  0x00005591176c3de3 in std::__invoke<void (*)() noexcept>(void (*&&)() noexcept) (__fn=@0x55915029bd28: 0x5591176bbf87 <buf_flush_page_cleaner()>) at /usr/include/c++/13/bits/invoke.h:96
+#9  0x00005591176c3d84 in std::thread::_Invoker<std::tuple<void (*)() noexcept> >::_M_invoke<0ul>(std::_Index_tuple<0ul>) (this=0x55915029bd28) at /usr/include/c++/13/bits/std_thread.h:292
+#10 0x00005591176c3d54 in std::thread::_Invoker<std::tuple<void (*)() noexcept> >::operator()() (this=0x55915029bd28) at /usr/include/c++/13/bits/std_thread.h:299
+#11 0x00005591176c3d34 in std::thread::_State_impl<std::thread::_Invoker<std::tuple<void (*)() noexcept> > >::_M_run() (this=0x55915029bd20) at /usr/include/c++/13/bits/std_thread.h:244
+#12 0x00007f67e94ecdb4 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#13 0x00007f67e909cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#14 0x00007f67e9129ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 3 (Thread 0x7767d37fe6c0 (LWP 18129)):
+#0  0x00007f67e9098e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x7767d37fda50, op=137, expected=0, futex_word=0x5591501ca7fc) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x7767d37fda50, clockid=0, expected=0, futex_word=0x5591501ca7fc) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5591501ca7fc, expected=expected@entry=0, clockid=clockid@entry=1, abstime=abstime@entry=0x7767d37fda50, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007f67e909c1f6 in __pthread_cond_wait_common (abstime=<optimized out>, clockid=<optimized out>, mutex=0x5591501ca588, cond=0x5591501ca7d0) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_clockwait64 (abstime=<optimized out>, clockid=<optimized out>, mutex=0x5591501ca588, cond=0x5591501ca7d0) at ./nptl/pthread_cond_wait.c:691
+#5  ___pthread_cond_clockwait64 (cond=0x5591501ca7d0, mutex=0x5591501ca588, clockid=<optimized out>, abstime=<optimized out>) at ./nptl/pthread_cond_wait.c:679
+#6  0x000055911780a7a9 in std::__condvar::wait_until (this=0x5591501ca7d0, __m=..., __clock=1, __abs_time=...) at /usr/include/c++/13/bits/std_mutex.h:185
+#7  0x000055911780d5a5 in std::condition_variable::__wait_until_impl<std::chrono::duration<long, std::ratio<1l, 1000000000l> > > (this=0x5591501ca7d0, __lock=..., __atime=std::chrono::_V2::steady_clock time_point = { 19516797329724ns }) at /usr/include/c++/13/condition_variable:203
+#8  0x000055911780c6bd in std::condition_variable::wait_until<std::chrono::duration<long, std::ratio<1l, 1000000000l> > > (this=0x5591501ca7d0, __lock=..., __atime=std::chrono::_V2::steady_clock time_point = { 19516797329724ns }) at /usr/include/c++/13/condition_variable:113
+#9  0x000055911780b939 in std::condition_variable::wait_for<long, std::ratio<1l, 1000l> > (this=0x5591501ca7d0, __lock=..., __rtime=std::chrono::duration = { 60000ms }) at /usr/include/c++/13/condition_variable:165
+#10 0x0000559117808aa1 in tpool::thread_pool_generic::wait_for_tasks (this=0x5591501ca400, lk=..., thread_data=0x5591501ca7d0) at /home/user/mdb_src/tpool/tpool_generic.cc:431
+#11 0x0000559117808cbb in tpool::thread_pool_generic::get_task (this=0x5591501ca400, thread_var=0x5591501ca7d0, t=0x7767d37fdba0) at /home/user/mdb_src/tpool/tpool_generic.cc:484
+#12 0x00005591178090a2 in tpool::thread_pool_generic::worker_main (this=0x5591501ca400, thread_var=0x5591501ca7d0) at /home/user/mdb_src/tpool/tpool_generic.cc:529
+#13 0x0000559117811364 in std::__invoke_impl<void, void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> (__f=@0x7f67d8002a38: (void (tpool::thread_pool_generic::*)(class tpool::thread_pool_generic * const, struct tpool::worker_data *)) 0x559117808f14 <tpool::thread_pool_generic::worker_main(tpool::worker_data*)>, __t=@0x7f67d8002a30: 0x5591501ca400) at /usr/include/c++/13/bits/invoke.h:74
+#14 0x000055911781126a in std::__invoke<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> (__fn=@0x7f67d8002a38: (void (tpool::thread_pool_generic::*)(class tpool::thread_pool_generic * const, struct tpool::worker_data *)) 0x559117808f14 <tpool::thread_pool_generic::worker_main(tpool::worker_data*)>) at /usr/include/c++/13/bits/invoke.h:96
+#15 0x0000559117811189 in std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> >::_M_invoke<0ul, 1ul, 2ul> (this=0x7f67d8002a28) at /usr/include/c++/13/bits/std_thread.h:292
+#16 0x0000559117811122 in std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> >::operator() (this=0x7f67d8002a28) at /usr/include/c++/13/bits/std_thread.h:299
+#17 0x0000559117811102 in std::thread::_State_impl<std::thread::_Invoker<std::tuple<void (tpool::thread_pool_generic::*)(tpool::worker_data*), tpool::thread_pool_generic*, tpool::worker_data*> > >::_M_run (this=0x7f67d8002a20) at /usr/include/c++/13/bits/std_thread.h:244
+#18 0x00007f67e94ecdb4 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#19 0x00007f67e909cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#20 0x00007f67e9129ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 2 (Thread 0x7f67e3cc76c0 (LWP 18123)):
+#0  0x00007f67e9098e51 in __futex_abstimed_wait_common64 (private=3, cancel=true, abstime=0x7f67e3cc6c60, op=393, expected=0, futex_word=0x5591192750ec <COND_timer+44>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=3, abstime=0x7f67e3cc6c60, clockid=32615, expected=0, futex_word=0x5591192750ec <COND_timer+44>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x5591192750ec <COND_timer+44>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x7f67e3cc6c60, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007f67e909bd6e in __pthread_cond_wait_common (abstime=0x7f67e3cc6c60, clockid=0, mutex=0x559119275028 <LOCK_timer+40>, cond=0x5591192750c0 <COND_timer>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_timedwait64 (cond=0x5591192750c0 <COND_timer>, mutex=0x559119275028 <LOCK_timer+40>, abstime=0x7f67e3cc6c60) at ./nptl/pthread_cond_wait.c:652
+#5  0x00005591178bcd7d in safe_cond_timedwait (cond=0x5591192750c0 <COND_timer>, mp=0x559119275000 <LOCK_timer>, abstime=0x7f67e3cc6c60, file=0x559117fd82d8 "/home/user/mdb_src/mysys/my_thr_init.c", line=593) at /home/user/mdb_src/mysys/thr_mutex.c:544
+#6  0x00005591178b6a4a in psi_cond_timedwait (that=0x5591192750c0 <COND_timer>, mutex=0x559119275000 <LOCK_timer>, abstime=0x7f67e3cc6c60, file=0x559117fd9278 "/home/user/mdb_src/mysys/thr_timer.c", line=330) at /home/user/mdb_src/mysys/my_thr_init.c:593
+#7  0x00005591178bde4a in inline_mysql_cond_timedwait (that=0x5591192750c0 <COND_timer>, mutex=0x559119275000 <LOCK_timer>, abstime=0x7f67e3cc6c60, src_file=0x559117fd9278 "/home/user/mdb_src/mysys/thr_timer.c", src_line=330) at /home/user/mdb_src/include/mysql/psi/mysql_thread.h:1086
+#8  0x00005591178bec23 in timer_handler (arg=0x0) at /home/user/mdb_src/mysys/thr_timer.c:330
+#9  0x00005591171c22ac in pfs_spawn_thread (arg=0x55914fe90340) at /home/user/mdb_src/storage/perfschema/pfs.cc:2198
+#10 0x00007f67e909cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#11 0x00007f67e9129ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 1 (Thread 0x7f67e146b6c0 (LWP 18136)):
+#0  __pthread_kill_implementation (no_tid=0, signo=11, threadid=<optimized out>) at ./nptl/pthread_kill.c:44
+#1  __pthread_kill_internal (signo=11, threadid=<optimized out>) at ./nptl/pthread_kill.c:78
+#2  __GI___pthread_kill (threadid=<optimized out>, signo=11) at ./nptl/pthread_kill.c:89
+#3  0x00005591178b8541 in my_write_core (sig=11) at /home/user/mdb_src/mysys/stacktrace.c:424
+#4  0x0000559116df8df2 in handle_fatal_signal (sig=11) at /home/user/mdb_src/sql/signal_handler.cc:300
+#5  <signal handler called>
+#6  0x00005591167c1bf0 in Bounds_checked_array<Item_field*>::operator[] (this=0x28, n=0) at /home/user/mdb_src/sql/sql_array.h:71
+#7  0x00005591167c13df in sp_rcontext::get_variable (this=0x0, var_idx=0) at /home/user/mdb_src/sql/sp_rcontext.h:234
+#8  0x0000559116e2643e in Item_splocal::get_variable (this=0x7767b4d16650, ctx=0x0) at /home/user/mdb_src/sql/item.cc:1890
+#9  0x0000559116e264fc in Item_splocal::fix_fields (this=0x7767b4d16650, thd=0x7767b4000dd0, ref=0x7f67e1468508) at /home/user/mdb_src/sql/item.cc:1897
+#10 0x000055911677ec82 in Item::fix_fields_if_needed (this=0x7767b4d16650, thd=0x7767b4000dd0, ref=0x7f67e1468508) at /home/user/mdb_src/sql/item.h:1149
+#11 0x000055911677ecbb in Item::fix_fields_if_needed_for_scalar (this=0x7767b4d16650, thd=0x7767b4000dd0, ref=0x7f67e1468508) at /home/user/mdb_src/sql/item.h:1158
+#12 0x000055911692d8da in partition_info::set_range_interval (this=0x7767b4cb3780, thd=0x7767b4000dd0, ival=0x7767b4d16650, type=INTERVAL_DAY, table_name=0x7767b4cb2ea0 "t1") at /home/user/mdb_src/sql/sql_partition_auto_interval.cc:405
+#13 0x0000559116d1bf50 in MYSQLparse (thd=0x7767b4000dd0) at /home/user/mdb_src/sql/sql_yacc.yy:5182
+#14 0x000055911690d6b0 in parse_sql (thd=0x7767b4000dd0, parser_state=0x7f67e146a290, creation_ctx=0x0, do_pfs_digest=true) at /home/user/mdb_src/sql/sql_parse.cc:10351
+#15 0x0000559116907b5a in mysql_parse (thd=0x7767b4000dd0, rawbuf=0x7767b4018180 "CREATE PROCEDURE p(v INT)\nCREATE TABLE t1(c DATE) PARTITION BY RANGE COLUMNS(c)\nINTERVAL v DAY\n(PARTITION p0 VALUES LESS THAN ('2000-01-01'))", length=141, parser_state=0x7f67e146a290) at /home/user/mdb_src/sql/sql_parse.cc:7907
+#16 0x00005591168f6944 in dispatch_command (command=COM_QUERY, thd=0x7767b4000dd0, packet=0x7767b4259e81 "CREATE PROCEDURE p(v INT)\nCREATE TABLE t1(c DATE) PARTITION BY RANGE COLUMNS(c)\nINTERVAL v DAY\n(PARTITION p0 VALUES LESS THAN ('2000-01-01'))", packet_length=141, blocking=true) at /home/user/mdb_src/sql/sql_parse.cc:1903
+#17 0x00005591168f568b in do_command (thd=0x7767b4000dd0, blocking=true) at /home/user/mdb_src/sql/sql_parse.cc:1437
+#18 0x0000559116b48274 in do_handle_one_connection (connect=0x5591508e7760, put_in_cache=true) at /home/user/mdb_src/sql/sql_connect.cc:1514
+#19 0x0000559116b48000 in handle_one_connection (arg=0x5591508c97e0) at /home/user/mdb_src/sql/sql_connect.cc:1426
+#20 0x00005591171c22ac in pfs_spawn_thread (arg=0x55915080b650) at /home/user/mdb_src/storage/perfschema/pfs.cc:2198
+#21 0x00007f67e909cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#22 0x00007f67e9129ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+ - saving '/home/mtr/var/t/1/log/main.partition_range_interval/' to '/home/mtr/var/t/log/main.partition_range_interval/'
+***Warnings generated in error logs during shutdown after running tests: main.partition_range_interval
+
+2026-10-29  1:35:43 4 [ERROR] InnoDB: Operating system error number 17 in a file operation.
+2026-10-29  1:35:43 4 [ERROR] InnoDB: Error number 17 means 'File exists'
+2026-10-29  1:35:43 4 [ERROR] InnoDB: The file './test/t1#P#p1.ibd' already exists though the corresponding table did not exist in the InnoDB data dictionary. You can resolve the problem by removing the file.
+261029  1:35:43 [ERROR] /home/user/mdb_build_dbg/sql/mariadbd got signal 11 ;
+Attempting backtrace. Include this in the bug report.
+
+--------------------------------------------------------------------------
+The servers were restarted 0 times
+Spent 0.000 of 26 seconds executing testcases
+
+Completed: Failed 1/1 tests, 0.00% were successful.
+
+Failing test(s): main.partition_range_interval
+
+The log files in var/log may give you some hint of what went wrong.
+
+If you want to report this error, MariaDB's bug tracker is found at
+https://jira.mariadb.org
+
+Errors/warnings were found in logfiles during server shutdown after running the
+following sequence(s) of tests:
+    main.partition_range_interval
+mysql-test-run: *** ERROR: there were failing test cases

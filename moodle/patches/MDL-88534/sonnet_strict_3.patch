@@ -1,0 +1,80 @@
+diff --git a/public/mod/quiz/report/statistics/classes/task/recalculate.php b/public/mod/quiz/report/statistics/classes/task/recalculate.php
+index 5d4f3c5a214..3b0364d76d0 100644
+--- a/public/mod/quiz/report/statistics/classes/task/recalculate.php
++++ b/public/mod/quiz/report/statistics/classes/task/recalculate.php
+@@ -37,10 +37,23 @@ require_once($CFG->dirroot . '/mod/quiz/report/statistics/report.php');
+  */
+ class recalculate extends \core\task\adhoc_task {
+     /**
+-     * The time to delay queued runs by, to prevent repeated recalculations.
++     * The default time to delay queued runs by, to prevent repeated recalculations.
+      */
+     const DELAY = HOURSECS;
+ 
++    /**
++     * Get the configured de-bounce delay, in seconds.
++     *
++     * @return int
++     */
++    public static function get_delay(): int {
++        $delay = get_config('quiz_statistics', 'recalculatedelay');
++        if ($delay === false || $delay === null || $delay === '' || !is_numeric($delay)) {
++            return self::DELAY;
++        }
++        return max(0, (int) $delay);
++    }
++
+     /**
+      * Create a new instance of the task.
+      *
+@@ -103,15 +116,17 @@ class recalculate extends \core\task\adhoc_task {
+      * Queue an instance of this task to happen after a delay.
+      *
+      * Multiple events may happen over a short period that require a recalculation. Rather than
+-     * run the recalculation each time, this will queue a single run of the task for a given quiz,
+-     * within the delay period.
++     * run the recalculation each time, this will queue a single run of the task for a given quiz.
++     * This is a de-bounce: each new event pushes the queued run back to the configured delay
++     * after the latest event, so the task only runs once events have stopped for that long.
+      *
+      * @param int $quizid The quiz to run the recalculation for.
+      * @return bool true of the task was queued.
+      */
+     public static function queue_future_run(int $quizid): bool {
+         $task = self::instance($quizid);
+-        $task->set_next_run_time(time() + self::DELAY);
+-        return \core\task\manager::queue_adhoc_task($task, true);
++        $task->set_next_run_time(time() + self::get_delay());
++        \core\task\manager::reschedule_or_queue_adhoc_task($task);
++        return true;
+     }
+ }
+diff --git a/public/mod/quiz/report/statistics/lang/en/quiz_statistics.php b/public/mod/quiz/report/statistics/lang/en/quiz_statistics.php
+index c66d34cbb7a..2f7259a4356 100644
+--- a/public/mod/quiz/report/statistics/lang/en/quiz_statistics.php
++++ b/public/mod/quiz/report/statistics/lang/en/quiz_statistics.php
+@@ -106,6 +106,8 @@ $string['quizstructureanalysis'] = 'Quiz structure analysis';
+ $string['random_guess_score'] = 'Random guess score';
+ $string['rangeofvalues'] = 'Range of statistics for these questions';
+ $string['rangebetween'] = '{$a->min} − {$a->max}';
++$string['recalculatedelay'] = 'Statistics recalculation delay';
++$string['recalculatedelay_desc'] = 'After a quiz attempt is submitted or deleted, the quiz statistics are recalculated by a background task once no further attempts have been submitted or deleted for this length of time. Each new attempt restarts the delay (de-bounce), so on sites with a constant stream of attempts, statistics are only recalculated when the stream stops. Teachers can still recalculate the statistics immediately from the report.';
+ $string['recalculatenow'] = 'Recalculate now';
+ $string['recalculatetask'] = 'Recalculate question statistics';
+ $string['reportsettings'] = 'Statistics calculation settings';
+diff --git a/public/mod/quiz/report/statistics/settings.php b/public/mod/quiz/report/statistics/settings.php
+index 7aafb20b625..767c7f70e27 100644
+--- a/public/mod/quiz/report/statistics/settings.php
++++ b/public/mod/quiz/report/statistics/settings.php
+@@ -32,4 +32,11 @@ if ($ADMIN->fulltree) {
+         get_string('getstatslocktimeoutdesc', 'quiz_statistics'),
+         MINSECS * 15
+     ));
++    $settings->add(new admin_setting_configduration(
++        'quiz_statistics/recalculatedelay',
++        get_string('recalculatedelay', 'quiz_statistics'),
++        get_string('recalculatedelay_desc', 'quiz_statistics'),
++        HOURSECS,
++        HOURSECS
++    ));
+ }

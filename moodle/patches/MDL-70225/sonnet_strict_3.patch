@@ -1,0 +1,131 @@
+diff --git a/public/search/engine/simpledb/classes/engine.php b/public/search/engine/simpledb/classes/engine.php
+index e2ab53558c2..fa46bf796fd 100644
+--- a/public/search/engine/simpledb/classes/engine.php
++++ b/public/search/engine/simpledb/classes/engine.php
+@@ -130,27 +130,36 @@ class engine extends \core_search\engine {
+         if (!empty($filters->q)) {
+             switch ($DB->get_dbfamily()) {
+                 case 'postgres':
++                    $words = $this->get_query_words($filters->q);
++                    if (empty($words)) {
++                        return array();
++                    }
++                    // Each word must match (AND), matching the start of words (prefix matching).
++                    $tsquery = implode(' & ', array_map(function($word) {
++                        return "'" . str_replace("'", "''", $word) . "':*";
++                    }, $words));
+                     $ands[] = "(" .
+-                        "to_tsvector('simple', title) @@ plainto_tsquery('simple', ?) OR ".
+-                        "to_tsvector('simple', content) @@ plainto_tsquery('simple', ?) OR ".
+-                        "to_tsvector('simple', description1) @@ plainto_tsquery('simple', ?) OR ".
+-                        "to_tsvector('simple', description2) @@ plainto_tsquery('simple', ?)".
++                        "to_tsvector('simple', title) @@ to_tsquery('simple', ?) OR ".
++                        "to_tsvector('simple', content) @@ to_tsquery('simple', ?) OR ".
++                        "to_tsvector('simple', description1) @@ to_tsquery('simple', ?) OR ".
++                        "to_tsvector('simple', description2) @@ to_tsquery('simple', ?)".
+                         ")";
+-                    $params[] = $filters->q;
+-                    $params[] = $filters->q;
+-                    $params[] = $filters->q;
+-                    $params[] = $filters->q;
++                    $params[] = $tsquery;
++                    $params[] = $tsquery;
++                    $params[] = $tsquery;
++                    $params[] = $tsquery;
+                     break;
+                 case 'mysql':
+                     if ($DB->is_fulltext_search_supported()) {
+-                        $ands[] = "MATCH (title, content, description1, description2) AGAINST (?)";
+-                        $params[] = $filters->q;
+-
+-                        // Sorry for the hack, but it does not seem that we will have a solution for
+-                        // this soon (https://bugs.mysql.com/bug.php?id=78485).
+-                        if ($filters->q === '*') {
++                        $words = $this->get_query_words($filters->q);
++                        if (empty($words)) {
+                             return array();
+                         }
++                        // All words are required and match the start of words.
++                        $ands[] = "MATCH (title, content, description1, description2) AGAINST (? IN BOOLEAN MODE)";
++                        $params[] = implode(' ', array_map(function($word) {
++                            return '+' . $word . '*';
++                        }, $words));
+                     } else {
+                         // Clumsy version for mysql versions with no fulltext support.
+                         list($queryand, $queryparams) = $this->get_simple_query($filters->q);
+@@ -164,7 +173,14 @@ class engine extends \core_search\engine {
+                         // Special treatment for double quotes:
+                         // - Puntuation is ignored so we can get rid of them.
+                         // - Phrases should be enclosed in double quotation marks.
+-                        $params[] = '"' . str_replace('"', '', $filters->q) . '"';
++                        $words = $this->get_query_words($filters->q);
++                        if (empty($words)) {
++                            return array();
++                        }
++                        // All words are required and match the start of words.
++                        $params[] = implode(' AND ', array_map(function($word) {
++                            return '"' . $word . '*"';
++                        }, $words));
+                     } else {
+                         // Clumsy version for mysql versions with no fulltext support.
+                         list($queryand, $queryparams) = $this->get_simple_query($filters->q);
+@@ -340,23 +356,42 @@ class engine extends \core_search\engine {
+     protected function get_simple_query($q) {
+         global $DB;
+ 
+-        $sql = '(' .
+-            $DB->sql_like('title', '?', false, false) . ' OR ' .
+-            $DB->sql_like('content', '?', false, false) . ' OR ' .
+-            $DB->sql_like('description1', '?', false, false) . ' OR ' .
+-            $DB->sql_like('description2', '?', false, false) .
+-            ')';
+-
+-        // Remove single and double quotes from the query.
+-        $q = str_replace(['"', "'"], '', $q);
+-        $params = [
+-            '%' . $q . '%',
+-            '%' . $q . '%',
+-            '%' . $q . '%',
+-            '%' . $q . '%'
+-        ];
+-
+-        return array($sql, $params);
++        $words = $this->get_query_words($q);
++        if (empty($words)) {
++            // Nothing searchable, fall back to matching the (cleaned) raw string.
++            $words = [trim(str_replace(['"', "'"], '', $q))];
++        }
++
++        $columns = ['title', 'content', 'description1', 'description2'];
++        $ands = [];
++        $params = [];
++        foreach ($words as $word) {
++            $like = $DB->sql_like_escape($word);
++            $ors = [];
++            foreach ($columns as $column) {
++                // Match the word at the start of the field or at the start of any word within it.
++                $ors[] = $DB->sql_like($column, '?', false, false);
++                $params[] = $like . '%';
++                $ors[] = $DB->sql_like($column, '?', false, false);
++                $params[] = '% ' . $like . '%';
++            }
++            $ands[] = '(' . implode(' OR ', $ors) . ')';
++        }
++
++        return ['(' . implode(' AND ', $ands) . ')', $params];
++    }
++
++    /**
++     * Splits a user query into searchable words (letters, numbers and underscores only).
++     *
++     * @param string $q The user query.
++     * @return string[] List of words.
++     */
++    protected function get_query_words(string $q): array {
++        if (!preg_match_all('/[\p{L}\p{N}_]+/u', $q, $matches)) {
++            return [];
++        }
++        return array_values(array_unique($matches[0]));
+     }
+ 
+     /**

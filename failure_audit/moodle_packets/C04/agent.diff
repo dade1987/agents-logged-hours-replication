@@ -1,0 +1,82 @@
+diff --git a/public/mod/data/classes/local/exporter/utils.php b/public/mod/data/classes/local/exporter/utils.php
+index cde366a8271..fedbcd0cca4 100644
+--- a/public/mod/data/classes/local/exporter/utils.php
++++ b/public/mod/data/classes/local/exporter/utils.php
+@@ -102,8 +102,8 @@ class utils {
+                 foreach ($fields as $field) {
+                     $contents = '';
+                     if (isset($content[$field->field->id])) {
+-                        $contents = $field->export_text_value($content[$field->field->id]);
+-                        if (!empty($contents) && $field->file_export_supported() && $includefiles
++                        $contents = (string) $field->export_text_value($content[$field->field->id]);
++                        if ($contents !== '' && $field->file_export_supported() && $includefiles
+                             && !is_null($field->export_file_value($record))) {
+                             // For exporting overwrite the content of the column with a unique
+                             // filename, even it is not exactly the name of the file in the
+@@ -113,9 +113,8 @@ class utils {
+                             $exporter->add_file_from_string($contents, $field->export_file_value($record));
+                         }
+                     }
+-                    // Just be double sure.
+-                    $contents = !empty($contents) ? $contents : '';
+-                    $exporter->add_to_current_row($contents);
++                    // Make sure we always pass a string, but do not drop legitimate "0" values (MDL-88658).
++                    $exporter->add_to_current_row((string) $contents);
+                 }
+                 if ($tags) {
+                     $itemtags = \core_tag_tag::get_item_tags_array('mod_data', 'data_records', $record->id);
+diff --git a/public/mod/data/tests/entries_export_test.php b/public/mod/data/tests/entries_export_test.php
+index 8bfda0d392f..cbdba0cdd7f 100644
+--- a/public/mod/data/tests/entries_export_test.php
++++ b/public/mod/data/tests/entries_export_test.php
+@@ -73,11 +73,22 @@ final class entries_export_test extends \advanced_testcase {
+         $fieldrecord->type = 'picture';
+         $picturefield = $generator->create_field($fieldrecord, $data);
+ 
++        $fieldrecord->name = 'zerotextfield';
++        $fieldrecord->type = 'text';
++        $zerotextfield = $generator->create_field($fieldrecord, $data);
++
++        $fieldrecord->name = 'zeronumberfield';
++        $fieldrecord->type = 'number';
++        $zeronumberfield = $generator->create_field($fieldrecord, $data);
++
+         $contents[$numberfield->field->id] = '3';
+         $contents[$textfield->field->id] = 'a simple text';
+         $contents[$filefield1->field->id] = 'samplefile.png';
+         $contents[$filefield2->field->id] = 'samplefile.png';
+         $contents[$picturefield->field->id] = ['picturefile.png', 'this picture shows something'];
++        // Zero values must be exported as "0" and not as an empty string (MDL-88658).
++        $contents[$zerotextfield->field->id] = '0';
++        $contents[$zeronumberfield->field->id] = '0';
+         $generator->create_entry($data, $contents);
+ 
+         return [
+@@ -225,6 +236,9 @@ final class entries_export_test extends \advanced_testcase {
+         $this->assertEquals('samplefile.png', $odsrows[1][2]);
+         $this->assertEquals('samplefile.png', $odsrows[1][3]);
+         $this->assertEquals('picturefile.png', $odsrows[1][4]);
++        // Zero values must not be exported as empty strings (MDL-88658).
++        $this->assertSame('0', (string) $odsrows[1][5]);
++        $this->assertSame('0', (string) $odsrows[1][6]);
+ 
+         // As the logic of renaming the files and building a zip archive is implemented in entries_exporter class, we do
+         // not need to test this for the ods_entries_exporter, because entries_export_test::test_export_csv already does this.
+diff --git a/public/mod/data/tests/fixtures/test_data_export_with_files.csv b/public/mod/data/tests/fixtures/test_data_export_with_files.csv
+index c6f128833a8..e8bb8e54c98 100644
+--- a/public/mod/data/tests/fixtures/test_data_export_with_files.csv
++++ b/public/mod/data/tests/fixtures/test_data_export_with_files.csv
+@@ -1,2 +1,2 @@
+-numberfield,textfield,filefield1,filefield2,picturefield
+-3,"a simple text",samplefile.png,samplefile_1.png,picturefile.png
++numberfield,textfield,filefield1,filefield2,picturefield,zerotextfield,zeronumberfield
++3,"a simple text",samplefile.png,samplefile_1.png,picturefile.png,0,0
+diff --git a/public/mod/data/tests/fixtures/test_data_export_without_files.csv b/public/mod/data/tests/fixtures/test_data_export_without_files.csv
+index 2191fe7d9ca..6a586c78bde 100644
+--- a/public/mod/data/tests/fixtures/test_data_export_without_files.csv
++++ b/public/mod/data/tests/fixtures/test_data_export_without_files.csv
+@@ -1,2 +1,2 @@
+-numberfield,textfield,filefield1,filefield2,picturefield
+-3,"a simple text",samplefile.png,samplefile.png,picturefile.png
++numberfield,textfield,filefield1,filefield2,picturefield,zerotextfield,zeronumberfield
++3,"a simple text",samplefile.png,samplefile.png,picturefile.png,0,0

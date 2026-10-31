@@ -1,0 +1,65 @@
+diff --git a/public/course/classes/task/course_delete_modules.php b/public/course/classes/task/course_delete_modules.php
+index 7bf12719cfb..be7c5236e20 100644
+--- a/public/course/classes/task/course_delete_modules.php
++++ b/public/course/classes/task/course_delete_modules.php
+@@ -47,7 +47,7 @@ class course_delete_modules extends \core\task\adhoc_task {
+      * @throws \coding_exception if the module could not be removed.
+      */
+     public function execute() {
+-        global $CFG;
++        global $CFG, $DB;
+         require_once($CFG->dirroot. '/course/lib.php');
+ 
+         // Set the proper user.
+@@ -64,6 +64,11 @@ class course_delete_modules extends \core\task\adhoc_task {
+         $exceptions = [];
+         $cmsfailed = [];
+         foreach ($cms as $key => $cm) {
++            // The course module may already have been deleted (e.g. by a previous run of this task).
++            // Skip it so that executing the task again is harmless.
++            if (!$DB->record_exists('course_modules', ['id' => $cm->id])) {
++                continue;
++            }
+             try {
+                 $coursecontext = \context_module::instance($cm->id)->get_course_context();
+                 \core_courseformat\formatactions::cm($coursecontext->instanceid)->delete($cm->id);
+diff --git a/public/course/tests/course_delete_modules_test.php b/public/course/tests/course_delete_modules_test.php
+index 630fe466b20..9d87eafec7d 100644
+--- a/public/course/tests/course_delete_modules_test.php
++++ b/public/course/tests/course_delete_modules_test.php
+@@ -67,6 +67,35 @@ final class course_delete_modules_test extends \advanced_testcase {
+         $this->assertCount(0, $coursedmodules);
+     }
+ 
++    /**
++     * Test that executing the task again, when the course modules have already been deleted, does nothing.
++     */
++    public function test_delete_module_execution_is_idempotent(): void {
++        $this->resetAfterTest();
++
++        // Generate test data.
++        $generator = $this->getDataGenerator();
++        $user = $generator->create_user();
++        $course = $generator->create_course();
++        $assign = $generator->create_module('assign', ['course' => $course]);
++        $assigncm = get_coursemodule_from_id('assign', $assign->cmid);
++
++        $removaltask = new \core_course\task\course_delete_modules();
++        $data = [
++            'cms' => [$assigncm],
++            'userid' => $user->id,
++            'realuserid' => $user->id,
++        ];
++        $removaltask->set_custom_data($data);
++        $removaltask->execute();
++        $this->assertCount(0, get_course_mods($course->id));
++
++        // Executing the task again must not throw, as the course module record is now missing.
++        $removaltask->set_custom_data($data);
++        $removaltask->execute();
++        $this->assertCount(0, get_course_mods($course->id));
++    }
++
+     /**
+      * Test with failed and successful cms
+      */

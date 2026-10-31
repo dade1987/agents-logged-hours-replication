@@ -1,0 +1,81 @@
+diff --git a/mysql-test/suite/sql_sequence/alter.result b/mysql-test/suite/sql_sequence/alter.result
+index 36cef2a3..3e670d16 100644
+--- a/mysql-test/suite/sql_sequence/alter.result
++++ b/mysql-test/suite/sql_sequence/alter.result
+@@ -417,5 +417,14 @@ DROP SEQUENCE s2;
+ RENAME TABLE s1 TO s2;
+ DROP SEQUENCE s2;
+ #
++# MDEV-31808 Server crash upon altering table with NEXTVAL for default
++# under exclusive lock
++#
++CREATE SEQUENCE s;
++CREATE TABLE t (a INT DEFAULT(NEXTVAL(s)), b INT);
++ALTER TABLE t FORCE, ALGORITHM=COPY, LOCK=EXCLUSIVE;
++DROP TABLE t;
++DROP SEQUENCE s;
++#
+ # End of 10.6 tests
+ #
+diff --git a/mysql-test/suite/sql_sequence/alter.test b/mysql-test/suite/sql_sequence/alter.test
+index 9ac22b64..bdc1f411 100644
+--- a/mysql-test/suite/sql_sequence/alter.test
++++ b/mysql-test/suite/sql_sequence/alter.test
+@@ -290,6 +290,17 @@ DROP SEQUENCE s2;
+ RENAME TABLE s1 TO s2;
+ DROP SEQUENCE s2;
+ 
++--echo #
++--echo # MDEV-31808 Server crash upon altering table with NEXTVAL for default
++--echo # under exclusive lock
++--echo #
++
++CREATE SEQUENCE s;
++CREATE TABLE t (a INT DEFAULT(NEXTVAL(s)), b INT);
++ALTER TABLE t FORCE, ALGORITHM=COPY, LOCK=EXCLUSIVE;
++DROP TABLE t;
++DROP SEQUENCE s;
++
+ --enable_ps2_protocol
+ 
+ --echo #
+diff --git a/sql/sql_base.cc b/sql/sql_base.cc
+index 379337af..d4e62684 100644
+--- a/sql/sql_base.cc
++++ b/sql/sql_base.cc
+@@ -4994,8 +4994,17 @@ bool open_and_lock_internal_tables(TABLE *table, bool lock_table)
+   TABLE_LIST *tmp= table->internal_tables;
+   DML_prelocking_strategy prelocking_strategy;
+ 
+-  if (open_tables(thd, thd->lex->create_info, &tmp, &counter, 0,
+-                  &prelocking_strategy))
++  /*
++    The internal tables (sequences) are opened on behalf of the table being
++    created or altered. The caller may already have flushed the table
++    instances of this statement (e.g. ALTER TABLE ... LOCK=EXCLUSIVE calls
++    wait_while_table_is_used()), so we must not back off and reopen the
++    statement's tables here: that would close the locks held by the
++    statement, leaving thd->lock NULL and the assertion in
++    close_tables_for_reopen() failing (MDEV-31808).
++  */
++  if (open_tables(thd, thd->lex->create_info, &tmp, &counter,
++                  MYSQL_OPEN_IGNORE_FLUSH, &prelocking_strategy))
+     goto err;
+ 
+   if (lock_table)
+@@ -5004,9 +5013,14 @@ bool open_and_lock_internal_tables(TABLE *table, bool lock_table)
+     thd->lock= 0;
+     if (lock_tables(thd, table->internal_tables, counter,
+                     MYSQL_LOCK_USE_MALLOC))
++    {
++      thd->lock= save_lock;
+       goto err;
++    }
+ 
+-    if (!(new_lock= mysql_lock_merge(save_lock, thd->lock)))
++    if (!save_lock)
++      new_lock= thd->lock;
++    else if (!(new_lock= mysql_lock_merge(save_lock, thd->lock)))
+     {
+       thd->lock= save_lock;
+       mysql_unlock_tables(thd, save_lock, 1);

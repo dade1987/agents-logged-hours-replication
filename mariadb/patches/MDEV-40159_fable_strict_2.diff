@@ -1,0 +1,68 @@
+diff --git a/mysql-test/main/symlink.result b/mysql-test/main/symlink.result
+index 67d067be..5c073f13 100644
+--- a/mysql-test/main/symlink.result
++++ b/mysql-test/main/symlink.result
+@@ -249,3 +249,16 @@ t1	CREATE TABLE `t1` (
+   `c3` varchar(100) DEFAULT NULL
+ ) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci DELAY_KEY_WRITE=1 DATA DIRECTORY='MYSQL_TMP_DIR/' INDEX DIRECTORY='MYSQL_TMP_DIR/'
+ drop table t1;
++#
++# MDEV-40159 single quote in DATA DIRECTORY breaks SHOW CREATE TABLE
++#
++create table t1 (a int) data directory="MYSQL_TMP_DIR/o'hara";
++show create table t1;
++Table	Create Table
++t1	CREATE TABLE `t1` (
++  `a` int(11) DEFAULT NULL
++) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci DATA DIRECTORY='MYSQL_TMP_DIR/o''hara/'
++drop table t1;
++#
++# End of 10.11 tests
++#
+diff --git a/mysql-test/main/symlink.test b/mysql-test/main/symlink.test
+index d5f52e9a..a5e0cf0c 100644
+--- a/mysql-test/main/symlink.test
++++ b/mysql-test/main/symlink.test
+@@ -346,3 +346,18 @@ drop table t1;
+ #
+ # End of 10.1 tests
+ #
++
++--echo #
++--echo # MDEV-40159 single quote in DATA DIRECTORY breaks SHOW CREATE TABLE
++--echo #
++--mkdir $MYSQL_TMP_DIR/o'hara
++--replace_result $MYSQL_TMP_DIR MYSQL_TMP_DIR
++eval create table t1 (a int) data directory="$MYSQL_TMP_DIR/o'hara";
++--replace_result $MYSQL_TMP_DIR MYSQL_TMP_DIR
++show create table t1;
++drop table t1;
++--rmdir $MYSQL_TMP_DIR/o'hara
++
++--echo #
++--echo # End of 10.11 tests
++--echo #
+diff --git a/sql/sql_show.cc b/sql/sql_show.cc
+index cbfa699e..f5885efb 100644
+--- a/sql/sql_show.cc
++++ b/sql/sql_show.cc
+@@ -1672,7 +1672,7 @@ static void append_directory(THD *thd, String *packet, LEX_CSTRING *dir_type,
+     size_t length= dirname_length(filename);
+     packet->append(' ');
+     packet->append(dir_type);
+-    packet->append(STRING_WITH_LEN(" DIRECTORY='"));
++    packet->append(STRING_WITH_LEN(" DIRECTORY="));
+ #ifdef _WIN32
+     /* Convert \ to / to be able to create table on unix */
+     char *winfilename= (char*) thd->memdup(filename, length);
+@@ -1684,8 +1684,8 @@ static void append_directory(THD *thd, String *packet, LEX_CSTRING *dir_type,
+     }
+     filename= winfilename;
+ #endif
+-    packet->append(filename, length);
+-    packet->append('\'');
++    /* Quote and escape the path (e.g. single quotes in directory names) */
++    append_unescaped(packet, filename, length);
+   }
+ }
+ 

@@ -1,0 +1,238 @@
+diff --git a/mysql-test/main/func_json.result b/mysql-test/main/func_json.result
+index da78b027..2fa31f20 100644
+--- a/mysql-test/main/func_json.result
++++ b/mysql-test/main/func_json.result
+@@ -2959,4 +2959,49 @@ NULL
+ SELECT JSON_OVERLAPS(JSON_ARRAY_INSERT(NULL,'$[0]',1), '[]') AS x;
+ x
+ NULL
++#
++# MDEV-32331 JSON path functions with no charset on path crash server
++#
++SELECT ( WITH x ( x ) AS ( WITH x ( x ) AS ( SELECT json_array_append ( 'x' , ( 'x' % 'x' ) , 1 , 'x' , 1 ) ) SELECT CASE WHEN x * x THEN x END FROM x ) ( SELECT 1 FROM x WHERE x ) ) AS r;
++r
++NULL
++CREATE TABLE t1 (a INT);
++INSERT INTO t1 VALUES (1),(2);
++SELECT JSON_ARRAY_APPEND('[1]', NULL, 1) AS r FROM t1;
++r
++NULL
++NULL
++SELECT JSON_ARRAY_INSERT('[1]', NULL, 1) AS r FROM t1;
++r
++NULL
++NULL
++SELECT JSON_REMOVE('[1]', NULL) AS r FROM t1;
++r
++NULL
++NULL
++SELECT JSON_CONTAINS('[1]', '1', NULL) AS r FROM t1;
++r
++NULL
++NULL
++SELECT JSON_EXISTS('[1]', NULL) AS r FROM t1;
++r
++NULL
++NULL
++SELECT JSON_LENGTH('[1]', NULL) AS r FROM t1;
++r
++NULL
++NULL
++SELECT JSON_KEYS('{"a":1}', NULL) AS r FROM t1;
++r
++NULL
++NULL
++SELECT JSON_VALUE('[1]', NULL) AS r FROM t1;
++r
++NULL
++NULL
++SELECT JSON_QUERY('[1]', NULL) AS r FROM t1;
++r
++NULL
++NULL
++DROP TABLE t1;
+ # End of 10.11 Test
+diff --git a/mysql-test/main/func_json.test b/mysql-test/main/func_json.test
+index c9a65929..c4e12361 100644
+--- a/mysql-test/main/func_json.test
++++ b/mysql-test/main/func_json.test
+@@ -2130,4 +2130,25 @@ SELECT JSON_ARRAY_INSERT (0,NULL,1) as j;
+ SELECT JSON_EQUALS('[]', JSON_ARRAY_INSERT(NULL,'$[0]',1)) AS x;
+ SELECT JSON_OVERLAPS(JSON_ARRAY_INSERT(NULL,'$[0]',1), '[]') AS x;
+ 
++--echo #
++--echo # MDEV-32331 JSON path functions with no charset on path crash server
++--echo #
++
++--disable_warnings
++SELECT ( WITH x ( x ) AS ( WITH x ( x ) AS ( SELECT json_array_append ( 'x' , ( 'x' % 'x' ) , 1 , 'x' , 1 ) ) SELECT CASE WHEN x * x THEN x END FROM x ) ( SELECT 1 FROM x WHERE x ) ) AS r;
++--enable_warnings
++
++CREATE TABLE t1 (a INT);
++INSERT INTO t1 VALUES (1),(2);
++SELECT JSON_ARRAY_APPEND('[1]', NULL, 1) AS r FROM t1;
++SELECT JSON_ARRAY_INSERT('[1]', NULL, 1) AS r FROM t1;
++SELECT JSON_REMOVE('[1]', NULL) AS r FROM t1;
++SELECT JSON_CONTAINS('[1]', '1', NULL) AS r FROM t1;
++SELECT JSON_EXISTS('[1]', NULL) AS r FROM t1;
++SELECT JSON_LENGTH('[1]', NULL) AS r FROM t1;
++SELECT JSON_KEYS('{"a":1}', NULL) AS r FROM t1;
++SELECT JSON_VALUE('[1]', NULL) AS r FROM t1;
++SELECT JSON_QUERY('[1]', NULL) AS r FROM t1;
++DROP TABLE t1;
++
+ --echo # End of 10.11 Test
+diff --git a/sql/item_jsonfunc.cc b/sql/item_jsonfunc.cc
+index cfe244dc..24977e3b 100644
+--- a/sql/item_jsonfunc.cc
++++ b/sql/item_jsonfunc.cc
+@@ -704,11 +704,18 @@ bool Item_func_json_exists::val_bool()
+   if (!path.parsed)
+   {
+     String *s_p= args[1]->val_str(&tmp_path);
+-    if (s_p &&
+-        json_path_setup(&path.p, s_p->charset(), (const uchar *) s_p->ptr(),
+-                        (const uchar *) s_p->ptr() + s_p->length()))
+-      goto err_return;
+-    path.parsed= path.constant;
++    if (s_p)
++    {
++      if (json_path_setup(&path.p, s_p->charset(), (const uchar *) s_p->ptr(),
++                          (const uchar *) s_p->ptr() + s_p->length()))
++        goto err_return;
++      /*
++        Mark the path as parsed only when it was actually set up.
++        A NULL path must be re-evaluated on every call, otherwise path.p
++        would be used uninitialized later.
++      */
++      path.parsed= path.constant;
++    }
+   }
+ 
+   if ((null_value= args[0]->null_value || args[1]->null_value))
+@@ -793,7 +800,9 @@ bool Json_path_extractor::extract(String *str, Item *item_js, Item *item_jp,
+       return true;
+     }
+ 
+-    parsed= constant;
++    /* A NULL path is not set up, so it cannot be remembered as parsed. */
++    if (s_p)
++      parsed= constant;
+   }
+ 
+   if (item_js->null_value || item_jp->null_value)
+@@ -1603,14 +1612,16 @@ bool Item_func_json_contains::val_bool()
+     if (!path.parsed)
+     {
+       String *s_p= args[2]->val_str(&tmp_path);
+-      if (s_p &&
+-          path_setup_nwc(&path.p,s_p->charset(),(const uchar *) s_p->ptr(),
+-                         (const uchar *) s_p->end()))
++      if (s_p)
+       {
+-        report_path_error(s_p, &path.p, 2);
+-        goto return_null;
++        if (path_setup_nwc(&path.p,s_p->charset(),(const uchar *) s_p->ptr(),
++                           (const uchar *) s_p->end()))
++        {
++          report_path_error(s_p, &path.p, 2);
++          goto return_null;
++        }
++        path.parsed= path.constant;
+       }
+-      path.parsed= path.constant;
+     }
+     if (args[2]->null_value)
+       goto return_null;
+@@ -2164,14 +2175,21 @@ String *Item_func_json_array_append::val_str(String *str)
+     if (!c_path->parsed)
+     {
+       String *s_p= args[n_arg]->val_str(tmp_paths+n_path);
+-      if (s_p &&
+-          path_setup_nwc(&c_path->p,s_p->charset(),(const uchar *) s_p->ptr(),
+-                         (const uchar *) s_p->ptr() + s_p->length()))
++      if (s_p)
+       {
+-        report_path_error(s_p, &c_path->p, n_arg);
+-        goto return_null;
++        if (path_setup_nwc(&c_path->p,s_p->charset(),(const uchar *) s_p->ptr(),
++                           (const uchar *) s_p->ptr() + s_p->length()))
++        {
++          report_path_error(s_p, &c_path->p, n_arg);
++          goto return_null;
++        }
++        /*
++          Only a successfully set up path can be remembered as parsed.
++          If the path argument is NULL the json_path_t stays uninitialized
++          (no charset etc.) and must not be reused by subsequent calls.
++        */
++        c_path->parsed= c_path->constant;
+       }
+-      c_path->parsed= c_path->constant;
+     }
+     if (args[n_arg]->null_value)
+       goto return_null;
+@@ -3165,14 +3183,16 @@ longlong Item_func_json_length::val_int()
+     if (!path.parsed)
+     {
+       String *s_p= args[1]->val_str(&tmp_path);
+-      if (s_p &&
+-          path_setup_nwc(&path.p, s_p->charset(), (const uchar *) s_p->ptr(),
+-                         (const uchar *) s_p->ptr() + s_p->length()))
++      if (s_p)
+       {
+-        report_path_error(s_p, &path.p, 1);
+-        goto null_return;
++        if (path_setup_nwc(&path.p, s_p->charset(), (const uchar *) s_p->ptr(),
++                           (const uchar *) s_p->ptr() + s_p->length()))
++        {
++          report_path_error(s_p, &path.p, 1);
++          goto null_return;
++        }
++        path.parsed= path.constant;
+       }
+-      path.parsed= path.constant;
+     }
+     if (args[1]->null_value)
+       goto null_return;
+@@ -3420,8 +3440,8 @@ String *Item_func_json_insert::val_str(String *str)
+ 
+         /* We search to the last step. */
+         c_path->p.last_step--;
++        c_path->parsed= c_path->constant;
+       }
+-      c_path->parsed= c_path->constant;
+     }
+     if (args[n_arg]->null_value)
+       goto return_null;
+@@ -3691,8 +3711,8 @@ String *Item_func_json_remove::val_str(String *str)
+           report_path_error(s_p, &c_path->p, n_arg);
+           goto null_return;
+         }
++        c_path->parsed= c_path->constant;
+       }
+-      c_path->parsed= c_path->constant;
+     }
+     if (args[n_arg]->null_value)
+       goto null_return;
+@@ -3905,14 +3925,16 @@ String *Item_func_json_keys::val_str(String *str)
+   if (!path.parsed)
+   {
+     String *s_p= args[1]->val_str(&tmp_path);
+-    if (s_p &&
+-        path_setup_nwc(&path.p, s_p->charset(), (const uchar *) s_p->ptr(),
+-                       (const uchar *) s_p->ptr() + s_p->length()))
++    if (s_p)
++    {
++      if (path_setup_nwc(&path.p, s_p->charset(), (const uchar *) s_p->ptr(),
++                         (const uchar *) s_p->ptr() + s_p->length()))
+       {
+         report_path_error(s_p, &path.p, 1);
+         goto null_return;
+       }
+-    path.parsed= path.constant;
++      path.parsed= path.constant;
++    }
+   }
+ 
+   if (args[1]->null_value)

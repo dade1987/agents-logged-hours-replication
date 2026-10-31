@@ -1,0 +1,94 @@
+diff --git a/mysql-test/suite/innodb_fts/r/optimize_extern_ilist.result b/mysql-test/suite/innodb_fts/r/optimize_extern_ilist.result
+new file mode 100644
+index 00000000..e845e4ba
+--- /dev/null
++++ b/mysql-test/suite/innodb_fts/r/optimize_extern_ilist.result
+@@ -0,0 +1,21 @@
++#
++# MDEV-40621 InnoDB: Failing assertion: doc_id == src_node->last_doc_id
++# (OPTIMIZE TABLE must read externally stored ilist of FTS index tables)
++#
++CREATE TABLE t1 (id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, body MEDIUMTEXT,
++FULLTEXT KEY ftidx (body)) ENGINE=InnoDB;
++INSERT INTO t1 (body) SELECT REPEAT('megaword ', 30) FROM seq_1_to_260;
++SET @save_optimize_fulltext_only = @@GLOBAL.innodb_optimize_fulltext_only;
++SET GLOBAL innodb_optimize_fulltext_only = ON;
++DELETE FROM t1 WHERE id = 1;
++OPTIMIZE TABLE t1;
++Table	Op	Msg_type	Msg_text
++test.t1	optimize	status	OK
++OPTIMIZE TABLE t1;
++Table	Op	Msg_type	Msg_text
++test.t1	optimize	status	OK
++SELECT COUNT(*) FROM t1 WHERE MATCH(body) AGAINST('megaword');
++COUNT(*)
++259
++SET GLOBAL innodb_optimize_fulltext_only = @save_optimize_fulltext_only;
++DROP TABLE t1;
+diff --git a/mysql-test/suite/innodb_fts/t/optimize_extern_ilist.test b/mysql-test/suite/innodb_fts/t/optimize_extern_ilist.test
+new file mode 100644
+index 00000000..a01c7552
+--- /dev/null
++++ b/mysql-test/suite/innodb_fts/t/optimize_extern_ilist.test
+@@ -0,0 +1,18 @@
++--source include/have_innodb.inc
++--source include/have_sequence.inc
++
++--echo #
++--echo # MDEV-40621 InnoDB: Failing assertion: doc_id == src_node->last_doc_id
++--echo # (OPTIMIZE TABLE must read externally stored ilist of FTS index tables)
++--echo #
++CREATE TABLE t1 (id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, body MEDIUMTEXT,
++                 FULLTEXT KEY ftidx (body)) ENGINE=InnoDB;
++INSERT INTO t1 (body) SELECT REPEAT('megaword ', 30) FROM seq_1_to_260;
++SET @save_optimize_fulltext_only = @@GLOBAL.innodb_optimize_fulltext_only;
++SET GLOBAL innodb_optimize_fulltext_only = ON;
++DELETE FROM t1 WHERE id = 1;
++OPTIMIZE TABLE t1;
++OPTIMIZE TABLE t1;
++SELECT COUNT(*) FROM t1 WHERE MATCH(body) AGAINST('megaword');
++SET GLOBAL innodb_optimize_fulltext_only = @save_optimize_fulltext_only;
++DROP TABLE t1;
+diff --git a/storage/innobase/fts/fts0exec.cc b/storage/innobase/fts/fts0exec.cc
+index 197eebc6..adebb56b 100644
+--- a/storage/innobase/fts/fts0exec.cc
++++ b/storage/innobase/fts/fts0exec.cc
+@@ -802,13 +802,35 @@ dberr_t AuxRecordReader::default_word_processor(
+ 
+   if (ilist_data && ilist_len != UNIV_SQL_NULL && ilist_len > 0)
+   {
+-    node->ilist_size_alloc= node->ilist_size= ilist_len;
+-    if (ilist_len)
++    if (rec_offs_nth_extern(offsets, 6))
+     {
++      /* The ilist is stored externally (BLOB); fetch the whole value
++      instead of only the locally stored prefix and BLOB pointer. */
++      mem_heap_t *ilist_heap= mem_heap_create(ilist_len + 1000);
++      ulint external_len= 0;
++      byte *external_ilist= btr_copy_externally_stored_field(
++        &external_len, ilist_data, index->table->space->zip_size(),
++        ilist_len, ilist_heap);
++      if (!external_ilist)
++      {
++        mem_heap_free(ilist_heap);
++        ib_vector_pop(word->nodes);
++        return DB_CORRUPTION;
++      }
++      node->ilist_size_alloc= node->ilist_size= external_len;
++      if (external_len)
++      {
++        node->ilist= static_cast<byte*>(ut_malloc_nokey(external_len));
++        memcpy(node->ilist, external_ilist, external_len);
++      }
++      mem_heap_free(ilist_heap);
++    }
++    else
++    {
++      node->ilist_size_alloc= node->ilist_size= ilist_len;
+       node->ilist= static_cast<byte*>(ut_malloc_nokey(ilist_len));
+       memcpy(node->ilist, ilist_data, ilist_len);
+     }
+-    if (ilist_len == 0) return DB_SUCCESS_LOCKED_REC;
+   }
+ 
+   if (this->total_memory)

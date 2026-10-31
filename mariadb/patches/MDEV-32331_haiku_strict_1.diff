@@ -1,0 +1,35 @@
+diff --git a/sql/item_jsonfunc.cc b/sql/item_jsonfunc.cc
+index cfe244dc..3468a93a 100644
+--- a/sql/item_jsonfunc.cc
++++ b/sql/item_jsonfunc.cc
+@@ -2164,8 +2164,10 @@ String *Item_func_json_array_append::val_str(String *str)
+     if (!c_path->parsed)
+     {
+       String *s_p= args[n_arg]->val_str(tmp_paths+n_path);
+-      if (s_p &&
+-          path_setup_nwc(&c_path->p,s_p->charset(),(const uchar *) s_p->ptr(),
++      if (!s_p)
++        goto return_null;
++
++      if (path_setup_nwc(&c_path->p,s_p->charset(),(const uchar *) s_p->ptr(),
+                          (const uchar *) s_p->ptr() + s_p->length()))
+       {
+         report_path_error(s_p, &c_path->p, n_arg);
+diff --git a/strings/json_lib.c b/strings/json_lib.c
+index 01df72bd..49ce9c17 100644
+--- a/strings/json_lib.c
++++ b/strings/json_lib.c
+@@ -38,6 +38,13 @@ void json_string_set_str(json_string_t *s,
+ 
+ void json_string_set_cs(json_string_t *s, CHARSET_INFO *i_cs)
+ {
++  /*
++    A path or document string may come without a charset (e.g. a numeric
++    expression used as a path). Fall back to a sane default instead of
++    dereferencing NULL.
++  */
++  if (!i_cs)
++    i_cs= &my_charset_utf8mb4_bin;
+   s->cs= i_cs;
+   s->error= 0;
+   s->wc= i_cs->cset->mb_wc;

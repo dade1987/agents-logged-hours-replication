@@ -1,0 +1,55 @@
+diff --git a/public/grade/report/user/classes/report/user.php b/public/grade/report/user/classes/report/user.php
+index 7b9420628d3..6df5a255861 100644
+--- a/public/grade/report/user/classes/report/user.php
++++ b/public/grade/report/user/classes/report/user.php
+@@ -610,6 +610,12 @@ class user extends grade_report {
+                 // Basic grade item information.
+                 $gradeitemdata['id'] = $gradeobject->id;
+                 $gradeitemdata['itemname'] = $gradeobject->itemname;
++                // Category grade items do not have an item name, so use the name of the category they belong to.
++                if ($gradeobject->is_category_item() && (string) $gradeobject->itemname === '') {
++                    if ($itemcategory = $gradeobject->load_item_category()) {
++                        $gradeitemdata['itemname'] = $itemcategory->fullname;
++                    }
++                }
+                 $gradeitemdata['itemtype'] = $gradeobject->itemtype;
+                 $gradeitemdata['itemmodule'] = $gradeobject->itemmodule;
+                 $gradeitemdata['iteminstance'] = $gradeobject->iteminstance;
+diff --git a/public/grade/report/user/tests/externallib_test.php b/public/grade/report/user/tests/externallib_test.php
+index 2c7ddc0d240..09c799dc1b4 100644
+--- a/public/grade/report/user/tests/externallib_test.php
++++ b/public/grade/report/user/tests/externallib_test.php
+@@ -422,4 +422,33 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+         $this->assertEquals('course', $studentgrades['usergrades'][0]['gradeitems'][0]['itemtype']);
+     }
+ 
++    /**
++     * Test get_grade_items returns the category name as the item name for category grade items.
++     */
++    public function test_get_grade_items_category_itemname(): void {
++        $this->resetAfterTest(true);
++
++        $course = $this->getDataGenerator()->create_course();
++        $student = $this->getDataGenerator()->create_and_enrol($course, 'student');
++        $category = $this->getDataGenerator()->create_grade_category([
++            'courseid' => $course->id,
++            'fullname' => 'My grade category',
++        ]);
++        $this->getDataGenerator()->create_grade_item([
++            'courseid' => $course->id,
++            'categoryid' => $category->id,
++            'itemname' => 'Manual item',
++        ]);
++
++        $this->setUser($student);
++        $result = user_external::get_grade_items($course->id, $student->id);
++        $result = external_api::clean_returnvalue(user_external::get_grade_items_returns(), $result);
++
++        $names = [];
++        foreach ($result['usergrades'][0]['gradeitems'] as $gradeitem) {
++            $names[$gradeitem['itemtype']][] = $gradeitem['itemname'];
++        }
++        $this->assertEquals(['Manual item'], $names['manual']);
++        $this->assertEquals(['My grade category'], $names['category']);
++    }
+ }

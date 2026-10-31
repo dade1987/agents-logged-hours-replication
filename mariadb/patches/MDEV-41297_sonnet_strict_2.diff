@@ -1,0 +1,58 @@
+diff --git a/storage/heap/hp_hash.c b/storage/heap/hp_hash.c
+index 5cefff50..bda8e98e 100644
+--- a/storage/heap/hp_hash.c
++++ b/storage/heap/hp_hash.c
+@@ -523,15 +523,22 @@ int hp_rec_key_cmp(HP_KEYDEF *keydef, const uchar *rec1, const uchar *rec2,
+ 
+       /* rec1: always input -- dereference pointer */
+       memcpy(&data1, pos1 + packlength, HP_PTR_SIZE);
++      if (!len1)
++        data1= (const uchar*) "";
+ 
+       /* rec2: if info != NULL, it's stored -- materialize from chain */
+       if (info)
+       {
+         const uchar *chain2;
+         memcpy(&chain2, pos2 + packlength, HP_PTR_SIZE);
+-        data2= hp_materialize_one_blob(info, chain2, (uint32) len2);
+-        if (!data2)
+-          return 1;
++        if (len2)
++        {
++          data2= hp_materialize_one_blob(info, chain2, (uint32) len2);
++          if (!data2)
++            return 1;
++        }
++        else
++          data2= (const uchar*) "";
+       }
+       else
+       {
+@@ -684,6 +691,8 @@ int hp_key_cmp(HP_KEYDEF *keydef, const uchar *rec, const uchar *key,
+       const uchar *rec_data;
+ 
+       memcpy(&key_data, key + 4, HP_PTR_SIZE);
++      if (!key_blob_len)
++        key_data= (const uchar*) "";
+ 
+       if (rec_blob_len == 0 && key_blob_len == 0)
+         continue;
+@@ -694,9 +703,15 @@ int hp_key_cmp(HP_KEYDEF *keydef, const uchar *rec, const uchar *key,
+       {
+         const uchar *chain;
+         memcpy(&chain, pos + packlength, HP_PTR_SIZE);
+-        rec_data= hp_materialize_one_blob(info, chain, (uint32) rec_blob_len);
+-        if (!rec_data)
+-          return 1;
++        if (rec_blob_len)
++        {
++          rec_data= hp_materialize_one_blob(info, chain,
++                                            (uint32) rec_blob_len);
++          if (!rec_data)
++            return 1;
++        }
++        else
++          rec_data= (const uchar*) "";
+       }
+ 
+       if (my_ci_strnncollsp(seg->charset,

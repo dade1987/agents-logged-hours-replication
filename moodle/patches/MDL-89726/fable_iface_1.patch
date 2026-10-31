@@ -1,0 +1,158 @@
+diff --git a/public/lib/classes/output/requirements/import_map.php b/public/lib/classes/output/requirements/import_map.php
+index 7c1b1e5f69b..f5796e967a7 100644
+--- a/public/lib/classes/output/requirements/import_map.php
++++ b/public/lib/classes/output/requirements/import_map.php
+@@ -123,6 +123,38 @@ class import_map implements \JsonSerializable {
+         return $importmap;
+     }
+ 
++    /**
++     * Get the list of import map specifiers that should be preloaded via `<link rel="modulepreload">`.
++     *
++     * Only concrete (non-prefix) specifiers are candidates for preloading: a prefix specifier such as
++     * `@moodle/lms/` or `react/` maps a whole namespace to a directory and therefore does not identify
++     * a single module that could be fetched ahead of time. The concrete entries (for example `react`,
++     * `react-dom`, `tabbable`, `bootstrap` and the design-system bundle) are foundational dependencies
++     * imported by virtually every ESM page, so hinting them to the browser lets it fetch them in parallel
++     * with page parsing instead of discovering them one import-graph level at a time.
++     *
++     * For themable entries only the default (active-theme) specifier is returned, which resolves to the
++     * active theme's override, or the default implementation, exactly as the import map itself does.
++     * The per-theme variants (`<specifier>/theme-<name>`) are not preloaded as only one of them is used.
++     *
++     * The returned specifiers are keys of the `imports` array produced by {@see jsonSerialize()}.
++     *
++     * @return string[] The list of bare specifiers to preload.
++     */
++    public function get_preload_specifiers(): array {
++        $specifiers = [];
++
++        foreach (array_keys($this->imports) as $specifier) {
++            if (str_ends_with($specifier, '/')) {
++                // Prefix specifiers map to a directory and cannot be preloaded as a single module.
++                continue;
++            }
++            $specifiers[] = $specifier;
++        }
++
++        return $specifiers;
++    }
++
+     /**
+      * Set the list of available themes by name.
+      *
+diff --git a/public/lib/classes/output/requirements/page_requirements_manager.php b/public/lib/classes/output/requirements/page_requirements_manager.php
+index f13039d2d28..081b76bc301 100644
+--- a/public/lib/classes/output/requirements/page_requirements_manager.php
++++ b/public/lib/classes/output/requirements/page_requirements_manager.php
+@@ -1044,6 +1044,16 @@ class page_requirements_manager {
+     /**
+      * Returns the import map script tag for React platform files.
+      *
++     * The import map is followed by a `<link rel="modulepreload">` for each concrete import map entry
++     * (for example `react`, `react-dom`, `tabbable`, `bootstrap` and the active theme's design-system
++     * bundle). These are foundational dependencies of every ESM page, and the preload hints allow the
++     * browser to start fetching them in parallel with page parsing instead of discovering them one
++     * import-graph level at a time, which is particularly costly on HTTP/1.1.
++     *
++     * The preload links must be emitted after the import map: browsers only honour an import map for
++     * bare-specifier resolution if it is registered before the first module-related resource is processed.
++     *
++     * @param moodle_page $page
+      * @return string
+      */
+     public function get_import_map(moodle_page $page): string {
+@@ -1063,14 +1073,30 @@ class page_requirements_manager {
+         $themes = core_component::get_all_plugins_list('theme');
+         $importmap->set_available_themes(array_keys($themes));
+ 
+-        return html_writer::tag(
++        $serialised = $importmap->jsonSerialize();
++
++        $output = html_writer::tag(
+             'script',
+             json_encode(
+-                $importmap,
++                $serialised,
+                 JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES
+             ),
+             ['type' => 'importmap'],
+         );
++
++        // Preload the foundational ESM dependencies so the browser can fetch them in parallel with
++        // page parsing. These must come after the import map so that bare specifiers resolve correctly.
++        foreach ($importmap->get_preload_specifiers() as $specifier) {
++            if (!isset($serialised['imports'][$specifier])) {
++                continue;
++            }
++            $output .= html_writer::empty_tag('link', [
++                'rel' => 'modulepreload',
++                'href' => $serialised['imports'][$specifier],
++            ]);
++        }
++
++        return $output;
+     }
+ 
+     /**
+diff --git a/public/lib/tests/output/requirements/import_map_test.php b/public/lib/tests/output/requirements/import_map_test.php
+index a69e8d0abd6..028170725b2 100644
+--- a/public/lib/tests/output/requirements/import_map_test.php
++++ b/public/lib/tests/output/requirements/import_map_test.php
+@@ -40,6 +40,56 @@ final class import_map_test extends \advanced_testcase {
+         $this->assertArrayHasKey('react/', $data['imports']);
+     }
+ 
++    /**
++     * get_preload_specifiers() returns only the concrete (non-prefix) standard specifiers.
++     */
++    public function test_get_preload_specifiers_returns_concrete_standard_entries(): void {
++        $map = \core\di::get(import_map::class);
++
++        $specifiers = $map->get_preload_specifiers();
++
++        $this->assertContains('react', $specifiers);
++        $this->assertContains('react-dom', $specifiers);
++        $this->assertContains('tabbable', $specifiers);
++        $this->assertContains('bootstrap', $specifiers);
++        $this->assertContains('@moodlehq/design-system', $specifiers);
++
++        // Prefix specifiers cannot be preloaded as a single module.
++        foreach ($specifiers as $specifier) {
++            $this->assertStringEndsNotWith('/', $specifier);
++        }
++        $this->assertNotContains('@moodle/lms/', $specifiers);
++        $this->assertNotContains('react/', $specifiers);
++        $this->assertNotContains('react-dom/', $specifiers);
++        $this->assertNotContains('bootstrap/', $specifiers);
++    }
++
++    /**
++     * get_preload_specifiers() includes custom concrete imports, excludes custom prefix imports,
++     * and every returned specifier is resolvable in the serialised import map for the active theme.
++     */
++    public function test_get_preload_specifiers_matches_import_map_entries(): void {
++        $map = \core\di::get(import_map::class);
++        $map->set_default_loader(new \core\url('https://example.com/'));
++        $map->set_current_theme('boost');
++        $map->set_available_themes(['boost']);
++        $map->add_import('mylib', path: 'lib/mylib/index', themable: true);
++        $map->add_import('myprefix/', path: 'lib/myprefix');
++
++        $specifiers = $map->get_preload_specifiers();
++        $this->assertContains('mylib', $specifiers);
++        $this->assertNotContains('myprefix/', $specifiers);
++        // Only the default (active-theme) specifier is preloaded, not the per-theme variants.
++        $this->assertNotContains('mylib/theme-boost', $specifiers);
++        $this->assertNotContains('mylib/theme-original', $specifiers);
++
++        $data = $map->jsonSerialize();
++        foreach ($specifiers as $specifier) {
++            $this->assertArrayHasKey($specifier, $data['imports']);
++        }
++        $this->assertSame('https://example.com/mylib/theme-boost', $data['imports']['mylib']);
++    }
++
+     /**
+      * jsonSerialize() throws a coding_exception when no default loader has been set.
+      */

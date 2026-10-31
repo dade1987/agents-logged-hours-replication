@@ -1,0 +1,95 @@
+diff --git a/mysql-test/suite/binlog/include/mysqlbinlog_gtid_window_test_cases.inc b/mysql-test/suite/binlog/include/mysqlbinlog_gtid_window_test_cases.inc
+index 2830f3f665d..cb8d17c313b 100644
+--- a/mysql-test/suite/binlog/include/mysqlbinlog_gtid_window_test_cases.inc
++++ b/mysql-test/suite/binlog/include/mysqlbinlog_gtid_window_test_cases.inc
+@@ -577,9 +577,9 @@ if ($is_remote == 0)
+ --echo #   Error Case 3:
+ --echo #   A GTID --start-position with any sequence numbers that are not
+ --echo # eventually processed results in error
+---echo # MYSQL_BINLOG BINLOG_FILE_PARAM2 --start-position=0-1-8,1-2-6 > tmp_out_ 2> err_out_
++--echo # MYSQL_BINLOG BINLOG_FILE_PARAM2 --start-position=0-1-8,1-2-6 --gtid-strict-mode > tmp_out_ 2> err_out_
+ --error 1
+---exec $MYSQL_BINLOG $BINLOG_FILE_PARAM2 --start-position=0-1-8,1-2-6 > $tmp_out_ 2> $err_out_
++--exec $MYSQL_BINLOG $BINLOG_FILE_PARAM2 --start-position=0-1-8,1-2-6 --gtid-strict-mode > $tmp_out_ 2> $err_out_
+ if ($is_remote == 1)
+ {
+     --let SEARCH_PATTERN=ERROR: Got error reading packet from server
+diff --git a/mysql-test/suite/binlog/r/binlog_mysqlbinlog_gtid_window.result b/mysql-test/suite/binlog/r/binlog_mysqlbinlog_gtid_window.result
+index fce5f95ce82..ec0c4b1caa8 100644
+--- a/mysql-test/suite/binlog/r/binlog_mysqlbinlog_gtid_window.result
++++ b/mysql-test/suite/binlog/r/binlog_mysqlbinlog_gtid_window.result
+@@ -208,7 +208,7 @@ FOUND 1 /ERROR: Binary logs are missing data for domain 0/ in err.out
+ #   Error Case 3:
+ #   A GTID --start-position with any sequence numbers that are not
+ # eventually processed results in error
+-# MYSQL_BINLOG BINLOG_FILE_PARAM2 --start-position=0-1-8,1-2-6 > tmp_out_ 2> err_out_
++# MYSQL_BINLOG BINLOG_FILE_PARAM2 --start-position=0-1-8,1-2-6 --gtid-strict-mode > tmp_out_ 2> err_out_
+ FOUND 2 /ERROR: Binary logs never reached expected GTID state/ in err.out
+ ######################################
+ #      Test Group 2
+@@ -440,7 +440,7 @@ FOUND 1 /ERROR: Got error reading packet from server/ in err.out
+ #   Error Case 3:
+ #   A GTID --start-position with any sequence numbers that are not
+ # eventually processed results in error
+-# MYSQL_BINLOG BINLOG_FILE_PARAM2 --start-position=0-1-8,1-2-6 > tmp_out_ 2> err_out_
++# MYSQL_BINLOG BINLOG_FILE_PARAM2 --start-position=0-1-8,1-2-6 --gtid-strict-mode > tmp_out_ 2> err_out_
+ FOUND 1 /ERROR: Got error reading packet from server/ in err.out
+ #
+ # Remote-only cleanup from error cases
+diff --git a/mysql-test/suite/binlog/r/mdev_29803.result b/mysql-test/suite/binlog/r/mdev_29803.result
+new file mode 100644
+index 00000000000..0094c8cd0e1
+--- /dev/null
++++ b/mysql-test/suite/binlog/r/mdev_29803.result
+@@ -0,0 +1,9 @@
++reset master;
++create table t1 (a int);
++create table t2 (a int);
++drop table t1, t2;
++flush binary logs;
++drop table if exists t1, t2;
++Warnings:
++Note	1051	Unknown table 'test.t1,test.t2'
++flush binary logs;
+diff --git a/mysql-test/suite/binlog/t/mdev_29803.test b/mysql-test/suite/binlog/t/mdev_29803.test
+new file mode 100644
+index 00000000000..d5e26d9d6b6
+--- /dev/null
++++ b/mysql-test/suite/binlog/t/mdev_29803.test
+@@ -0,0 +1,36 @@
++--source include/have_log_bin.inc
++
++#
++# MDEV-29803: Unexpected ERROR: Found out of order GTID after replaying
++# binlog read from remote server, then reading the resulting local binlog.
++#
++# When mysqlbinlog replays a remote binlog into a server, and we then
++# read back the local binlog files, the replayed events reset the GTID
++# sequence, which causes a "Found out of order GTID" error if
++# --gtid-strict-mode is enabled.
++#
++# The fix is to change the default of --gtid-strict-mode to OFF so that
++# mysqlbinlog does not refuse to display events by default.
++#
++
++reset master;
++create table t1 (a int);
++create table t2 (a int);
++drop table t1, t2;
++flush binary logs;
++
++# Replay remote binlog into this server
++--exec $MYSQL_BINLOG --read-from-remote-server -uroot --protocol=tcp --port=$MASTER_MYPORT master-bin.000001 | $MYSQL test 2>&1
++
++drop table if exists t1, t2;
++flush binary logs;
++
++--let $datadir= `select @@datadir`
++
++# With the fix, the default --gtid-strict-mode=OFF allows reading both binlog
++# files without error, even though replayed events create out-of-order GTIDs.
++--exec $MYSQL_BINLOG $datadir/master-bin.000001 $datadir/master-bin.000002 > /dev/null 2>&1
++
++# Explicitly enabling --gtid-strict-mode should still produce an error
++--error 1
++--exec $MYSQL_BINLOG --gtid-strict-mode $datadir/master-bin.000001 $datadir/master-bin.000002 > /dev/null 2>&1

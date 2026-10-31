@@ -1,0 +1,45 @@
+diff --git a/mysql-test/suite/innodb/r/log_archive.result b/mysql-test/suite/innodb/r/log_archive.result
+index 3bc20f3c..4fdb2b7a 100644
+--- a/mysql-test/suite/innodb/r/log_archive.result
++++ b/mysql-test/suite/innodb/r/log_archive.result
+@@ -16,6 +16,8 @@ FOUND 1 /InnoDB: No matching file found for innodb_log_recovery_start=12288/ in
+ SELECT variable_name, variable_value FROM information_schema.global_status
+ WHERE variable_name LIKE 'INNODB_LSN%';
+ variable_name	variable_value
++SET GLOBAL innodb_log_archive=!@@GLOBAL.innodb_log_archive;
++ERROR HY000: InnoDB is in read only mode
+ FOUND 1 /InnoDB: innodb_read_only prevents crash recovery between 18446744073705357279 and 18446744073705357311/ in mysqld.1.err
+ # restart: --innodb-read-only --innodb-log-recovery-start=18446744073705357311
+ SELECT variable_name, variable_value FROM information_schema.global_status
+diff --git a/mysql-test/suite/innodb/t/log_archive.test b/mysql-test/suite/innodb/t/log_archive.test
+index 282a0676..ac64adef 100644
+--- a/mysql-test/suite/innodb/t/log_archive.test
++++ b/mysql-test/suite/innodb/t/log_archive.test
+@@ -63,6 +63,8 @@ let SEARCH_PATTERN = InnoDB: No matching file found for innodb_log_recovery_star
+ --source include/restart_mysqld.inc
+ SELECT variable_name, variable_value FROM information_schema.global_status
+ WHERE variable_name LIKE 'INNODB_LSN%';
++--error ER_INNODB_READ_ONLY
++SET GLOBAL innodb_log_archive=!@@GLOBAL.innodb_log_archive;
+ 
+ let SEARCH_PATTERN = InnoDB: innodb_read_only prevents crash recovery between 18446744073705357279 and 18446744073705357311;
+ --source include/search_pattern_in_file.inc
+diff --git a/storage/innobase/log/log0log.cc b/storage/innobase/log/log0log.cc
+index ae236359..ddd62e32 100644
+--- a/storage/innobase/log/log0log.cc
++++ b/storage/innobase/log/log0log.cc
+@@ -767,6 +767,14 @@ void log_t::header_rewrite(my_bool archive) noexcept
+ @param thd      SQL connection */
+ void log_t::set_archive(my_bool archive, THD *thd) noexcept
+ {
++  if (UNIV_UNLIKELY(recv_sys.rpo != 0))
++  {
++    /* The log is read-only (innodb_read_only, innodb_force_recovery=6,
++    or innodb_log_recovery_target). We must not rewrite the header. */
++    my_error(ER_INNODB_READ_ONLY, MYF(0));
++    return;
++  }
++
+   thd_wait_begin(thd, THD_WAIT_DISKIO);
+   tpool::tpool_wait_begin();
+   lsn_t wait_lsn;

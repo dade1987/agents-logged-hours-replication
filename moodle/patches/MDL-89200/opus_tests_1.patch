@@ -1,0 +1,132 @@
+diff --git a/public/lib/classes/task/manager.php b/public/lib/classes/task/manager.php
+index 1bd67857f72..a7934eb0f2c 100644
+--- a/public/lib/classes/task/manager.php
++++ b/public/lib/classes/task/manager.php
+@@ -1356,7 +1356,7 @@ class manager {
+         $classname = self::get_canonical_class_name($task);
+ 
+         $record = $DB->get_record('task_scheduled', ['classname' => $classname]);
+-        $record->nextruntime = $clock->time() + $delay;
++        $record->nextruntime = self::get_preserved_nextruntime($task, $record, $clock->time() + $delay);
+         $record->faildelay = $delay;
+         $record->timestarted = null;
+         $record->hostname = null;
+@@ -1406,6 +1406,35 @@ class manager {
+         );
+     }
+ 
++    /**
++     * Work out the next run time to store when a running scheduled task finishes.
++     *
++     * If the next run time stored in the database was changed while the task was running (for example by a
++     * "Run ASAP" request via {@see set_scheduled_task_nextruntime()}) to a time earlier than the newly
++     * calculated one, that request is preserved so that it is honoured by a subsequent execution instead
++     * of being silently discarded.
++     *
++     * @param scheduled_task $task The task which has just finished running
++     * @param \stdClass $record The current task_scheduled record from the database
++     * @param int $calculated The newly calculated next run time
++     * @return int The next run time to store
++     */
++    protected static function get_preserved_nextruntime(scheduled_task $task, \stdClass $record, int $calculated): int {
++        $loaded = $task->get_next_run_time();
++        if (empty($loaded) || !isset($record->nextruntime)) {
++            // We do not know what the next run time was when the task was loaded, so cannot detect a change.
++            return $calculated;
++        }
++
++        $current = (int) $record->nextruntime;
++        if ($current !== (int) $loaded && $current < $calculated) {
++            // The next run time was brought forward while the task was running. Keep that request.
++            return $current;
++        }
++
++        return $calculated;
++    }
++
+     /**
+      * Records that a scheduled task is starting to run.
+      *
+@@ -1460,7 +1489,11 @@ class manager {
+         if ($record) {
+             $record->lastruntime = $clock->time();
+             $record->faildelay = 0;
+-            $record->nextruntime = $task->get_next_scheduled_time();
++            $record->nextruntime = self::get_preserved_nextruntime(
++                $task,
++                $record,
++                $task->get_next_scheduled_time(),
++            );
+             $record->timestarted = null;
+             $record->hostname = null;
+             $record->pid = null;
+diff --git a/public/lib/tests/task/manager_test.php b/public/lib/tests/task/manager_test.php
+index 7e28d285776..a27e56c8a22 100644
+--- a/public/lib/tests/task/manager_test.php
++++ b/public/lib/tests/task/manager_test.php
+@@ -702,4 +702,65 @@ final class manager_test extends \advanced_testcase {
+         $this->assertNotNull($next);
+         manager::scheduled_task_complete($next);
+     }
++
++    /**
++     * Test that a Run ASAP request made while the task is running is not clobbered when the task completes.
++     */
++    public function test_set_scheduled_task_nextruntime_while_running(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $this->preventResetByRollback();
++        $clock = $this->mock_clock_with_frozen(
++            (new \DateTimeImmutable('2026-01-01 12:00:00', \core_date::get_server_timezone_object()))->getTimestamp(),
++        );
++
++        $DB->set_field('task_scheduled', 'disabled', 1);
++
++        $task = new scheduled_test_task();
++        $task->set_month('*');
++        $task->set_hour('0');
++        $task->set_next_run_time($clock->time() - HOURSECS);
++        $DB->insert_record('task_scheduled', manager::record_from_scheduled_task($task));
++        $classname = manager::get_canonical_class_name($task);
++
++        // Task is picked up by cron and starts running.
++        $running = manager::get_next_scheduled_task($clock->time());
++        $this->assertNotNull($running);
++        manager::scheduled_task_starting($running);
++
++        // Run ASAP is requested while the task is running.
++        $asap = $clock->time() - HOURSECS + 5;
++        manager::set_scheduled_task_nextruntime(manager::get_scheduled_task($classname), $asap);
++
++        // The running task completes; the ASAP request must be preserved.
++        $clock->bump(10);
++        manager::scheduled_task_complete($running);
++        $this->assertEquals($asap, $DB->get_field('task_scheduled', 'nextruntime', ['classname' => $classname]));
++
++        // The next cron run picks it up again, and after that normal scheduling resumes.
++        $clock->bump(10);
++        $next = manager::get_next_scheduled_task($clock->time());
++        $this->assertNotNull($next);
++        manager::scheduled_task_starting($next);
++        manager::scheduled_task_complete($next);
++        $this->assertEquals(
++            $next->get_next_scheduled_time(),
++            $DB->get_field('task_scheduled', 'nextruntime', ['classname' => $classname]),
++        );
++        $this->assertGreaterThan($clock->time(), $DB->get_field('task_scheduled', 'nextruntime', ['classname' => $classname]));
++
++        // Same for a failing run.
++        $DB->set_field('task_scheduled', 'nextruntime', $clock->time() - 1, ['classname' => $classname]);
++        $clock->bump(10);
++        $failing = manager::get_next_scheduled_task($clock->time());
++        $this->assertNotNull($failing);
++        manager::scheduled_task_starting($failing);
++        manager::set_scheduled_task_nextruntime($failing, $clock->time() - 5);
++        manager::scheduled_task_failed($failing);
++        $this->assertEquals(
++            $clock->time() - 5,
++            $DB->get_field('task_scheduled', 'nextruntime', ['classname' => $classname]),
++        );
++    }
+ }

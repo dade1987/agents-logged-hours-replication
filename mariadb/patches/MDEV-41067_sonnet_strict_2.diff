@@ -1,0 +1,54 @@
+diff --git a/mysql-test/main/func_json.result b/mysql-test/main/func_json.result
+index 2f791dc4..cb03f39f 100644
+--- a/mysql-test/main/func_json.result
++++ b/mysql-test/main/func_json.result
+@@ -5777,3 +5777,18 @@ SELECT JSON_SCHEMA_VALID( '{"enum": ["x"]}', CONVERT(CONCAT('"', REPEAT('e', 100
+ r
+ 0
+ # End of 11.4 tests
++#
++# MDEV-41067: json_overlaps with empty nested array
++#
++select json_overlaps('[[1]]', '[[]]');
++json_overlaps('[[1]]', '[[]]')
++0
++select json_overlaps('[[1]]', '[[],123]');
++json_overlaps('[[1]]', '[[],123]')
++0
++select json_overlaps('[[]]', '[[1]]');
++json_overlaps('[[]]', '[[1]]')
++0
++select json_overlaps('[[]]', '[[]]');
++json_overlaps('[[]]', '[[]]')
++1
+diff --git a/mysql-test/main/func_json.test b/mysql-test/main/func_json.test
+index c6045cb2..1ed0c698 100644
+--- a/mysql-test/main/func_json.test
++++ b/mysql-test/main/func_json.test
+@@ -4451,3 +4451,11 @@ SELECT JSON_SCHEMA_VALID(@schema, @value);
+ SELECT JSON_SCHEMA_VALID( '{"enum": ["x"]}', CONVERT(CONCAT('"', REPEAT('e', 100000), '"') USING ucs2)) AS r;
+ 
+ --echo # End of 11.4 tests
++
++--echo #
++--echo # MDEV-41067: json_overlaps with empty nested array
++--echo #
++select json_overlaps('[[1]]', '[[]]');
++select json_overlaps('[[1]]', '[[],123]');
++select json_overlaps('[[]]', '[[1]]');
++select json_overlaps('[[]]', '[[]]');
+diff --git a/sql/item_jsonfunc.cc b/sql/item_jsonfunc.cc
+index 615d0cb4..d59de5e4 100644
+--- a/sql/item_jsonfunc.cc
++++ b/sql/item_jsonfunc.cc
+@@ -4809,8 +4809,8 @@ bool json_compare_arrays_in_order(json_engine_t *js, json_engine_t *value)
+       return FALSE;
+     }
+   }
+-  res= (value->state == JST_ARRAY_END || value->state == JST_OBJ_END ?
+-        TRUE : FALSE);
++  res= ((value->state == JST_ARRAY_END || value->state == JST_OBJ_END) &&
++        (js->state == JST_ARRAY_END || js->state == JST_OBJ_END));
+   json_skip_current_level(js, value);
+   return res;
+ }

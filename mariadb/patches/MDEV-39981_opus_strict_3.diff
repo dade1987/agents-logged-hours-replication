@@ -1,0 +1,110 @@
+diff --git a/mysql-test/main/gis-json.result b/mysql-test/main/gis-json.result
+index e636291b..40dd80e1 100644
+--- a/mysql-test/main/gis-json.result
++++ b/mysql-test/main/gis-json.result
+@@ -60,9 +60,7 @@ exp
+ POINT(102 0.5)
+ SELECT st_astext(st_geomfromgeojson('{ "geometry": { "type": "Point", "coordinates": [102.0, 0.5] }, "type": "Feature" }')) as exp;
+ exp
+-NULL
+-Warnings:
+-Warning	4048	Incorrect GeoJSON format specified for st_geomfromgeojson function.
++POINT(102 0.5)
+ SELECT st_astext(st_geomfromgeojson('{ "type": "FeatureCollection", "features": [{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [102.0, 0.5] }, "properties": { "prop0": "value0" } }]}')) as exp;
+ exp
+ GEOMETRYCOLLECTION(POINT(102 0.5))
+@@ -212,4 +210,30 @@ SET @doc := CONCAT(
+ SELECT ST_AsText(ST_GeomFromGeoJSON(@doc)) AS expr;
+ expr
+ GEOMETRYCOLLECTION(POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2))
++#
++# MDEV-39981 Different order of JSON items causes different results
++#
++SELECT ST_ASTEXT(ST_GEOMFROMGEOJSON('{"type":"GeometryCollection","geometries":[]}')) AS exp;
++exp
++GEOMETRYCOLLECTION EMPTY
++SELECT ST_ASTEXT(ST_GEOMFROMGEOJSON('{"geometries":[],"type":"GeometryCollection"}')) AS exp;
++exp
++GEOMETRYCOLLECTION EMPTY
++SELECT ST_ASTEXT(ST_GEOMFROMGEOJSON('{"geometries":[{"type":"Point","coordinates":[1,2]},{"coordinates":[[1,2],[3,4]],"type":"LineString"}],"type":"GeometryCollection"}')) AS exp;
++exp
++GEOMETRYCOLLECTION(POINT(1 2),LINESTRING(1 2,3 4))
++SELECT ST_ASTEXT(ST_GEOMFROMGEOJSON('{"features":[],"type":"FeatureCollection"}')) AS exp;
++exp
++GEOMETRYCOLLECTION EMPTY
++SELECT ST_ASTEXT(ST_GEOMFROMGEOJSON('{"features":[{"geometry":{"type":"Point","coordinates":[1,2]},"type":"Feature"}],"type":"FeatureCollection"}')) AS exp;
++exp
++GEOMETRYCOLLECTION(POINT(1 2))
++SELECT ST_ASTEXT(ST_GEOMFROMGEOJSON('{"geometry":{"type":"Point","coordinates":[1,2]},"properties":{"a":1},"type":"Feature"}')) AS exp;
++exp
++POINT(1 2)
++SELECT ST_ASTEXT(ST_GEOMFROMGEOJSON('{"geometry":{"type":"Point"},"type":"Feature"}')) AS exp;
++exp
++NULL
++Warnings:
++Warning	4048	Incorrect GeoJSON format specified for st_geomfromgeojson function.
+ # End of 10.6 tests
+diff --git a/mysql-test/main/gis-json.test b/mysql-test/main/gis-json.test
+index 33f00ee4..f575250d 100644
+--- a/mysql-test/main/gis-json.test
++++ b/mysql-test/main/gis-json.test
+@@ -147,4 +147,15 @@ SET @doc := CONCAT(
+ 
+ SELECT ST_AsText(ST_GeomFromGeoJSON(@doc)) AS expr;
+ 
++--echo #
++--echo # MDEV-39981 Different order of JSON items causes different results
++--echo #
++SELECT ST_ASTEXT(ST_GEOMFROMGEOJSON('{"type":"GeometryCollection","geometries":[]}')) AS exp;
++SELECT ST_ASTEXT(ST_GEOMFROMGEOJSON('{"geometries":[],"type":"GeometryCollection"}')) AS exp;
++SELECT ST_ASTEXT(ST_GEOMFROMGEOJSON('{"geometries":[{"type":"Point","coordinates":[1,2]},{"coordinates":[[1,2],[3,4]],"type":"LineString"}],"type":"GeometryCollection"}')) AS exp;
++SELECT ST_ASTEXT(ST_GEOMFROMGEOJSON('{"features":[],"type":"FeatureCollection"}')) AS exp;
++SELECT ST_ASTEXT(ST_GEOMFROMGEOJSON('{"features":[{"geometry":{"type":"Point","coordinates":[1,2]},"type":"Feature"}],"type":"FeatureCollection"}')) AS exp;
++SELECT ST_ASTEXT(ST_GEOMFROMGEOJSON('{"geometry":{"type":"Point","coordinates":[1,2]},"properties":{"a":1},"type":"Feature"}')) AS exp;
++SELECT ST_ASTEXT(ST_GEOMFROMGEOJSON('{"geometry":{"type":"Point"},"type":"Feature"}')) AS exp;
++
+ --echo # End of 10.6 tests
+diff --git a/sql/spatial.cc b/sql/spatial.cc
+index ee808a00..497459c4 100644
+--- a/sql/spatial.cc
++++ b/sql/spatial.cc
+@@ -628,6 +628,8 @@ Geometry *Geometry::create_from_json(Geometry_buffer *buffer,
+         arg= T_GEOMETRIES;
+         argje= *je;
+         je_arg= &argje;
++        if (json_skip_level(je))
++          goto err_return;
+       }
+       else
+         break; /* geometries needs to be an array */
+@@ -656,6 +658,8 @@ Geometry *Geometry::create_from_json(Geometry_buffer *buffer,
+         arg= T_FEATURE;
+         argje= *je;
+         je_arg= &argje;
++        if (json_skip_level(je))
++          goto err_return;
+       }
+       else
+         break; /* feature collections needs to be an array */
+@@ -677,6 +681,8 @@ Geometry *Geometry::create_from_json(Geometry_buffer *buffer,
+         arg= T_GEOMETRY;
+         argje= *je;
+         je_arg= &argje;
++        if (json_skip_level(je))
++          goto err_return;
+       }
+       else
+         break; /* geometry needs to be an object */
+@@ -721,6 +727,12 @@ Geometry *Geometry::create_from_json(Geometry_buffer *buffer,
+ handle_geometry_key: /* feature */
+ 
+   result= create_from_json(buffer, je_arg, er_on_3D, res);
++  if (!result)
++  {
++    if (je_arg != je) /* copy error out of copied engine */
++      *je= *je_arg;
++    goto err_return;
++  }
+ 
+   /* skip rest of feature - can be arbitrary fields */
+   if (json_skip_level(je))

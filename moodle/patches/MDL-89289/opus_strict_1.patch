@@ -1,0 +1,625 @@
+diff --git a/.upgradenotes/MDL-89289-2026081000000000.yml b/.upgradenotes/MDL-89289-2026081000000000.yml
+new file mode 100644
+index 00000000000..bf2865fe6b6
+--- /dev/null
++++ b/.upgradenotes/MDL-89289-2026081000000000.yml
+@@ -0,0 +1,12 @@
++issueNumber: MDL-89289
++notes:
++  core:
++    - message: >
++        Plugins removed from core are no longer uninstalled synchronously
++        during the upgrade. Instead, the upgrade queues the new
++        `\core\task\uninstall_plugins_task` ad-hoc task, which uninstalls
++        the given plugins (if they are still installed and no longer present
++        on disk) after the upgrade has completed. Remaining qtype_random
++        questions are similarly deleted by the new
++        `\core\task\remove_qtype_random_task` ad-hoc task.
++      type: improved
+diff --git a/public/lang/en/admin.php b/public/lang/en/admin.php
+index c59f0ae188e..187d5562fb9 100644
+--- a/public/lang/en/admin.php
++++ b/public/lang/en/admin.php
+@@ -1481,12 +1481,14 @@ $string['taskquestioncron'] = 'Background processing for cleaning up question pr
+ $string['taskquestionstatscleanupcron'] = 'Background processing for cleaning up question statistics caches';
+ $string['taskrefreshsystemtokens'] = 'Refresh OAuth tokens for service accounts';
+ $string['taskregistrationcron'] = 'Site registration';
++$string['taskremoveqtyperandom'] = 'Delete remaining random questions and uninstall the random question type';
+ $string['tasksendfailedloginnotifications'] = 'Send failed login notifications';
+ $string['tasksendnewuserpasswords'] = 'Send new user passwords';
+ $string['tasksessioncleanup'] = 'Cleanup old sessions';
+ $string['taskstatscron'] = 'Background processing for statistics';
+ $string['tasktagcron'] = 'Background processing for tags';
+ $string['tasktempfilecleanup'] = 'Delete stale temp files';
++$string['taskuninstallplugins'] = 'Uninstall plugins removed during upgrade';
+ $string['taskupdategeoip2file'] = 'Update GeoIP file';
+ $string['tempdatafoldercleanup'] = 'Clean up temporary data files older than';
+ $string['templates'] = 'Templates';
+diff --git a/public/lib/classes/task/remove_qtype_random_task.php b/public/lib/classes/task/remove_qtype_random_task.php
+new file mode 100644
+index 00000000000..2a93dbed31e
+--- /dev/null
++++ b/public/lib/classes/task/remove_qtype_random_task.php
+@@ -0,0 +1,124 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\task;
++
++use core\local\cli\shutdown;
++
++/**
++ * Ad-hoc task to delete any remaining qtype_random questions, and then uninstall qtype_random.
++ *
++ * Any remaining random questions were created during a restore, but never used by anything (otherwise they would have
++ * been converted to question set references and deleted already), so they are all safe to delete.
++ *
++ * This used to be done synchronously during the upgrade, which could take a long time on large sites.
++ *
++ * @package    core
++ * @copyright  2026 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class remove_qtype_random_task extends uninstall_plugins_task {
++    /** @var int The number of questions to delete in each batch. */
++    protected const BATCH_SIZE = 50000;
++
++    /**
++     * Create and queue a new instance of this task.
++     *
++     * @param string[] $plugins Ignored, this task always uninstalls qtype_random.
++     * @return void
++     */
++    public static function queue(array $plugins = []): void {
++        parent::queue(['qtype_random']);
++    }
++
++    #[\Override]
++    public function get_name() {
++        return get_string('taskremoveqtyperandom', 'admin');
++    }
++
++    #[\Override]
++    public function execute() {
++        if (!$this->delete_random_questions()) {
++            // A graceful exit was requested before all the questions were deleted, the task has been queued again.
++            return;
++        }
++
++        $this->uninstall('qtype_random');
++    }
++
++    /**
++     * Delete all the remaining random questions, in batches.
++     *
++     * @return bool True if all the questions were deleted, false if the task was rescheduled before finishing.
++     */
++    protected function delete_random_questions(): bool {
++        global $DB;
++
++        $lastid = 0;
++        $total = 0;
++        do {
++            // We only need the ID, but can't pass limits to get_fieldset_sql, so we use get_records_sql.
++            $questions = $DB->get_records_sql(
++                "SELECT id FROM {question} WHERE qtype = 'random' AND id > :lastid ORDER BY id",
++                ['lastid' => $lastid],
++                0,
++                static::BATCH_SIZE,
++            );
++            $recordcount = count($questions);
++            $questionids = array_keys($questions);
++            if ($recordcount > 0) {
++                [$insql, $params] = $DB->get_in_or_equal($questionids);
++                $questionversionsandentries = $DB->get_records_select_menu(
++                    'question_versions',
++                    'questionid ' . $insql,
++                    $params,
++                    fields: 'id, questionbankentryid'
++                );
++                $versionids = array_keys($questionversionsandentries);
++                $entryids = array_unique(array_values($questionversionsandentries));
++
++                // No need to call question_delete_question, it is safe to delete the records directly. See MDL-88393.
++                // These are all random questions, so have no files or other qtype-specific records to clean up.
++                $transaction = $DB->start_delegated_transaction();
++                if (!empty($versionids)) {
++                    $DB->delete_records_list('question_versions', 'id', $versionids);
++                }
++                if (!empty($entryids)) {
++                    $DB->delete_records_list('question_bank_entries', 'id', $entryids);
++                }
++                $DB->delete_records_list('question', 'id', $questionids);
++                $transaction->allow_commit();
++
++                $total += $recordcount;
++                // Set the start point for the next batch. IDs were fetched in order, so we use the last one we got.
++                $lastid = end($questionids);
++
++                // The task might be running for a long time. If a graceful exit is requested, queue this task again.
++                if ($recordcount === static::BATCH_SIZE && shutdown::should_gracefully_exit()) {
++                    // Queue without checking for an existing task, as this one is still present until it completes.
++                    $task = new static();
++                    $task->set_custom_data($this->get_custom_data());
++                    manager::queue_adhoc_task($task);
++                    mtrace("Deleted {$total} random questions. Graceful exit requested, rescheduled " . static::class);
++                    return false;
++                }
++            }
++        } while ($recordcount === static::BATCH_SIZE);
++
++        mtrace("Deleted {$total} random questions.");
++        return true;
++    }
++}
+diff --git a/public/lib/classes/task/uninstall_plugins_task.php b/public/lib/classes/task/uninstall_plugins_task.php
+new file mode 100644
+index 00000000000..47535d770aa
+--- /dev/null
++++ b/public/lib/classes/task/uninstall_plugins_task.php
+@@ -0,0 +1,117 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\task;
++
++use core_component;
++
++/**
++ * Ad-hoc task to uninstall plugins which have been removed from disk.
++ *
++ * Uninstalling a plugin can take a long time (for example, an activity module with many instances), so rather than
++ * doing it synchronously during the upgrade process, the upgrade queues this task to perform the removal afterwards.
++ *
++ * The custom data is an object with a 'plugins' property, containing an ordered list of frankenstyle component names
++ * to uninstall. Each plugin is only uninstalled if it is still installed, and is no longer present on disk.
++ *
++ * @package    core
++ * @copyright  2026 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class uninstall_plugins_task extends adhoc_task {
++    /**
++     * Create and queue a new instance of this task to uninstall the given plugins.
++     *
++     * @param string[] $plugins Ordered list of frankenstyle component names, e.g. ['mod_survey']
++     * @return void
++     */
++    public static function queue(array $plugins): void {
++        $plugins = array_values(array_filter($plugins));
++        if (empty($plugins)) {
++            return;
++        }
++        $task = new static();
++        $task->set_custom_data((object) ['plugins' => $plugins]);
++        manager::queue_adhoc_task($task, true);
++    }
++
++    #[\Override]
++    public function get_name() {
++        return get_string('taskuninstallplugins', 'admin');
++    }
++
++    #[\Override]
++    public function execute() {
++        $data = $this->get_custom_data();
++        $plugins = (array) ($data->plugins ?? []);
++
++        foreach ($plugins as $component) {
++            $this->uninstall($component);
++        }
++    }
++
++    /**
++     * Uninstall a single plugin, if it is installed and no longer present on disk.
++     *
++     * @param string $component Frankenstyle component name
++     * @return bool Whether the plugin was uninstalled
++     */
++    protected function uninstall(string $component): bool {
++        global $CFG;
++
++        [$type, $name] = core_component::normalize_component($component);
++        if ($type === 'core' || empty($name)) {
++            mtrace("Invalid plugin '{$component}', skipping.");
++            return false;
++        }
++
++        if (get_config($component, 'version') === false) {
++            mtrace("Plugin '{$component}' is not installed, skipping.");
++            return false;
++        }
++
++        $plugindirectory = core_component::get_plugin_directory($type, $name);
++        if ($plugindirectory !== null && file_exists("{$plugindirectory}/version.php")) {
++            mtrace("Plugin '{$component}' is present on disk, skipping.");
++            return false;
++        }
++
++        require_once($CFG->libdir . '/adminlib.php');
++        require_once($CFG->dirroot . '/course/lib.php');
++
++        mtrace("Uninstalling plugin '{$component}'...");
++
++        // The plugin is not present on disk, so removing it does not change the hash of all versions. Restore it after
++        // the uninstall, so that the site isn't flagged as requiring an upgrade (but only if it wasn't already).
++        $currenthash = core_component::get_all_versions_hash();
++        $previoushash = $CFG->allversionshash ?? '';
++
++        // The uninstall process outputs HTML intended for the upgrade/plugin management pages, discard it.
++        ob_start();
++        try {
++            uninstall_plugin($type, $name);
++        } finally {
++            ob_end_clean();
++        }
++
++        if ($previoushash === $currenthash) {
++            set_config('allversionshash', $currenthash);
++        }
++
++        mtrace("Plugin '{$component}' uninstalled.");
++        return true;
++    }
++}
+diff --git a/public/lib/db/upgrade.php b/public/lib/db/upgrade.php
+index 480f7d2f671..df5f595b517 100644
+--- a/public/lib/db/upgrade.php
++++ b/public/lib/db/upgrade.php
+@@ -142,7 +142,7 @@ function xmldb_main_upgrade($oldversion) {
+         // If tool_innodb is no longer present, remove it.
+         if (!file_exists($CFG->dirroot . '/admin/tool/innodb/version.php')) {
+             // Delete tool_innodb.
+-            uninstall_plugin('tool', 'innodb');
++            \core\task\uninstall_plugins_task::queue(['tool_innodb']);
+         }
+ 
+         // Main savepoint reached.
+@@ -176,7 +176,7 @@ function xmldb_main_upgrade($oldversion) {
+         // If filter_tidy is no longer present, remove it.
+         if (!file_exists($CFG->dirroot . '/filter/tidy/version.php')) {
+             // Clean config.
+-            uninstall_plugin('filter', 'tidy');
++            \core\task\uninstall_plugins_task::queue(['filter_tidy']);
+         }
+ 
+         upgrade_main_savepoint(true, 2024082900.01);
+@@ -357,7 +357,7 @@ function xmldb_main_upgrade($oldversion) {
+         // If h5plib_v126 is no longer present, remove it.
+         if (!file_exists($CFG->dirroot . '/h5p/h5plib/v126/version.php')) {
+             // Clean config.
+-            uninstall_plugin('h5plib', 'v126');
++            \core\task\uninstall_plugins_task::queue(['h5plib_v126']);
+         }
+ 
+         // If h5plib_v127 is present, set it as the default one.
+@@ -698,7 +698,7 @@ function xmldb_main_upgrade($oldversion) {
+     // Uninstall auth_cas and remove dependencies.
+     if ($oldversion < 2025030500.00) {
+         if (!file_exists($CFG->dirroot . "/auth/cas/version.php")) {
+-            uninstall_plugin('auth', 'cas');
++            \core\task\uninstall_plugins_task::queue(['auth_cas']);
+ 
+             // Remove the sensiblesettings config for auth_cas.
+             $sensiblesettingsraw = explode(',', get_config('adminpresets', 'sensiblesettings'));
+@@ -720,15 +720,14 @@ function xmldb_main_upgrade($oldversion) {
+         if (!file_exists("{$CFG->dirroot}/lib/editor/atto/version.php")) {
+             // Remove each of the subplugins first. These are no longer on disk so the standard `uninstall_plugin` approach
+             // on atto itself will not remove them.
+-            $plugins = array_keys(core_plugin_manager::instance()->get_plugins_of_type('atto'));
+-
+-            // Now remove each.
+-            foreach ($plugins as $pluginname) {
+-                uninstall_plugin('atto', $pluginname);
+-            }
++            $plugins = array_map(
++                fn($pluginname) => "atto_{$pluginname}",
++                array_keys(core_plugin_manager::instance()->get_plugins_of_type('atto')),
++            );
+ 
+-            // Finally uninstall the actual plugin.
+-            uninstall_plugin('editor', 'atto');
++            // Finally uninstall the actual plugin. This is performed post-upgrade by an ad-hoc task.
++            $plugins[] = 'editor_atto';
++            \core\task\uninstall_plugins_task::queue($plugins);
+         }
+ 
+         upgrade_main_savepoint(true, 2025030500.01);
+@@ -737,7 +736,7 @@ function xmldb_main_upgrade($oldversion) {
+     // Remove portfolio_mahara.
+     if ($oldversion < 2025030600.02) {
+         if (!file_exists($CFG->dirroot . "/portfolio/mahara/version.php")) {
+-            uninstall_plugin('portfolio', 'mahara');
++            \core\task\uninstall_plugins_task::queue(['portfolio_mahara']);
+         }
+         // Main savepoint reached.
+         upgrade_main_savepoint(true, 2025030600.02);
+@@ -746,7 +745,7 @@ function xmldb_main_upgrade($oldversion) {
+     // Remove enrol_mnet.
+     if ($oldversion < 2025030600.03) {
+         if (!file_exists($CFG->dirroot . "/enrol/mnet/version.php")) {
+-            uninstall_plugin('enrol', 'mnet');
++            \core\task\uninstall_plugins_task::queue(['enrol_mnet']);
+         }
+         // Main savepoint reached.
+         upgrade_main_savepoint(true, 2025030600.03);
+@@ -755,7 +754,7 @@ function xmldb_main_upgrade($oldversion) {
+     // Remove block_mnet_hosts.
+     if ($oldversion < 2025030600.04) {
+         if (!file_exists($CFG->dirroot . "/blocks/mnet_hosts/version.php")) {
+-            uninstall_plugin('block', 'mnet_hosts');
++            \core\task\uninstall_plugins_task::queue(['block_mnet_hosts']);
+ 
+             // Delete all the admin preset plugin states concerning mnet_hosts in adminpresets_plug table.
+             $DB->delete_records('adminpresets_plug', ['name' => 'mnet_hosts']);
+@@ -768,7 +767,7 @@ function xmldb_main_upgrade($oldversion) {
+     // Remove auth_mnet.
+     if ($oldversion < 2025030600.05) {
+         if (!file_exists($CFG->dirroot . "/auth/mnet/version.php")) {
+-            uninstall_plugin('auth', 'mnet');
++            \core\task\uninstall_plugins_task::queue(['auth_mnet']);
+         }
+         // Main savepoint reached.
+         upgrade_main_savepoint(true, 2025030600.05);
+@@ -778,7 +777,7 @@ function xmldb_main_upgrade($oldversion) {
+         // If mlbackend_php is no longer present, remove it.
+         if (!file_exists($CFG->dirroot . '/lib/mlbackend/php/version.php')) {
+             // Clean config.
+-            uninstall_plugin('mlbackend', 'php');
++            \core\task\uninstall_plugins_task::queue(['mlbackend_php']);
+ 
+             // Change the processor if mlbackend_php is set.
+             if (get_config('analytics', 'predictionsprocessor') === '\mlbackend_php\processor') {
+@@ -817,7 +816,7 @@ function xmldb_main_upgrade($oldversion) {
+     // Remove mnetservice_enrol.
+     if ($oldversion < 2025030600.08) {
+         if (!file_exists($CFG->dirroot . "/mnet/service/enrol/version.php")) {
+-            uninstall_plugin('mnetservice', 'enrol');
++            \core\task\uninstall_plugins_task::queue(['mnetservice_enrol']);
+         }
+         // Main savepoint reached.
+         upgrade_main_savepoint(true, 2025030600.08);
+@@ -882,7 +881,7 @@ function xmldb_main_upgrade($oldversion) {
+         $sqlparams = [];
+ 
+         if (!file_exists($CFG->dirroot . "/mod/survey/version.php")) {
+-            uninstall_plugin('mod', 'survey');
++            \core\task\uninstall_plugins_task::queue(['mod_survey']);
+             $DB->delete_records('adminpresets_plug', ['plugin' => 'mod', 'name' => 'survey']);
+             $indicatorstoremove['survey'] = [
+                 '\mod_survey\analytics\indicator\cognitive_depth',
+@@ -892,7 +891,7 @@ function xmldb_main_upgrade($oldversion) {
+             $sqllikes['survey'] = $DB->sql_like('indicators', ':surveypluginname');
+         }
+         if (!file_exists($CFG->dirroot . "/mod/chat/version.php")) {
+-            uninstall_plugin('mod', 'chat');
++            \core\task\uninstall_plugins_task::queue(['mod_chat']);
+             $DB->delete_records('adminpresets_plug', ['plugin' => 'mod', 'name' => 'chat']);
+             $indicatorstoremove['chat'] = [
+                 '\mod_chat\analytics\indicator\cognitive_depth',
+@@ -1249,7 +1248,7 @@ function xmldb_main_upgrade($oldversion) {
+         // Remove section_links block.
+ 
+         if (!file_exists($CFG->dirroot . "/blocks/section_links/version.php")) {
+-            uninstall_plugin('block', 'section_links');
++            \core\task\uninstall_plugins_task::queue(['block_section_links']);
+             // Delete all the admin preset plugin references to section_links.
+             $DB->delete_records('adminpresets_plug', ['plugin' => 'block', 'name' => 'section_links']);
+             // Remove the section_links block from the unaddableblocks setting.
+@@ -1645,46 +1644,11 @@ function xmldb_main_upgrade($oldversion) {
+     }
+ 
+     if ($oldversion < 2026010900.02) {
+-        // Delete any remaining instances of qtype_random questions.
++        // Delete any remaining instances of qtype_random questions, then uninstall qtype_random as it's been removed.
+         // At this point, such questions were created during a restore, but never used by anything (otherwise they would have
+         // been converted to question set references and deleted already), so they are all safe to delete.
+-
+-        // Process the questions in batches, to avoid running out of memory.
+-        $batchsize = 50000;
+-        $lastid = 0;
+-        do {
+-            // We only need the ID, but can't pass limits to get_fieldset_sql, so we use get_records_sql.
+-            $questions = $DB->get_records_sql(
+-                "SELECT id FROM {question} WHERE qtype = 'random' AND id > :lastid ORDER BY id",
+-                ['lastid' => $lastid],
+-                0,
+-                $batchsize,
+-            );
+-            $recordcount = count($questions);
+-            $questionids = array_keys($questions);
+-            if ($recordcount > 0) {
+-                [$insql, $params] = $DB->get_in_or_equal($questionids);
+-                $questionversionsandentires = $DB->get_records_select_menu(
+-                    'question_versions',
+-                    'questionid ' . $insql,
+-                    $params,
+-                    fields: 'id, questionbankentryid'
+-                );
+-                $versionids = array_keys($questionversionsandentires);
+-                $entryids = array_unique(array_values($questionversionsandentires));
+-                // No need to call question_delete_question, it is safe to delete the records directly. See MDL-88393.
+-                // These are all random questions, so have no files or other qtype-specific records to clean up.
+-                $DB->delete_records_list('question_versions', 'id', $versionids);
+-                $DB->delete_records_list('question_bank_entries', 'id', $entryids);
+-                $DB->delete_records_list('question', 'id', $questionids);
+-                // Reset timeout after each batch to avoid timeouts on large sites.
+-                upgrade_set_timeout();
+-                // Set the start point for the next batch. IDs were fetched in order, so we use the last one we got.
+-                $lastid = end($questionids);
+-            }
+-        } while ($recordcount === $batchsize);
+-        // Finally, uninstall qtype_random as it's been removed.
+-        uninstall_plugin('qtype', 'random');
++        // This can take a long time on large sites, so it is performed post-upgrade by an ad-hoc task.
++        \core\task\remove_qtype_random_task::queue();
+         upgrade_main_savepoint(true, 2026010900.02);
+     }
+ 
+@@ -1692,7 +1656,7 @@ function xmldb_main_upgrade($oldversion) {
+         // Remove activity_modules block.
+ 
+         if (!file_exists($CFG->dirroot . "/blocks/activity_modules/version.php")) {
+-            uninstall_plugin('block', 'activity_modules');
++            \core\task\uninstall_plugins_task::queue(['block_activity_modules']);
+             // Delete all the admin preset plugin references to activity_modules.
+             $DB->delete_records('adminpresets_plug', ['plugin' => 'block', 'name' => 'activity_modules']);
+         }
+@@ -1856,7 +1820,7 @@ function xmldb_main_upgrade($oldversion) {
+             }
+ 
+             // Uninstall the plugin.
+-            uninstall_plugin('tool', 'moodlenet');
++            \core\task\uninstall_plugins_task::queue(['tool_moodlenet']);
+         }
+ 
+         // Main savepoint reached.
+@@ -1867,7 +1831,7 @@ function xmldb_main_upgrade($oldversion) {
+         // If h5plib_v127 is no longer present, remove it.
+         if (!file_exists($CFG->dirroot . '/h5p/h5plib/v127/version.php')) {
+             // Clean config.
+-            uninstall_plugin('h5plib', 'v127');
++            \core\task\uninstall_plugins_task::queue(['h5plib_v127']);
+         }
+ 
+         // If h5plib_v128 is present, set it as the default one.
+diff --git a/public/lib/tests/task/uninstall_plugins_task_test.php b/public/lib/tests/task/uninstall_plugins_task_test.php
+new file mode 100644
+index 00000000000..b564925dd41
+--- /dev/null
++++ b/public/lib/tests/task/uninstall_plugins_task_test.php
+@@ -0,0 +1,108 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\task;
++
++/**
++ * Tests for the post-upgrade plugin uninstall ad-hoc tasks.
++ *
++ * @package    core
++ * @category   test
++ * @copyright  2026 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ * @covers     \core\task\uninstall_plugins_task
++ * @covers     \core\task\remove_qtype_random_task
++ */
++final class uninstall_plugins_task_test extends \advanced_testcase {
++    /**
++     * Test that queueing the task stores the plugins, and does not queue duplicates.
++     */
++    public function test_queue(): void {
++        global $DB;
++        $this->resetAfterTest();
++
++        uninstall_plugins_task::queue(['tool_removedplugin']);
++        uninstall_plugins_task::queue(['tool_removedplugin']);
++        uninstall_plugins_task::queue([]);
++
++        $tasks = manager::get_adhoc_tasks(uninstall_plugins_task::class);
++        $this->assertCount(1, $tasks);
++        $task = reset($tasks);
++        $this->assertEquals(['tool_removedplugin'], $task->get_custom_data()->plugins);
++        $this->assertEquals('core', $task->get_component());
++        $this->assertEquals(1, $DB->count_records('task_adhoc', ['classname' => '\\' . uninstall_plugins_task::class]));
++    }
++
++    /**
++     * Test that a plugin missing from disk is uninstalled, and plugins still present on disk are left untouched.
++     */
++    public function test_execute(): void {
++        global $CFG;
++        $this->resetAfterTest();
++
++        set_config('version', 2020010100, 'tool_removedplugin');
++        set_config('somesetting', 'value', 'tool_removedplugin');
++        $forumversion = get_config('mod_forum', 'version');
++        $this->assertNotFalse($forumversion);
++        $hash = \core_component::get_all_versions_hash();
++        set_config('allversionshash', $hash);
++
++        uninstall_plugins_task::queue(['tool_removedplugin', 'mod_forum', 'tool_notinstalled']);
++        $this->expectOutputRegex("/Plugin 'tool_removedplugin' uninstalled./");
++        $this->runAdhocTasks(uninstall_plugins_task::class);
++
++        // The removed plugin has been uninstalled.
++        $this->assertFalse(get_config('tool_removedplugin', 'version'));
++        $this->assertFalse(get_config('tool_removedplugin', 'somesetting'));
++
++        // The plugin present on disk is untouched.
++        $this->assertEquals($forumversion, get_config('mod_forum', 'version'));
++
++        // The site is not flagged as requiring an upgrade.
++        $this->assertEquals($hash, $CFG->allversionshash);
++        $this->assertEmpty(manager::get_adhoc_tasks(uninstall_plugins_task::class));
++    }
++
++    /**
++     * Test the removal of qtype_random questions and plugin.
++     */
++    public function test_remove_qtype_random(): void {
++        global $CFG, $DB;
++        require_once($CFG->libdir . '/questionlib.php');
++        $this->resetAfterTest();
++        $this->setAdminUser();
++
++        $course = $this->getDataGenerator()->create_course();
++        $qbank = $this->getDataGenerator()->create_module('qbank', ['course' => $course->id]);
++        $context = \context_module::instance($qbank->cmid);
++        $questiongenerator = $this->getDataGenerator()->get_plugin_generator('core_question');
++        $category = question_get_default_category($context->id, true);
++        $question = $questiongenerator->create_question('truefalse', overrides: ['category' => $category->id]);
++        $random = $questiongenerator->create_question('truefalse', overrides: ['category' => $category->id]);
++        $DB->set_field('question', 'qtype', 'random', ['id' => $random->id]);
++        set_config('version', 2024100700, 'qtype_random');
++
++        remove_qtype_random_task::queue();
++        $this->expectOutputRegex("/Deleted 1 random questions.*Plugin 'qtype_random' uninstalled./s");
++        $this->runAdhocTasks(remove_qtype_random_task::class);
++
++        $this->assertFalse($DB->record_exists('question', ['id' => $random->id]));
++        $this->assertFalse($DB->record_exists('question_versions', ['questionid' => $random->id]));
++        $this->assertFalse($DB->record_exists('question_bank_entries', ['id' => $random->questionbankentryid]));
++        $this->assertTrue($DB->record_exists('question', ['id' => $question->id]));
++        $this->assertFalse(get_config('qtype_random', 'version'));
++    }
++}

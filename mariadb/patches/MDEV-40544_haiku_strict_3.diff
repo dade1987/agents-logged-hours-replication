@@ -1,0 +1,41 @@
+diff --git a/sql/log_event.cc b/sql/log_event.cc
+index 5039c21c..8aa8ed3d 100644
+--- a/sql/log_event.cc
++++ b/sql/log_event.cc
+@@ -1110,15 +1110,19 @@ Log_event* Log_event::read_log_event(const uchar *buf, uint event_len,
+   if (crc_check && event_checksum_test(const_cast<uchar*>(buf), event_len, alg))
+   {
+ #ifdef MYSQL_CLIENT
+-    *error= "Event crc check failed! Most likely there is event corruption.";
+     if (force_opt)
+     {
++      /*
++        --force-read: output the event as Unknown_log_event instead of
++        reporting an error (the caller must not see *error set together
++        with a non-NULL event).
++      */
+       event_len-= BINLOG_CHECKSUM_LEN;
+       ev= new Unknown_log_event(buf, fdle);
+       goto exit;
+     }
+-    else
+-      DBUG_RETURN(NULL);
++    *error= "Event crc check failed! Most likely there is event corruption.";
++    DBUG_RETURN(NULL);
+ #else
+     *error= ER_THD_OR_DEFAULT(current_thd, ER_BINLOG_READ_EVENT_CHECKSUM_FAILURE);
+     if (print_errors)
+@@ -1358,6 +1362,13 @@ Log_event* Log_event::read_log_event(const uchar *buf, uint event_len,
+         *error= "Found invalid event in binary log";
+       DBUG_RETURN(0);
+     }
++    /*
++      --force-read: output the event as Unknown_log_event. Any error text set
++      above (e.g. for TRANSACTION_PAYLOAD_EVENT or PARTIAL_UPDATE_ROWS_EVENT)
++      must be cleared, otherwise the caller would see an error together with
++      a valid event.
++    */
++    *error= 0;
+     ev= new Unknown_log_event(buf, fdle);
+ #else
+     if (!*error)

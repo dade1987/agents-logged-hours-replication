@@ -1,0 +1,134 @@
+diff --git a/public/lib/classes/router/middleware/cors_middleware.php b/public/lib/classes/router/middleware/cors_middleware.php
+index b612fc12903..482cf4a3388 100644
+--- a/public/lib/classes/router/middleware/cors_middleware.php
++++ b/public/lib/classes/router/middleware/cors_middleware.php
+@@ -32,31 +32,48 @@ use Slim\Routing\RouteContext;
+ class cors_middleware implements MiddlewareInterface {
+     #[\Override]
+     public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface {
+-        $acceptheader = $request->getHeaderLine('Accept');
+-        $accepted = array_map(
+-            fn (string $mimetype): string => trim(strtok($mimetype, ';')),
+-            explode(',', $acceptheader),
+-        );
+-
+         $response = $handler->handle($request);
+ 
+-        $cors = in_array('application/json', $accepted);
+-        $cors = $cors || $request->getMethod() === 'OPTIONS';
+-        $cors = $cors || $request->getMethod() === 'HEAD';
+-
+-        if (!$cors) {
+-            return $response;
+-        }
+-
+         $routecontext = RouteContext::fromRequest($request);
+         $routingresults = $routecontext->getRoutingResults();
+         $methods = $routingresults->getAllowedMethods();
+ 
+-        return $response
+-            ->withHeader('Content-Type', 'application/json')
+-            ->withHeader('Content-Disposition', 'inline')
++        // The CORS headers must always be added, regardless of the Accept header.
++        // Browsers typically send 'Accept: */*' for fetch() requests, and without these headers the browser will
++        // block the response even though Moodle has already processed the request.
++        $response = $response
+             ->withHeader('Access-Control-Allow-Origin', '*')
+             ->withHeader('Access-Control-Allow-Methods', implode(',', $methods))
+             ->withHeader('Access-Control-Allow-Headers', 'Content-Type, api_key, Authorization');
++
++        if ($this->should_force_json_content_type($request)) {
++            $response = $response
++                ->withHeader('Content-Type', 'application/json')
++                ->withHeader('Content-Disposition', 'inline');
++        }
++
++        return $response;
++    }
++
++    /**
++     * Whether the Content-Type of the response should be forced to application/json.
++     *
++     * This is the case when the request explicitly accepts JSON, or is an OPTIONS or HEAD request.
++     *
++     * @param ServerRequestInterface $request
++     * @return bool
++     */
++    protected function should_force_json_content_type(ServerRequestInterface $request): bool {
++        if (in_array($request->getMethod(), ['OPTIONS', 'HEAD'], true)) {
++            return true;
++        }
++
++        $acceptheader = $request->getHeaderLine('Accept');
++        $accepted = array_map(
++            fn (string $mimetype): string => trim(strtok($mimetype, ';')),
++            explode(',', $acceptheader),
++        );
++
++        return in_array('application/json', $accepted, true);
+     }
+ }
+diff --git a/public/lib/tests/router/middleware/cors_middleware_test.php b/public/lib/tests/router/middleware/cors_middleware_test.php
+index 164e2d8230a..a03463822e7 100644
+--- a/public/lib/tests/router/middleware/cors_middleware_test.php
++++ b/public/lib/tests/router/middleware/cors_middleware_test.php
+@@ -62,10 +62,13 @@ final class cors_middleware_test extends route_testcase {
+     }
+ 
+     /**
+-     * CORS headers are not added for a request which does not accept JSON and is not an OPTIONS
+-     * or HEAD request.
++     * CORS headers are always added, even for a request which does not accept JSON and is not an OPTIONS
++     * or HEAD request, but the Content-Type is not forced to JSON in that case.
++     *
++     * @param array $headers
+      */
+-    public function test_cors_headers_not_added_for_non_json_request(): void {
++    #[\PHPUnit\Framework\Attributes\DataProvider('non_json_request_provider')]
++    public function test_cors_headers_added_for_non_json_request(array $headers): void {
+         $app = $this->get_simple_app();
+         $app->add(di::get(cors_middleware::class));
+         $app->addRoutingMiddleware();
+@@ -74,19 +77,36 @@ final class cors_middleware_test extends route_testcase {
+             return $response;
+         });
+ 
+-        // Handle the request. No Accept header is provided.
+-        $request = new ServerRequest('GET', '/test');
++        $request = new ServerRequest('GET', '/test', $headers);
+         $returns = $app->handle($request);
+         $this->assertInstanceOf(ResponseInterface::class, $returns);
+ 
+-        // No CORS headers should have been added, and the response should be returned unmodified.
+-        $this->assertEquals('', $returns->getHeaderLine('Access-Control-Allow-Origin'));
+-        $this->assertEquals('', $returns->getHeaderLine('Access-Control-Allow-Methods'));
+-        $this->assertEquals('', $returns->getHeaderLine('Access-Control-Allow-Headers'));
++        // The CORS headers must always be added.
++        $this->assertEquals('*', $returns->getHeaderLine('Access-Control-Allow-Origin'));
++        $this->assertEquals('GET', $returns->getHeaderLine('Access-Control-Allow-Methods'));
++        $allowedheaders = $returns->getHeaderLine('Access-Control-Allow-Headers');
++        $this->assertStringContainsString('Content-Type', $allowedheaders);
++        $this->assertStringContainsString('api_key', $allowedheaders);
++        $this->assertStringContainsString('Authorization', $allowedheaders);
++
++        // But the Content-Type should not be forced to JSON.
+         $this->assertEquals('', $returns->getHeaderLine('Content-Type'));
+         $this->assertEquals('', $returns->getHeaderLine('Content-Disposition'));
+     }
+ 
++    /**
++     * Data provider for test_cors_headers_added_for_non_json_request.
++     *
++     * @return array
++     */
++    public static function non_json_request_provider(): array {
++        return [
++            'No Accept header' => [[]],
++            'Wildcard Accept header (as sent by fetch)' => [['Accept' => '*/*']],
++            'HTML Accept header' => [['Accept' => 'text/html']],
++        ];
++    }
++
+     /**
+      * CORS headers are still added for an OPTIONS request, even when the Accept header does not
+      * request JSON.

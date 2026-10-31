@@ -1,0 +1,281 @@
+diff --git a/public/lib/tests/oauth2/server/repository/access_token_repository_test.php b/public/lib/tests/oauth2/server/repository/access_token_repository_test.php
+index ac4869c8ca9..a9f4bb3efd7 100644
+--- a/public/lib/tests/oauth2/server/repository/access_token_repository_test.php
++++ b/public/lib/tests/oauth2/server/repository/access_token_repository_test.php
+@@ -19,6 +19,7 @@ namespace core\oauth2\server\repository;
+ use PHPUnit\Framework\Attributes\CoversClass;
+ use PHPUnit\Framework\Attributes\DataProvider;
+ use League\OAuth2\Server\Entities\ScopeEntityInterface;
++use core\oauth2\server\client_manager;
+ use core\oauth2\server\entity\client_entity;
+ use core\oauth2\server\entity\access_token_entity;
+ 
+@@ -41,7 +42,7 @@ final class access_token_repository_test extends \advanced_testcase {
+      */
+     #[DataProvider('get_new_token_provider')]
+     public function test_get_new_token(string $clientidentifier, array $scopeidentifiers, ?string $userid): void {
+-        $repository = new access_token_repository();
++        $repository = \core\di::get(access_token_repository::class);
+         $client = new client_entity();
+         $client->setIdentifier($clientidentifier);
+ 
+@@ -95,8 +96,11 @@ final class access_token_repository_test extends \advanced_testcase {
+     /**
+      * Test persisting a new access token under various scenarios.
+      *
++     * Also verifies that the issuing client's lastaccessed timestamp is updated at the exact
++     * moment the token is persisted, since that is the definitive point at which the client's
++     * access is known.
++     *
+      * @param string $tokenid Access token identifier string.
+-     * @param string $clientid Client identifier string.
+      * @param string|null $userid User identifier string.
+      * @param array $scopeidentifiers Array of scope identifiers.
+      * @return void
+@@ -104,7 +108,6 @@ final class access_token_repository_test extends \advanced_testcase {
+     #[DataProvider('persist_access_token_provider')]
+     public function test_persist_new_access_token(
+         string $tokenid,
+-        string $clientid,
+         ?string $userid,
+         array $scopeidentifiers
+     ): void {
+@@ -112,10 +115,11 @@ final class access_token_repository_test extends \advanced_testcase {
+ 
+         $this->resetAfterTest();
+ 
+-        $repository = new access_token_repository();
++        $clock = $this->mock_clock_with_frozen();
+ 
+-        $client = new client_entity();
+-        $client->setIdentifier($clientid);
++        $repository = \core\di::get(access_token_repository::class);
++
++        $client = $this->create_client_entity();
+ 
+         $scopes = [];
+         foreach ($scopeidentifiers as $scopeidentifier) {
+@@ -147,9 +151,12 @@ final class access_token_repository_test extends \advanced_testcase {
+         // example, a client_credentials grant), which is persisted as the system user id '0', not
+         // null - see \core\user::get_system_user().
+         $this->assertEquals($userid ?? '0', $record->userid);
+-        $this->assertSame($clientid, $record->clientidentifier);
++        $this->assertSame($client->getIdentifier(), $record->clientidentifier);
+         $this->assertSame(implode(' ', $scopeidentifiers), $record->scopes);
+         $this->assertEquals(access_token_entity::REVOKED_NO, (int) $record->revoked);
++
++        $clientrecord = $DB->get_record('oauth2_server_clients', ['clientidentifier' => $client->getIdentifier()]);
++        $this->assertEquals($clock->time(), $clientrecord->lastaccessed);
+     }
+ 
+     /**
+@@ -161,19 +168,34 @@ final class access_token_repository_test extends \advanced_testcase {
+         return [
+             'token-1 with user and single scope' => [
+                 'token-1',
+-                'client-a',
+                 '101',
+                 ['profile'],
+             ],
+             'token-2 with null user and multiple scopes' => [
+                 'token-2',
+-                'client-b',
+                 null,
+                 ['profile', 'email'],
+             ],
+         ];
+     }
+ 
++    /**
++     * Create and persist a real client entity to attach to a token/auth code fixture.
++     *
++     * A real, persisted client is used (rather than a bare new client_entity() with only its
++     * identifier set) so that the lastaccessed tracking write in persistNewAccessToken() has a
++     * real row to update, allowing the test to verify it against the database afterwards.
++     *
++     * @return client_entity
++     */
++    private function create_client_entity(): client_entity {
++        return \core\di::get(client_manager::class)->create_client(
++            name: 'Example client',
++            ownercontext: \core\context\system::instance(),
++            granttypes: [],
++        );
++    }
++
+     /**
+      * Test checking access token revocation and revoking under different scenarios.
+      *
+@@ -184,7 +206,7 @@ final class access_token_repository_test extends \advanced_testcase {
+ 
+         $this->resetAfterTest();
+ 
+-        $repository = new access_token_repository();
++        $repository = \core\di::get(access_token_repository::class);
+ 
+         $DB->insert_record('oauth2_server_client_access_tokens', [
+             'identifier' => 'token-1',
+@@ -209,7 +231,7 @@ final class access_token_repository_test extends \advanced_testcase {
+      * @return void
+      */
+     public function test_is_access_token_revoked_non_existent(): void {
+-        $repository = new access_token_repository();
++        $repository = \core\di::get(access_token_repository::class);
+ 
+         $this->expectException(\dml_missing_record_exception::class);
+         $repository->isAccessTokenRevoked('non-existent-token');
+@@ -235,7 +257,7 @@ final class access_token_repository_test extends \advanced_testcase {
+             'timecreated' => time(),
+         ]);
+ 
+-        $repository = new access_token_repository();
++        $repository = \core\di::get(access_token_repository::class);
+ 
+         $this->assertTrue($repository->is_owned_by_client('token-1', 'client-a'));
+         $this->assertFalse($repository->is_owned_by_client('token-1', 'client-b'));
+diff --git a/public/lib/tests/oauth2/server/repository/client_repository_test.php b/public/lib/tests/oauth2/server/repository/client_repository_test.php
+index b60e5764a89..5e2b2dfc0f6 100644
+--- a/public/lib/tests/oauth2/server/repository/client_repository_test.php
++++ b/public/lib/tests/oauth2/server/repository/client_repository_test.php
+@@ -49,7 +49,7 @@ final class client_repository_test extends \advanced_testcase {
+ 
+         $this->resetAfterTest();
+ 
+-        $repository = new client_repository();
++        $repository = \core\di::get(client_repository::class);
+ 
+         if (!empty($clientdata)) {
+             // Ensure valid system context is set.
+@@ -149,6 +149,10 @@ final class client_repository_test extends \advanced_testcase {
+     /**
+      * Test validateClient under different scenarios using data providers.
+      *
++     * Also verifies that the secret's lastaccessed timestamp is updated at the exact moment a
++     * secret is matched, and left untouched when validation fails, since that is the only
++     * signal available for tracking the secret.
++     *
+      * @param array $clientdata The data to insert into the clients table.
+      * @param string|null $plaintextsecret The plain secret to insert (hashed) into secrets table.
+      * @param int $secretrevoked Whether the secret is marked revoked in db.
+@@ -174,14 +178,16 @@ final class client_repository_test extends \advanced_testcase {
+ 
+         $this->resetAfterTest();
+ 
+-        $repository = new client_repository();
++        $clock = $this->mock_clock_with_frozen();
++        $repository = \core\di::get(client_repository::class);
+ 
++        $secretid = null;
+         if (!empty($clientdata)) {
+             $clientdata['ownercontext'] = \context_system::instance()->id;
+             $DB->insert_record('oauth2_server_clients', (object) $clientdata);
+ 
+             if ($plaintextsecret !== null) {
+-                $DB->insert_record('oauth2_server_client_secrets', (object) [
++                $secretid = $DB->insert_record('oauth2_server_client_secrets', (object) [
+                     'clientidentifier' => $clientdata['clientidentifier'],
+                     'secret' => password_hash($plaintextsecret, PASSWORD_DEFAULT),
+                     'revoked' => $secretrevoked,
+@@ -195,6 +201,15 @@ final class client_repository_test extends \advanced_testcase {
+             $expectedresult,
+             $repository->validateClient($checkidentifier, $checksecret, $checkgranttype)
+         );
++
++        if ($secretid !== null) {
++            $lastaccessed = $DB->get_field('oauth2_server_client_secrets', 'lastaccessed', ['id' => $secretid]);
++            if ($expectedresult) {
++                $this->assertEquals($clock->time(), $lastaccessed);
++            } else {
++                $this->assertNull($lastaccessed);
++            }
++        }
+     }
+ 
+     /**
+diff --git a/public/lib/tests/route/oauth2_revoke_test.php b/public/lib/tests/route/oauth2_revoke_test.php
+index 424d93ec85a..1dcbb2e5eed 100644
+--- a/public/lib/tests/route/oauth2_revoke_test.php
++++ b/public/lib/tests/route/oauth2_revoke_test.php
+@@ -57,7 +57,7 @@ final class oauth2_revoke_test extends \advanced_testcase {
+     private function get_route(): oauth2 {
+         return new oauth2(
+             $this->createStub(AuthorizationServer::class),
+-            new client_repository(),
++            \core\di::get(client_repository::class),
+             $this->createStub(ScopeRepositoryInterface::class),
+         );
+     }
+diff --git a/public/lib/tests/route/oauth2_test.php b/public/lib/tests/route/oauth2_test.php
+index 7ac46ecb2b7..4e5280672d7 100644
+--- a/public/lib/tests/route/oauth2_test.php
++++ b/public/lib/tests/route/oauth2_test.php
+@@ -1537,7 +1537,12 @@ final class oauth2_test extends \advanced_testcase {
+             ->withQueryParams(['authrequestid' => $requestid]);
+ 
+         try {
+-            $route->authorize($request, new Response(), $userrepository, $this->make_granted_scopes_repository_stub());
++            $route->authorize(
++                $request,
++                new Response(),
++                $userrepository,
++                $this->make_granted_scopes_repository_stub(),
++            );
+             $this->fail('Expected require_login() to attempt a redirect for the forced password change.');
+         // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch
+         } catch (\core\exception\moodle_exception $e) {
+@@ -1601,7 +1606,12 @@ final class oauth2_test extends \advanced_testcase {
+             ->withQueryParams(['authrequestid' => $requestid]);
+ 
+         try {
+-            $route->authorize($request, new Response(), $userrepository, $this->make_granted_scopes_repository_stub());
++            $route->authorize(
++                $request,
++                new Response(),
++                $userrepository,
++                $this->make_granted_scopes_repository_stub(),
++            );
+             $this->fail('Expected require_login() to attempt a redirect for the incomplete profile.');
+         // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch
+         } catch (\core\exception\moodle_exception $e) {
+@@ -1657,7 +1667,12 @@ final class oauth2_test extends \advanced_testcase {
+             ->withQueryParams(['authrequestid' => $requestid]);
+ 
+         try {
+-            $route->authorize($request, new Response(), $userrepository, $this->make_granted_scopes_repository_stub());
++            $route->authorize(
++                $request,
++                new Response(),
++                $userrepository,
++                $this->make_granted_scopes_repository_stub(),
++            );
+             $this->fail('Expected require_login() to attempt a redirect for the unagreed site policy.');
+         // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch
+         } catch (\core\exception\moodle_exception $e) {
+@@ -1715,7 +1730,12 @@ final class oauth2_test extends \advanced_testcase {
+             ->withQueryParams(['authrequestid' => $requestid]);
+ 
+         try {
+-            $route->authorize($request, new Response(), $userrepository, $this->make_granted_scopes_repository_stub());
++            $route->authorize(
++                $request,
++                new Response(),
++                $userrepository,
++                $this->make_granted_scopes_repository_stub(),
++            );
+             $this->fail('Expected require_login() to attempt a redirect for the forced password change.');
+         // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch
+         } catch (\core\exception\moodle_exception $e) {
+@@ -2477,7 +2497,12 @@ final class oauth2_test extends \advanced_testcase {
+             ->withQueryParams(['authrequestid' => $requestid]);
+ 
+         try {
+-            $route->authorize($authorizerequest, new Response(), $userrepository, $this->make_granted_scopes_repository_stub());
++            $route->authorize(
++                $authorizerequest,
++                new Response(),
++                $userrepository,
++                $this->make_granted_scopes_repository_stub(),
++            );
+             $this->fail('Expected require_login() to attempt a redirect for the forced password change.');
+         // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch
+         } catch (\core\exception\moodle_exception $e) {

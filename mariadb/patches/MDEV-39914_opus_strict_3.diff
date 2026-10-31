@@ -1,0 +1,96 @@
+diff --git a/mysql-test/main/spatial_utility_function_simplify.result b/mysql-test/main/spatial_utility_function_simplify.result
+index 43544702..4db0712f 100644
+--- a/mysql-test/main/spatial_utility_function_simplify.result
++++ b/mysql-test/main/spatial_utility_function_simplify.result
+@@ -559,3 +559,18 @@ SELECT ST_ASTEXT(ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((0 0,0 10,10 10,10 0,0 0,0
+ ERROR 42S22: Unknown column 'a' in 'SELECT'
+ # Clean up
+ DROP TABLE gis_geometrycollection;
++#
++# MDEV-39914 Crash in String::append with ST_SIMPLIFY inside IN list
++#
++SELECT 'MULTIPOINT(1 1)' IN ('accounts', ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((10 2,5 2,5 10,-5 10,-5 2,-10 2,-10 -2,-5 -2,-5 -10,5 -10,5 -2,10 -2,10 2))'), 3), 'global_status') AS c;
++c
++0
++SELECT 'x' IN ('a', ST_SIMPLIFY(ST_GEOMFROMTEXT('LINESTRING(0 0,1 1,2 2,3 3)'), 1), 'b') AS c;
++c
++0
++SELECT 'x' IN ('a', ST_SIMPLIFY(ST_GEOMFROMTEXT('MULTIPOLYGON(((0 0,0 10,10 10,10 0,0 0)))'), 1), 'b') AS c;
++c
++0
++SELECT 'x' IN ('a', ST_SIMPLIFY(ST_GEOMFROMTEXT('GEOMETRYCOLLECTION(POINT(1 1),LINESTRING(0 0,1 1,2 2))'), 1), 'b') AS c;
++c
++0
+diff --git a/mysql-test/main/spatial_utility_function_simplify.test b/mysql-test/main/spatial_utility_function_simplify.test
+index 8ef99c7e..751503aa 100644
+--- a/mysql-test/main/spatial_utility_function_simplify.test
++++ b/mysql-test/main/spatial_utility_function_simplify.test
+@@ -499,3 +499,11 @@ SELECT ST_ASTEXT(ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((0 0,0 10,10 10,10 0,0 0,0
+ 
+ --echo # Clean up
+ DROP TABLE gis_geometrycollection;
++
++--echo #
++--echo # MDEV-39914 Crash in String::append with ST_SIMPLIFY inside IN list
++--echo #
++SELECT 'MULTIPOINT(1 1)' IN ('accounts', ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((10 2,5 2,5 10,-5 10,-5 2,-10 2,-10 -2,-5 -2,-5 -10,5 -10,5 -2,10 -2,10 2))'), 3), 'global_status') AS c;
++SELECT 'x' IN ('a', ST_SIMPLIFY(ST_GEOMFROMTEXT('LINESTRING(0 0,1 1,2 2,3 3)'), 1), 'b') AS c;
++SELECT 'x' IN ('a', ST_SIMPLIFY(ST_GEOMFROMTEXT('MULTIPOLYGON(((0 0,0 10,10 10,10 0,0 0)))'), 1), 'b') AS c;
++SELECT 'x' IN ('a', ST_SIMPLIFY(ST_GEOMFROMTEXT('GEOMETRYCOLLECTION(POINT(1 1),LINESTRING(0 0,1 1,2 2))'), 1), 'b') AS c;
+diff --git a/sql/item_geofunc.cc b/sql/item_geofunc.cc
+index 307f198c..cc3f29e4 100644
+--- a/sql/item_geofunc.cc
++++ b/sql/item_geofunc.cc
+@@ -2321,6 +2321,12 @@ String *Item_func_simplify::val_str(String *str)
+     }
+   }
+ 
++  /*
++    The result is binary WKB data. The caller may pass a String with no
++    character set assigned yet (e.g. an element of in_string's array),
++    so make sure appends in the simplify() implementations are binary.
++  */
++  str->set_charset(&my_charset_bin);
+   if (geometry->simplify(str, max_distance))
+   {
+     null_value= 1;
+diff --git a/sql/spatial.cc b/sql/spatial.cc
+index 5df5a555..191475b0 100644
+--- a/sql/spatial.cc
++++ b/sql/spatial.cc
+@@ -2395,7 +2395,7 @@ int Gis_polygon::simplify(String *result, double max_distance) const
+     return 1;
+ 
+   result->length(0);
+-  result->reserve(SRID_SIZE + WKB_HEADER_SIZE);
++  result->reserve(SRID_SIZE + WKB_HEADER_SIZE + 4);
+   result->q_append(SRID_PLACEHOLDER);
+   result->q_append((char) wkb_ndr);
+   result->q_append((uint32) wkb_polygon);
+@@ -3500,7 +3500,7 @@ int Gis_multi_line_string::simplify(String *result, double max_distance) const
+     return 1;
+ 
+   result->length(0);
+-  result->reserve(SRID_SIZE + WKB_HEADER_SIZE);
++  result->reserve(SRID_SIZE + WKB_HEADER_SIZE + 4);
+   result->q_append(SRID_PLACEHOLDER);
+   result->q_append((char) wkb_ndr);
+   result->q_append((uint32) wkb_multilinestring);
+@@ -4107,7 +4107,7 @@ int Gis_multi_polygon::simplify(String *result, double max_distance) const
+     return 1;
+ 
+   result->length(0);
+-  result->reserve(SRID_SIZE + WKB_HEADER_SIZE);
++  result->reserve(SRID_SIZE + WKB_HEADER_SIZE + 4);
+   result->q_append(SRID_PLACEHOLDER);
+   result->q_append((char) wkb_ndr);
+   result->q_append((uint32) wkb_multipolygon);
+@@ -4702,7 +4702,7 @@ int Gis_geometry_collection::simplify(String *result,
+     return 1;
+ 
+   result->length(0);
+-  result->reserve(SRID_SIZE + BYTE_ORDER_SIZE + WKB_HEADER_SIZE);
++  result->reserve(SRID_SIZE + WKB_HEADER_SIZE + 4);
+   result->q_append(SRID_PLACEHOLDER);
+   result->q_append((char) wkb_ndr);
+   result->q_append((uint32) wkb_geometrycollection);

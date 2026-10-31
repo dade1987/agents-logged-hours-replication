@@ -1,0 +1,75 @@
+You are a software engineer fixing an issue in MariaDB Server (C/C++). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot build MariaDB or run its test suite. Read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update mysql-test tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDEV-40689: Wrong result: BIT_AND/BIT_OR/BIT_XOR in WINDOW functions over a frame containing NULL
+
+NULLs in the aggregated column for BIT_AND/BIT_OR/BIT_XOR under a WINDOW function produce a wrong result.
+
+Repro:
+{code}
+CREATE TABLE t1 (pk INT PRIMARY KEY, a INT, b INT);
+INSERT INTO t1 VALUES
+  (1,0,NULL),(2,0,1),(3,0,2),(4,0,NULL),(5,0,3),
+  (6,1,7),(7,1,NULL),(8,1,6);
+
+SELECT pk, b,
+    BIT_AND(b) OVER w AS bit_and,
+    BIT_OR(b)  OVER w AS bit_or,
+    BIT_XOR(b) OVER w AS bit_xor
+FROM t1
+WINDOW w AS (ORDER BY pk ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+ORDER BY pk;
+{code}
+
+Actual:
+{code}
+pk    b     bit_and               bit_or  bit_xor
+1     NULL  18446744073709551615  0       0
+2     1     1                     1       1
+3     2     3                     3       3     <-- bit_and wrong
+4     NULL  18446744073709551615  2       2     <-- bit_and wrong
+5     3     18446744073709551615  3       3     <-- bit_and wrong
+6     7     18446744073709551615  7       4     <-- bit_and wrong
+7     NULL  18446744073709551615  7       4     <-- bit_and, bit_xor wrong
+8     6     18446744073709551615  7       5     <-- all three wrong
+{code}
+Expected:
+{code}
+pk    b     bit_and               bit_or  bit_xor
+1     NULL  18446744073709551615  0       0
+2     1     1                     1       1
+3     2     0                     3       3
+4     NULL  2                     2       2
+5     3     3                     3       3
+6     7     3                     7       4
+7     NULL  7                     7       7
+8     6     6                     6       6
+{code}
+Comparison with PostgreSQL (which shows an empty space instead of NULL by default):
+{code}
+ pk | b | bit_and | bit_or | bit_xor
+----+---+---------+--------+---------
+  1 |   |         |        |
+  2 | 1 |       1 |      1 |       1
+  3 | 2 |       0 |      3 |       3
+  4 |   |       2 |      2 |       2
+  5 | 3 |       3 |      3 |       3
+  6 | 7 |       3 |      7 |       4
+  7 |   |       7 |      7 |       7
+  8 | 6 |       6 |      6 |       6
+{code}
+The databases differ for a valid yet unrelated reason for a frame that aggregates nothing (pk=1 and any frame of only NULL rows). PostgreSQL returns NULL while MariaDB returns 18446744073709551615 for BIT_AND and 0 for BIT_OR/BIT_XOR. That is MariaDB's established empty set convention for these functions and is not affected by this report.
+
+The change introduced by MDEV-24943 fixes this bug:
+Skip the removal for a row that was never aggregated, in Item_sum_bit::remove_as_window():
+{code}
+  if (num_values_added == 0 || args[0]->null_value)
+    return 0; // Nothing to remove.
+{code}
+This fix is present inside the FILTER clause patch on PR #4439 (commit a62e1ff7dfb, sql/item_sum.cc:2751).

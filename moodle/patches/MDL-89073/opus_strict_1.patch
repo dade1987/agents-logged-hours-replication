@@ -1,0 +1,56 @@
+diff --git a/public/course/format/classes/local/linearnavigationsettings.php b/public/course/format/classes/local/linearnavigationsettings.php
+index 28866ba5989..cb6089e05a4 100644
+--- a/public/course/format/classes/local/linearnavigationsettings.php
++++ b/public/course/format/classes/local/linearnavigationsettings.php
+@@ -131,6 +131,10 @@ class linearnavigationsettings {
+             // Not on an activity page, do not add the sticky footer.
+             return false;
+         }
++        if ($page->cm->is_stealth()) {
++            // Stealth activities are not part of the course linear path, do not add the sticky footer.
++            return false;
++        }
+         if ($page->has_sticky_footer()) {
+             // If there is already a sticky footer, do not add another one.
+             return false;
+diff --git a/public/course/format/tests/local/linearnavigationsettings_test.php b/public/course/format/tests/local/linearnavigationsettings_test.php
+index d081ae584d8..2b51ec50c81 100644
+--- a/public/course/format/tests/local/linearnavigationsettings_test.php
++++ b/public/course/format/tests/local/linearnavigationsettings_test.php
+@@ -122,6 +122,36 @@ final class linearnavigationsettings_test extends \advanced_testcase {
+         ];
+     }
+ 
++    /**
++     * Test show_navigation_footer is not shown on stealth activities.
++     */
++    public function test_show_navigation_footer_stealth(): void {
++        $this->resetAfterTest();
++        set_config('allowstealth', 1);
++
++        $course = $this->getDataGenerator()->create_course([
++            'format' => 'topics',
++            'enablelinearnav' => 1,
++        ]);
++        $visiblepage = $this->getDataGenerator()->create_module('page', ['course' => $course->id]);
++        $stealthpage = $this->getDataGenerator()->create_module('page', [
++            'course' => $course->id,
++            'visibleoncoursepage' => 0,
++        ]);
++
++        // Standard activity shows the navigation footer.
++        $moodlepage = new \moodle_page();
++        $moodlepage->set_course($course);
++        $moodlepage->set_cm(get_coursemodule_from_id('page', $visiblepage->cmid), $course);
++        $this->assertTrue(linearnavigationsettings::show_navigation_footer($moodlepage));
++
++        // Stealth activity does not show the navigation footer.
++        $moodlepage = new \moodle_page();
++        $moodlepage->set_course($course);
++        $moodlepage->set_cm(get_coursemodule_from_id('page', $stealthpage->cmid), $course);
++        $this->assertFalse(linearnavigationsettings::show_navigation_footer($moodlepage));
++    }
++
+     /**
+      * Test is_linear_navigation_enabled.
+      *

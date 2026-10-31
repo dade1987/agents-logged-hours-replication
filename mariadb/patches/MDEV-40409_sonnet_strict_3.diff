@@ -1,0 +1,36 @@
+diff --git a/sql/gstream.cc b/sql/gstream.cc
+index f8e84e70..3f223fa5 100644
+--- a/sql/gstream.cc
++++ b/sql/gstream.cc
+@@ -46,9 +46,8 @@ enum Gis_read_stream::enum_tok_types Gis_read_stream::get_next_toc_type()
+ 
+ bool Gis_read_stream::lookup_next_word(LEX_STRING *res)
+ {
+-  const char *cur= m_cur;
+-
+   skip_space();
++  const char *cur= m_cur;
+   res->str= (char*) cur;
+   /* The following will also test for \0 */
+   if ((cur >= m_limit) || !my_isvar_start(&my_charset_bin, *cur))
+diff --git a/sql/spatial.cc b/sql/spatial.cc
+index d1ed5bb8..268ee0a7 100644
+--- a/sql/spatial.cc
++++ b/sql/spatial.cc
+@@ -3320,6 +3320,16 @@ bool Gis_geometry_collection::init_from_wkt(Gis_read_stream *trs, String *wkb)
+     {
+       for (;;)
+       {
++        LEX_STRING sub_word;
++        /* Reject nested collections before recursing, to avoid stack overrun */
++        if (!trs->lookup_next_word(&sub_word) &&
++            sub_word.length == 18 &&
++            my_charset_latin1.strnncoll("geometrycollection", 18,
++                                        sub_word.str, 18) == 0)
++        {
++          trs->set_error_msg("Unexpected GEOMETRYCOLLECTION");
++          return 1;
++        }
+         if (!(g= create_from_wkt(&buffer, trs, wkb)))
+           return 1;
+ 

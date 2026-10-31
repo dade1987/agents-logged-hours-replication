@@ -1,0 +1,30 @@
+diff --git a/sql/opt_range.cc b/sql/opt_range.cc
+index c8d1d8da..185dd13b 100644
+--- a/sql/opt_range.cc
++++ b/sql/opt_range.cc
+@@ -14667,6 +14667,8 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
+   bool have_max= FALSE;              /* TRUE if there is a MAX function. */
+   Item_field *min_max_arg_item= NULL; // The argument of all MIN/MAX functions
+   KEY_PART_INFO *min_max_arg_part= NULL; /* The corresponding keypart. */
++  /* The MIN/MAX keypart of the best index found so far. */
++  KEY_PART_INFO *best_min_max_arg_part= NULL;
+   uint group_prefix_len= 0; /* Length (in bytes) of the key prefix. */
+   KEY *index_info= NULL;    /* The index chosen for data access. */
+   uint index= 0;            /* The id of the chosen index. */
+@@ -15204,6 +15206,7 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
+     {
+       index_info= cur_index_info;
+       index= cur_index;
++      best_min_max_arg_part= min_max_arg_part;
+       best_read_cost= cur_read_cost;
+       best_records= cur_records;
+       best_index_tree= cur_index_tree;
+@@ -15259,7 +15262,7 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
+   /* The query passes all tests, so construct a new TRP object. */
+   read_plan= new (param->mem_root)
+                  TRP_GROUP_MIN_MAX(have_min, have_max, is_agg_distinct,
+-                                   min_max_arg_part,
++                                   best_min_max_arg_part,
+                                    group_prefix_len, used_key_parts,
+                                    group_key_parts, index_info, index,
+                                    key_infix_len,

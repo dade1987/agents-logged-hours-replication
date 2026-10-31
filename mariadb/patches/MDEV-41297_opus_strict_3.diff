@@ -1,0 +1,133 @@
+diff --git a/mysql-test/suite/heap/blob_empty_space_pad.result b/mysql-test/suite/heap/blob_empty_space_pad.result
+new file mode 100644
+index 00000000..1a908d36
+--- /dev/null
++++ b/mysql-test/suite/heap/blob_empty_space_pad.result
+@@ -0,0 +1,35 @@
++#
++# MDEV-41297 Wrong result upon DISTINCT/GROUP BY/UNION on TEXT with
++# empty and all-space values
++#
++CREATE TABLE t1 (a TEXT);
++INSERT INTO t1 VALUES (''),('   ');
++SELECT COUNT(*) FROM (SELECT DISTINCT a FROM t1) AS d;
++COUNT(*)
++1
++SELECT COUNT(DISTINCT a) FROM t1;
++COUNT(DISTINCT a)
++1
++SELECT COUNT(*) FROM (SELECT a FROM t1 GROUP BY a) AS g;
++COUNT(*)
++1
++SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE LENGTH(a)=0 UNION SELECT a FROM t1 WHERE LENGTH(a)=3) AS u;
++COUNT(*)
++1
++SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE LENGTH(a)=3 UNION SELECT a FROM t1 WHERE LENGTH(a)=0) AS u;
++COUNT(*)
++1
++DROP TABLE t1;
++CREATE TABLE t1 (a TEXT CHARACTER SET latin1);
++INSERT INTO t1 VALUES ('   '),('');
++SELECT COUNT(*) FROM (SELECT DISTINCT a FROM t1) AS d;
++COUNT(*)
++1
++SELECT COUNT(DISTINCT a) FROM t1;
++COUNT(DISTINCT a)
++1
++SELECT COUNT(*) FROM (SELECT a FROM t1 GROUP BY a) AS g;
++COUNT(*)
++1
++DROP TABLE t1;
++# End of tests
+diff --git a/mysql-test/suite/heap/blob_empty_space_pad.test b/mysql-test/suite/heap/blob_empty_space_pad.test
+new file mode 100644
+index 00000000..763109e4
+--- /dev/null
++++ b/mysql-test/suite/heap/blob_empty_space_pad.test
+@@ -0,0 +1,22 @@
++--echo #
++--echo # MDEV-41297 Wrong result upon DISTINCT/GROUP BY/UNION on TEXT with
++--echo # empty and all-space values
++--echo #
++
++CREATE TABLE t1 (a TEXT);
++INSERT INTO t1 VALUES (''),('   ');
++SELECT COUNT(*) FROM (SELECT DISTINCT a FROM t1) AS d;
++SELECT COUNT(DISTINCT a) FROM t1;
++SELECT COUNT(*) FROM (SELECT a FROM t1 GROUP BY a) AS g;
++SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE LENGTH(a)=0 UNION SELECT a FROM t1 WHERE LENGTH(a)=3) AS u;
++SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE LENGTH(a)=3 UNION SELECT a FROM t1 WHERE LENGTH(a)=0) AS u;
++DROP TABLE t1;
++
++CREATE TABLE t1 (a TEXT CHARACTER SET latin1);
++INSERT INTO t1 VALUES ('   '),('');
++SELECT COUNT(*) FROM (SELECT DISTINCT a FROM t1) AS d;
++SELECT COUNT(DISTINCT a) FROM t1;
++SELECT COUNT(*) FROM (SELECT a FROM t1 GROUP BY a) AS g;
++DROP TABLE t1;
++
++--echo # End of tests
+diff --git a/storage/heap/hp_blob.c b/storage/heap/hp_blob.c
+index 3763b949..c84f7842 100644
+--- a/storage/heap/hp_blob.c
++++ b/storage/heap/hp_blob.c
+@@ -918,7 +918,8 @@ int hp_read_blobs(HP_INFO *info, uchar *record, const uchar *pos)
+   @param chain     Pointer to first run of the continuation chain
+   @param data_len  Total blob data length (from record's packlength bytes)
+ 
+-  @return Pointer into info->blob_buff with contiguous blob data,
++  @return Pointer into info->blob_buff with contiguous blob data
++          (a pointer to an empty string for a zero-length blob),
+           or NULL on allocation failure.
+ */
+ 
+@@ -930,8 +931,16 @@ const uchar *hp_materialize_one_blob(HP_INFO *info,
+   uint visible= share->visible;
+   uint recbuffer= share->block.recbuffer;
+ 
+-  if (data_len == 0 || !chain)
+-    return chain;
++  /*
++    A zero-length blob is stored with a NULL chain pointer. Return a
++    valid (non-NULL) pointer for it, as NULL means allocation failure
++    to the callers, which would make an empty value compare as different
++    from e.g. an all-space value under a PAD SPACE collation.
++  */
++  if (data_len == 0)
++    return (const uchar*) "";
++  if (!chain)
++    return NULL;
+ 
+   if (hp_is_single_rec(chain, visible))
+     return chain;                         /* Case A: no header, data at offset 0 */
+diff --git a/storage/heap/hp_hash.c b/storage/heap/hp_hash.c
+index 5cefff50..f8c8c17f 100644
+--- a/storage/heap/hp_hash.c
++++ b/storage/heap/hp_hash.c
+@@ -523,6 +523,8 @@ int hp_rec_key_cmp(HP_KEYDEF *keydef, const uchar *rec1, const uchar *rec2,
+ 
+       /* rec1: always input -- dereference pointer */
+       memcpy(&data1, pos1 + packlength, HP_PTR_SIZE);
++      if (len1 == 0)
++        data1= (const uchar*) "";
+ 
+       /* rec2: if info != NULL, it's stored -- materialize from chain */
+       if (info)
+@@ -536,6 +538,8 @@ int hp_rec_key_cmp(HP_KEYDEF *keydef, const uchar *rec1, const uchar *rec2,
+       else
+       {
+         memcpy(&data2, pos2 + packlength, HP_PTR_SIZE);
++        if (len2 == 0)
++          data2= (const uchar*) "";
+       }
+ 
+       if (my_ci_strnncollsp(seg->charset, data1, len1, data2, len2))
+@@ -684,6 +688,8 @@ int hp_key_cmp(HP_KEYDEF *keydef, const uchar *rec, const uchar *key,
+       const uchar *rec_data;
+ 
+       memcpy(&key_data, key + 4, HP_PTR_SIZE);
++      if (key_blob_len == 0)
++        key_data= (const uchar*) "";
+ 
+       if (rec_blob_len == 0 && key_blob_len == 0)
+         continue;

@@ -1,0 +1,30 @@
+diff --git a/mysql-test/main/change_master_default.test b/mysql-test/main/change_master_default.test
+index 971013dc..1a57d286 100644
+--- a/mysql-test/main/change_master_default.test
++++ b/mysql-test/main/change_master_default.test
+@@ -100,6 +100,12 @@ CHANGE MASTER TO
+ --enable_warnings
+ CHANGE MASTER 'unset' TO master_host='127.0.1.3';
+ 
++# MDEV-40122: a leading '+' is not valid syntax for master_heartbeat_period
++--error ER_PARSE_ERROR
++CHANGE MASTER TO master_heartbeat_period= +DEFAULT;
++--error ER_PARSE_ERROR
++CHANGE MASTER TO master_heartbeat_period= +45;
++
+ 
+ --echo # Validate command line options
+ 
+diff --git a/sql/sql_yacc.yy b/sql/sql_yacc.yy
+index 83f8edd7..0b290137 100644
+--- a/sql/sql_yacc.yy
++++ b/sql/sql_yacc.yy
+@@ -2423,7 +2423,7 @@ master_def:
+             { mi->master_ssl_crlpath= path; };
+           }
+ 
+-        | MASTER_HEARTBEAT_PERIOD_SYM '=' opt_plus num_or_default
++        | MASTER_HEARTBEAT_PERIOD_SYM '=' num_or_default
+           {
+             if ($4)
+             {

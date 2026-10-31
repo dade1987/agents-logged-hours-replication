@@ -1,0 +1,28 @@
+diff --git a/plugin/qc_info/qc_info.cc b/plugin/qc_info/qc_info.cc
+index a46e2d9f..a0338487 100644
+--- a/plugin/qc_info/qc_info.cc
++++ b/plugin/qc_info/qc_info.cc
+@@ -230,9 +230,21 @@ static int qc_info_fill_table(THD *thd, TABLE_LIST *tables,
+     /* The database against which the statement is executed is part of the
+        query cache query key
+      */
+-    compile_time_assert(QUERY_CACHE_DB_LENGTH_SIZE == 2); 
++    compile_time_assert(QUERY_CACHE_DB_LENGTH_SIZE == 2);
+     db= key + statement_text_length + 1 + QUERY_CACHE_DB_LENGTH_SIZE;
+-    db_length= uint2korr(db - QUERY_CACHE_DB_LENGTH_SIZE);
++    /*
++      The key format is [query]\0[db_length][db][flags]. If the query text
++      itself contains \0 bytes, strlen() above stops early and the key
++      cannot be parsed unambiguously: both db and db_length may be garbage.
++      Never read beyond the end of the db name (i.e. beyond the flags start).
++    */
++    if (db > key + flags_length)
++      db_length= 0;
++    else
++    {
++      db_length= uint2korr(db - QUERY_CACHE_DB_LENGTH_SIZE);
++      set_if_smaller(db_length, (size_t)(key + flags_length - db));
++    }
+ 
+     table->field[COLUMN_STATEMENT_SCHEMA]->store(db, db_length, scs);
+ 

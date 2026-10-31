@@ -1,0 +1,85 @@
+diff --git a/public/admin/tool/task/lang/en/tool_task.php b/public/admin/tool/task/lang/en/tool_task.php
+index 7ccee87463e..388ed2b17e7 100644
+--- a/public/admin/tool/task/lang/en/tool_task.php
++++ b/public/admin/tool/task/lang/en/tool_task.php
+@@ -84,6 +84,7 @@ $string['runadhoctasksfailed'] = 'Run failed \'{$a}\' tasks';
+ $string['runagain'] = 'Run again';
+ $string['runasap'] = 'Run ASAP';
+ $string['runasap_confirm'] = 'Are you sure you want to run this task \'{$a}\' ASAP? The task will run via cron at the next available time.';
++$string['runasaprunning'] = 'This task \'{$a}\' is currently running, so it cannot be scheduled to run ASAP. Please try again once it has finished.';
+ $string['runasapsuccess'] = 'This task \'{$a}\' has been scheduled to run ASAP.';
+ $string['runclassname'] = 'Run all';
+ $string['runclassnamedueonly'] = 'Run due only';
+diff --git a/public/admin/tool/task/renderer.php b/public/admin/tool/task/renderer.php
+index 583a4ef428b..74150b4d070 100644
+--- a/public/admin/tool/task/renderer.php
++++ b/public/admin/tool/task/renderer.php
+@@ -457,7 +457,7 @@ class tool_task_renderer extends plugin_renderer_base {
+                 );
+ 
+                 $nextruntime = $task->get_next_run_time();
+-                if ($nextruntime > time() && $task->is_enabled()) {
++                if ($nextruntime > time() && $task->is_enabled() && !$task->get_timestarted()) {
+                     $runnow .= html_writer::div(
+                         html_writer::link(
+                             new moodle_url('/admin/tool/task/schedule_task.php', [
+diff --git a/public/admin/tool/task/schedule_task.php b/public/admin/tool/task/schedule_task.php
+index 2824cea75be..68f13dda542 100644
+--- a/public/admin/tool/task/schedule_task.php
++++ b/public/admin/tool/task/schedule_task.php
+@@ -80,8 +80,11 @@ if ($action == 'asap') {
+         );
+     }
+     // Set nextruntime to the past so cron picks it up on its very next run.
+-    \core\task\manager::set_scheduled_task_nextruntime($task, time() - HOURSECS);
+-    echo $OUTPUT->notification(get_string('runasapsuccess', 'tool_task', $task->get_name()), 'success');
++    if (\core\task\manager::set_scheduled_task_nextruntime($task, time() - HOURSECS)) {
++        echo $OUTPUT->notification(get_string('runasapsuccess', 'tool_task', $task->get_name()), 'success');
++    } else {
++        echo $OUTPUT->notification(get_string('runasaprunning', 'tool_task', $task->get_name()), 'error');
++    }
+     echo $output->link_back(get_class($task));
+     echo $OUTPUT->footer();
+     exit;
+diff --git a/public/lib/classes/task/manager.php b/public/lib/classes/task/manager.php
+index 1bd67857f72..dd4b40e219a 100644
+--- a/public/lib/classes/task/manager.php
++++ b/public/lib/classes/task/manager.php
+@@ -1391,19 +1391,30 @@ class manager {
+     /**
+      * Sets the next run time for a scheduled task.
+      *
++     * The change is refused if the task is currently running, because completing the task
++     * recalculates the next run time and would silently overwrite it.
++     *
+      * @param scheduled_task $task Task to modify
+      * @param int $nextruntime timestamp
++     * @return bool True if the next run time was updated, false if the task is running (or does not exist)
+      * @throws \dml_exception If there is a database error
+      * @since Moodle 5.3
+      */
+-    public static function set_scheduled_task_nextruntime(scheduled_task $task, int $nextruntime): void {
++    public static function set_scheduled_task_nextruntime(scheduled_task $task, int $nextruntime): bool {
+         global $DB;
+-        $DB->set_field(
+-            'task_scheduled',
+-            'nextruntime',
+-            $nextruntime,
+-            ['classname' => self::get_canonical_class_name($task)]
+-        );
++        // Conditional update so that it is atomic with respect to the task starting.
++        $sql = "UPDATE {task_scheduled}
++                   SET nextruntime = :nextruntime
++                 WHERE classname = :classname
++                   AND timestarted IS NULL";
++        $params = [
++            'nextruntime' => $nextruntime,
++            'classname' => self::get_canonical_class_name($task),
++        ];
++        $DB->execute($sql, $params);
++        // Verify the result, as execute() does not report affected rows.
++        $record = $DB->get_record('task_scheduled', ['classname' => $params['classname']], 'id, nextruntime, timestarted');
++        return $record && $record->timestarted === null && (int)$record->nextruntime === $nextruntime;
+     }
+ 
+     /**

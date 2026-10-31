@@ -1,0 +1,294 @@
+diff --git a/public/admin/tool/uploadcourse/classes/course.php b/public/admin/tool/uploadcourse/classes/course.php
+index b4a35053d3a..d21ecdff9a9 100644
+--- a/public/admin/tool/uploadcourse/classes/course.php
++++ b/public/admin/tool/uploadcourse/classes/course.php
+@@ -918,6 +918,14 @@ class tool_uploadcourse_course {
+             if ($rc->get_status() == backup::STATUS_REQUIRE_CONV) {
+                 $rc->convert();
+             }
++
++            // When creating a course from a template, the course summary and overview files (course image)
++            // must be copied too. They are part of the course configuration, which is not restored when
++            // importing into an existing course, so add a dedicated step to the restore plan for them.
++            if ($this->do === self::DO_CREATE) {
++                $this->add_restore_course_summary_step($rc);
++            }
++
+             if ($rc->execute_precheck()) {
+                 $rc->execute_plan();
+                 $this->status('courserestored', new lang_string('courserestored', 'tool_uploadcourse'));
+@@ -943,6 +951,38 @@ class tool_uploadcourse_course {
+         $context->mark_dirty();
+     }
+ 
++    /**
++     * Add a step to the restore plan so that the course summary and overview files are restored too.
++     *
++     * The restore performed by this tool imports the content into the (already created) course, so the
++     * course configuration, including the summary and the overview files, is not restored by default.
++     *
++     * The summary is only restored when no (non-empty) summary has been provided in the uploaded data, the overview
++     * files are always restored.
++     *
++     * @param restore_controller $rc the restore controller
++     * @return void
++     */
++    protected function add_restore_course_summary_step(restore_controller $rc): void {
++        $plan = $rc->get_plan();
++
++        // Nothing to do if the whole course configuration is going to be restored anyway.
++        if ($plan->setting_exists('overwrite_conf') && $plan->get_setting('overwrite_conf')->get_value()) {
++            return;
++        }
++
++        // Do not override the summary provided in the uploaded data.
++        $restoresummary = !isset($this->data['summary']) || trim((string) $this->data['summary']) === '';
++
++        foreach ($plan->get_tasks() as $task) {
++            if ($task instanceof restore_course_task) {
++                $task->add_step(new \tool_uploadcourse\restore\course_summary_step('uploadcourse_course_summary',
++                    'course.xml', $restoresummary));
++                break;
++            }
++        }
++    }
++
+     /**
+      * Validate passed enrolment data against an existing course
+      *
+diff --git a/public/admin/tool/uploadcourse/classes/restore/course_summary_step.php b/public/admin/tool/uploadcourse/classes/restore/course_summary_step.php
+new file mode 100644
+index 00000000000..019c3a9c1da
+--- /dev/null
++++ b/public/admin/tool/uploadcourse/classes/restore/course_summary_step.php
+@@ -0,0 +1,140 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace tool_uploadcourse\restore;
++
++use checksumable;
++use context;
++use restore_path_element;
++use restore_structure_step;
++use restore_task;
++
++defined('MOODLE_INTERNAL') || die();
++
++global $CFG;
++require_once($CFG->dirroot . '/backup/util/includes/restore_includes.php');
++
++/**
++ * Restore step copying the course summary and overview files from the backup into the uploaded course.
++ *
++ * When tool_uploadcourse restores a template course (or a backup file) into a freshly created course,
++ * it does so using {@see \backup::TARGET_CURRENT_ADDING}. In that mode the standard
++ * {@see \restore_course_structure_step} is not executed (unless the "overwrite_conf" setting is enabled),
++ * so the course summary and the course overview files (course image) are never brought across.
++ * This step restores only those pieces of information, leaving the rest of the course configuration,
++ * which has been defined from the uploaded data, untouched.
++ *
++ * @package    tool_uploadcourse
++ * @copyright  2025 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class course_summary_step extends restore_structure_step implements checksumable {
++
++    /** @var bool whether the course summary (text and embedded files) should be restored. */
++    protected bool $restoresummary;
++
++    /**
++     * Constructor.
++     *
++     * @param string $name name of the step
++     * @param string $filename name of the file to parse (relative to the course task base path)
++     * @param bool $restoresummary whether the summary text (and its embedded files) must be restored
++     *             in addition to the overview files
++     * @param restore_task|null $task the task this step belongs to
++     */
++    public function __construct(string $name, string $filename, bool $restoresummary = true, ?restore_task $task = null) {
++        $this->restoresummary = $restoresummary;
++        parent::__construct($name, $filename, $task);
++    }
++
++    /**
++     * Calculate the checksum of this step.
++     *
++     * This step is added to the restore course task before the task is built, so, unlike the core steps,
++     * it is part of the task when the restore controller checksum is calculated. Implementing the checksum
++     * ourselves prevents the generic (recursive) calculation from following the step -> task -> step cycle.
++     *
++     * @return string
++     */
++    public function calculate_checksum() {
++        return md5(get_class($this) . '-' . $this->name . '-' . $this->filename . '-' . (int) $this->restoresummary);
++    }
++
++    /**
++     * Given one checksum, returns if matches the step's checksum (true) or no (false).
++     *
++     * @param string $checksum
++     * @return bool
++     */
++    public function is_checksum_correct($checksum) {
++        return $this->calculate_checksum() === $checksum;
++    }
++
++    /**
++     * Define the structure to be processed by this step: only the course element is needed.
++     *
++     * @return restore_path_element[]
++     */
++    protected function define_structure() {
++        return [
++            new restore_path_element('course', '/course'),
++        ];
++    }
++
++    /**
++     * Process the course element, updating the summary of the destination course.
++     *
++     * @param array $data
++     */
++    public function process_course($data) {
++        global $DB;
++
++        if (!$this->restoresummary) {
++            return;
++        }
++
++        $data = (object) $data;
++        if (!property_exists($data, 'summary')) {
++            return;
++        }
++
++        // Only users allowed to change the summary can copy it across (same rule as the core course restore step).
++        $context = context::instance_by_id($this->task->get_contextid());
++        if (!has_capability('moodle/course:changesummary', $context, $this->task->get_userid())) {
++            return;
++        }
++
++        $course = new \stdClass();
++        $course->id = $this->get_courseid();
++        $course->summary = $data->summary;
++        if (isset($data->summaryformat)) {
++            $course->summaryformat = $data->summaryformat;
++        }
++        $course->timemodified = time();
++
++        $DB->update_record('course', $course);
++    }
++
++    /**
++     * Once the file has been processed, send the course summary and overview files to the file pool.
++     */
++    protected function after_execute() {
++        if ($this->restoresummary) {
++            $this->add_related_files('course', 'summary', null);
++        }
++        $this->add_related_files('course', 'overviewfiles', null);
++    }
++}
+diff --git a/public/admin/tool/uploadcourse/tests/course_test.php b/public/admin/tool/uploadcourse/tests/course_test.php
+index 60dfa4f208c..4084b723e8b 100644
+--- a/public/admin/tool/uploadcourse/tests/course_test.php
++++ b/public/admin/tool/uploadcourse/tests/course_test.php
+@@ -956,6 +956,85 @@ final class course_test extends \advanced_testcase {
+         $this->assertTrue($found);
+     }
+ 
++    /**
++     * Test that the course summary and overview files are copied from the template course.
++     */
++    public function test_restore_course_summary_and_overviewfiles(): void {
++        global $DB;
++        $this->initialise_test();
++        $this->setAdminUser();
++
++        $c1 = $this->getDataGenerator()->create_course([
++            'summary' => '<p>Template summary</p>',
++            'summaryformat' => FORMAT_HTML,
++        ]);
++        $c1context = \context_course::instance($c1->id);
++        $fs = get_file_storage();
++        $fs->create_file_from_string([
++            'contextid' => $c1context->id,
++            'component' => 'course',
++            'filearea' => 'overviewfiles',
++            'itemid' => 0,
++            'filepath' => '/',
++            'filename' => 'courseimage.png',
++        ], 'course image content');
++        $fs->create_file_from_string([
++            'contextid' => $c1context->id,
++            'component' => 'course',
++            'filearea' => 'summary',
++            'itemid' => 0,
++            'filepath' => '/',
++            'filename' => 'summaryfile.txt',
++        ], 'summary file content');
++
++        $mode = tool_uploadcourse_processor::MODE_CREATE_NEW;
++        $updatemode = tool_uploadcourse_processor::UPDATE_ALL_WITH_DATA_ONLY;
++
++        // No summary provided in the uploaded data: the template summary and files must be copied.
++        $data = ['shortname' => 'A1', 'templatecourse' => $c1->shortname, 'category' => 1, 'fullname' => 'A1'];
++        $co = new tool_uploadcourse_course($mode, $updatemode, $data);
++        $this->assertTrue($co->prepare());
++        $co->proceed();
++        $course = $DB->get_record('course', ['shortname' => 'A1']);
++        $this->assertEquals('<p>Template summary</p>', $course->summary);
++        $this->assertEquals(FORMAT_HTML, $course->summaryformat);
++        $this->assertEquals('A1', $course->fullname);
++        $context = \context_course::instance($course->id);
++        $overviewfiles = $fs->get_area_files($context->id, 'course', 'overviewfiles', 0, 'itemid, filepath, filename', false);
++        $this->assertCount(1, $overviewfiles);
++        $overviewfile = reset($overviewfiles);
++        $this->assertEquals('courseimage.png', $overviewfile->get_filename());
++        $this->assertEquals('course image content', $overviewfile->get_content());
++        $summaryfiles = $fs->get_area_files($context->id, 'course', 'summary', 0, 'itemid, filepath, filename', false);
++        $this->assertCount(1, $summaryfiles);
++        $summaryfile = reset($summaryfiles);
++        $this->assertEquals('summaryfile.txt', $summaryfile->get_filename());
++
++        // The summary provided in the uploaded data takes priority, overview files are still copied.
++        $data = ['shortname' => 'B1', 'templatecourse' => $c1->shortname, 'category' => 1, 'fullname' => 'B1',
++            'summary' => 'B'];
++        $co = new tool_uploadcourse_course($mode, $updatemode, $data);
++        $this->assertTrue($co->prepare());
++        $co->proceed();
++        $course = $DB->get_record('course', ['shortname' => 'B1']);
++        $this->assertEquals('B', $course->summary);
++        $context = \context_course::instance($course->id);
++        $overviewfiles = $fs->get_area_files($context->id, 'course', 'overviewfiles', 0, 'itemid, filepath, filename', false);
++        $this->assertCount(1, $overviewfiles);
++        $this->assertEquals('courseimage.png', reset($overviewfiles)->get_filename());
++        $this->assertEmpty($fs->get_area_files($context->id, 'course', 'summary', 0, 'itemid, filepath, filename', false));
++
++        // Updating an existing course from a template does not touch its summary.
++        $mode = tool_uploadcourse_processor::MODE_UPDATE_ONLY;
++        $data = ['shortname' => 'B1', 'templatecourse' => $c1->shortname, 'fullname' => 'B1 updated'];
++        $co = new tool_uploadcourse_course($mode, $updatemode, $data);
++        $this->assertTrue($co->prepare());
++        $co->proceed();
++        $course = $DB->get_record('course', ['shortname' => 'B1']);
++        $this->assertEquals('B1 updated', $course->fullname);
++        $this->assertEquals('B', $course->summary);
++    }
++
+     public function test_restore_file(): void {
+         global $DB;
+         $this->initialise_test();

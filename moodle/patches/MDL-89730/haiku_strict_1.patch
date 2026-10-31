@@ -1,0 +1,36 @@
+diff --git a/public/mod/quiz/lib.php b/public/mod/quiz/lib.php
+index 708b6ec8711..32bd409a746 100644
+--- a/public/mod/quiz/lib.php
++++ b/public/mod/quiz/lib.php
+@@ -103,6 +103,10 @@ function quiz_add_instance($quiz) {
+ 
+     // Process the options from the form.
+     $quiz->timecreated = time();
++    // The due date is optional and may be omitted by API callers (e.g. web services).
++    if (!isset($quiz->duedate)) {
++        $quiz->duedate = 0;
++    }
+     $result = quiz_process_options($quiz);
+     if ($result && is_string($result)) {
+         return $result;
+@@ -143,6 +147,11 @@ function quiz_update_instance($quiz, $mform) {
+     // Get the current value, so we can see what changed.
+     $oldquiz = $DB->get_record('quiz', ['id' => $quiz->instance]);
+ 
++    // The due date may be omitted by API callers (e.g. web services). Keep the existing value in that case.
++    if (!isset($quiz->duedate)) {
++        $quiz->duedate = $oldquiz->duedate;
++    }
++
+     // We need two values from the existing DB record that are not in the form,
+     // in some of the function calls below.
+     $quiz->sumgrades = $oldquiz->sumgrades;
+@@ -1232,7 +1241,7 @@ function quiz_update_events($quiz, $override = null) {
+         $userid    = isset($current->userid)? $current->userid : 0;
+         $timeopen  = isset($current->timeopen)?  $current->timeopen : $quiz->timeopen;
+         $timeclose = isset($current->timeclose)? $current->timeclose : $quiz->timeclose;
+-        $duedate = isset($current->duedate) ? $current->duedate : $quiz->duedate;
++        $duedate = isset($current->duedate) ? $current->duedate : ($quiz->duedate ?? 0);
+ 
+         // Only add open/close/duedate events for an override if they differ from the quiz default.
+         $addopen  = empty($current->id) || !empty($current->timeopen);

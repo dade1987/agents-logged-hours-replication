@@ -1,0 +1,76 @@
+diff --git a/public/lib/classes/task/manager.php b/public/lib/classes/task/manager.php
+index 26562a05777..02dc5d762de 100644
+--- a/public/lib/classes/task/manager.php
++++ b/public/lib/classes/task/manager.php
+@@ -720,13 +720,19 @@ class manager {
+         $concurrencylimit = get_config('core', 'task_adhoc_concurrency_limit');
+         $cachedqueuesize = 1200;
+ 
+-        $uniquetasksinqueue = array_map(
+-            ['\core\task\manager', 'adhoc_task_from_record'],
+-            $DB->get_records_sql(
+-                'SELECT classname FROM {task_adhoc} WHERE nextruntime < :timestart GROUP BY classname',
+-                ['timestart' => $timestart]
+-            )
++        $uniquetasksinqueue = [];
++        $records = $DB->get_records_sql(
++            'SELECT classname FROM {task_adhoc} WHERE nextruntime < :timestart GROUP BY classname',
++            ['timestart' => $timestart]
+         );
++        foreach ($records as $key => $record) {
++            // Safety check in case the task in the DB does not match a real class (maybe something was uninstalled).
++            try {
++                $uniquetasksinqueue[$key] = self::adhoc_task_from_record($record);
++            } catch (\moodle_exception $e) {
++                debugging("Failed to load task: $record->classname", DEBUG_DEVELOPER);
++            }
++        }
+ 
+         if (!isset(self::$numtasks) || self::$numtasks !== count($uniquetasksinqueue)) {
+             self::$numtasks = count($uniquetasksinqueue);
+diff --git a/public/lib/tests/task/adhoc_task_test.php b/public/lib/tests/task/adhoc_task_test.php
+index 11c0bffd5d0..74303027948 100644
+--- a/public/lib/tests/task/adhoc_task_test.php
++++ b/public/lib/tests/task/adhoc_task_test.php
+@@ -101,6 +101,41 @@ final class adhoc_task_test extends \advanced_testcase {
+         manager::adhoc_task_complete($task);
+     }
+ 
++    /**
++     * Test that orphaned adhoc tasks whose class no longer exists do not block other tasks.
++     *
++     * @covers \core\task\manager::get_next_adhoc_task
++     */
++    public function test_get_next_adhoc_task_missing_class(): void {
++        global $DB;
++
++        $this->resetAfterTest(true);
++
++        $clock = $this->mock_clock_with_frozen();
++
++        // Queue a task, and then make it orphaned by pointing it at a class that does not exist.
++        $orphan = new adhoc_test_task();
++        $orphan->set_next_run_time($clock->time() - 10);
++        $orphanid = manager::queue_adhoc_task($orphan);
++        $DB->set_field('task_adhoc', 'classname', '\\mod_removedplugin\\task\\missing_task', ['id' => $orphanid]);
++        $DB->set_field('task_adhoc', 'component', 'mod_removedplugin', ['id' => $orphanid]);
++
++        // Queue a valid task.
++        $valid = new adhoc_test2_task();
++        $valid->set_next_run_time($clock->time() - 5);
++        manager::queue_adhoc_task($valid);
++
++        // The valid task should be returned, without an exception being thrown for the orphan.
++        $task = manager::get_next_adhoc_task($clock->time());
++        $this->assertInstanceOf(adhoc_test2_task::class, $task);
++        $task->execute();
++        manager::adhoc_task_complete($task);
++
++        // Only the orphan remains, and it is skipped.
++        $this->assertNull(manager::get_next_adhoc_task($clock->time()));
++        $this->resetDebugging();
++    }
++
+     /**
+      * Test adhoc task failure retry backoff.
+      */

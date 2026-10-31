@@ -1,0 +1,45 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You CAN run Moodle's existing PHPUnit tests: `cd {WS} && vendor/bin/phpunit <path/to/some_test.php>` (the test environment is already initialised). You may also run `php -l <file>` and read code with grep/find/cat. Use absolute paths starting with {WS} in every command.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-88867: Add tool_mobile admin setting to show site logo in app header (showlogoinappheader)
+
+*Summary*
+Add a new Moodle LMS admin setting under _Mobile Premium features_ in the _tool_mobile_ plugin:
+
+* Setting name: _Show site logo in app header_
+* Config key: {{tool_mobile | showlogoinappheader}}
+* Type: checkbox
+* Description: Display the site logo in the app's home and dashboard header instead of the site name. Requires a site logo to be configured in _Site administration > Appearance_.
+
+*Background / context*
+The Moodle app already receives {{config.logourl}} and/or {{config.compactlogourl}} from the {{tool_mobile_get_public_config}} web service.
+When this setting is enabled, the app will use those values to display the site logo in the header on Site home and Dashboard pages.
+
+*Requirements*
+
+Add the setting showlogoinappheader to the tool_mobile plugin settings under the Mobile Premium features section.
+
+Default value: disabled.
+
+Ensure the value is exposed/available to the existing tool_mobile_get_config response (if that is how other Mobile Premium feature flags are provided).
+
+*Acceptance criteria*
+
+* A new checkbox setting _Show site logo in app header_ exists in Site administration under Mobile Premium features.
+* The setting is stored as {{tool_mobile/showlogoinappheader}}.
+* With the setting enabled, the public mobile config returned by {{tool_mobile_get_config}} includes the flag/value needed by the mobile app to decide to show the logo.
+
+*Testing notes*
+
+* Verify the setting appears and can be toggled.
+* Verify the web service response changes accordingly (with and without the setting enabled).
+
+*Related*
+
+* MOBILE-5070 (mobile app counterpart)

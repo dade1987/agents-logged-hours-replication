@@ -1,0 +1,34 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot run Moodle's test suite. You may run `php -l <file>` and read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-88428: run_failed_adhoc_tasks incorrectly filters out tasks where attemptsavailable is 0
+
+h2. Summary
+
+There is an inconsistency in how Moodle handles the manual execution of failed adhoc tasks. Running a failed task individually ignores the attempts available limit and executes the task, while running failed tasks in bulk enforces the limit and skips them. Depending on the state of the queue, this can look like the "Run all failed" button does not work as there are no messages explaining the behaviour.
+
+This contradicts the original design intent for non-retrying tasks, which explicitly stated administrators should still be able to re-run them for recovery operations.
+
+h2. Current Behaviour
+
+When an adhoc task fails enough times (or immediately, if it uses {{retry_until_success = false}}), its {{attemptsavailable}} value reaches 0 in the database. When an administrator tries to manually trigger these failed tasks, the system behaves in two conflicting ways.
+
+If the task is run individually via the web UI "Run" button or CLI using the specific ID, the system calls {{\core\cron::run_adhoc_task()}}. This method retrieves the task directly and does not check the {{attemptsavailable}} field, perfectly allowing the task to execute.
+
+However, if the tasks are run in bulk via the web UI "Run all failed" button or CLI {{--failed}} flag, the system calls {{\core\cron::run_failed_adhoc_tasks()}}. This method includes a hardcoded SQL filter requiring {{attemptsavailable}} to be greater than 0. As a result, any task that has exhausted its retry limit is silently skipped even when the queue clearly lists the failed tasks.
+
+h2. Proposed Solution
+
+The original tracker implementing the no-retry flag correctly noted:
+
+{quote}_We should still keep the ability to re-run these tasks from the UI and CLI... This will help with some recovery and debugging ops for failed tasks._{quote}
+
+The {{\core\cron::run_failed_adhoc_tasks()}} method is only ever triggered by explicit administrator action; it is never used by the standard background cron routine. Since the administrator is specifically requesting to run the failed tasks for recovery, the automated retry limit should not block them from doing so.
+
+To make the system consistent and restore the intended recovery behaviour, the SQL filter requiring {{attemptsavailable > 0}} should be removed from {{\core\cron::run_failed_adhoc_tasks()}}. This aligns the bulk run functionality with the single run functionality, allowing administrators to successfully bulk process all tasks currently sitting in the failed queue. The standard background cron remains completely unaffected, as it uses a different method that continues to safely enforce the limit.

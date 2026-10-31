@@ -1,0 +1,90 @@
+diff --git a/mysql-test/main/path_bugs.result b/mysql-test/main/path_bugs.result
+index fd89b07f..da858d91 100644
+--- a/mysql-test/main/path_bugs.result
++++ b/mysql-test/main/path_bugs.result
+@@ -14,4 +14,17 @@ c
+ drop database test1;
+ use test;
+ drop procedure p1;
++#
++# MDEV-40009 SIGSEGV in Sql_path::from_text
++#
++SET NAMES swe7;
++SET PATH '`';
++SELECT HEX(@@path);
++HEX(@@path)
++60C3A960
++SET PATH DEFAULT;
++SET NAMES utf8mb4;
++SET PATH '`';
++ERROR 42000: Variable 'PATH' can't be set to the value of '`'
++SET PATH DEFAULT;
+ # End of 12.3 tests
+diff --git a/mysql-test/main/path_bugs.test b/mysql-test/main/path_bugs.test
+index 2774c244..1ddd39ed 100644
+--- a/mysql-test/main/path_bugs.test
++++ b/mysql-test/main/path_bugs.test
+@@ -14,4 +14,16 @@ drop database test1;
+ use test;
+ drop procedure p1;
+ 
++--echo #
++--echo # MDEV-40009 SIGSEGV in Sql_path::from_text
++--echo #
++SET NAMES swe7;
++SET PATH '`';
++SELECT HEX(@@path);
++SET PATH DEFAULT;
++SET NAMES utf8mb4;
++--error ER_WRONG_VALUE_FOR_VAR
++SET PATH '`';
++SET PATH DEFAULT;
++
+ --echo # End of 12.3 tests
+diff --git a/sql/sql_path.cc b/sql/sql_path.cc
+index 982fbffa..80785650 100644
+--- a/sql/sql_path.cc
++++ b/sql/sql_path.cc
+@@ -283,6 +283,8 @@ bool Sql_path::from_text(const system_variables &sv, String *str)
+   while (curr < end)
+   {
+     auto len = cs->charlen(curr, end);
++    if (len <= 0) // Bad or incomplete byte sequence
++      goto err_bad_val;
+ 
+     switch (state)
+     {
+diff --git a/sql/sys_vars.inl b/sql/sys_vars.inl
+index 0f8aa1eb..0251e629 100644
+--- a/sql/sys_vars.inl
++++ b/sql/sys_vars.inl
+@@ -3099,9 +3099,28 @@ class Sys_var_path: public sys_var
+ 
+   static bool from_item(THD *thd, Sql_path *path, Item *item)
+   {
++    /*
++      Sql_path::from_text() parses the value as utf8mb3 (the identifier
++      character set). Convert the value to utf8mb3 if needed. Note that
++      val_str_ascii() is not sufficient here, as for a non-ASCII-compatible
++      character set (e.g. swe7) it converts to latin1, which would then be
++      misinterpreted as utf8mb3 (MDEV-40009).
++    */
++    CHARSET_INFO *cs= &my_charset_utf8mb3_general_ci;
++    StringBuffer<STRING_BUFFER_USUAL_SIZE> tmp;
+     String *value, buffer;
+-    if (!(value= item->val_str_ascii(&buffer)))
++    if (!(value= item->val_str(&tmp)))
+       return true;
++    uint32 unused;
++    if (String::needs_conversion(value->length(), value->charset(),
++                                 cs, &unused))
++    {
++      uint errors;
++      if (buffer.copy(value->ptr(), value->length(), value->charset(),
++                      cs, &errors))
++        return true;
++      value= &buffer;
++    }
+     return path->from_text(thd->variables, value);
+   }
+ 

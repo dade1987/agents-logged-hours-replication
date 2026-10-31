@@ -1,0 +1,140 @@
+diff --git a/mysql-test/main/gis_stack_noasan.result b/mysql-test/main/gis_stack_noasan.result
+new file mode 100644
+index 00000000..c77d0c2d
+--- /dev/null
++++ b/mysql-test/main/gis_stack_noasan.result
+@@ -0,0 +1,12 @@
++#
++# MDEV-40540 ST_GeomFromWKB stack overrun on deeply nested GeometryCollection
++#
++set @a=concat(0x0107000000, repeat(0x010000000107000000, 120000), 0x00000000);
++SELECT ST_GeomFromWKB(@a);
++ERROR HY000: Thread stack overrun:  'used bytes' used of a 'available' byte stack, and 'X' bytes needed. Consider increasing the thread_stack system variable.
++set @b=concat(0x00000000, @a);
++SELECT ST_AsText(@b);
++ERROR HY000: Thread stack overrun:  'used bytes' used of a 'available' byte stack, and 'X' bytes needed. Consider increasing the thread_stack system variable.
++SELECT ST_Area(@b);
++ERROR HY000: Thread stack overrun:  'used bytes' used of a 'available' byte stack, and 'X' bytes needed. Consider increasing the thread_stack system variable.
++# End of 10.6 tests
+diff --git a/mysql-test/main/gis_stack_noasan.test b/mysql-test/main/gis_stack_noasan.test
+new file mode 100644
+index 00000000..ba413fcb
+--- /dev/null
++++ b/mysql-test/main/gis_stack_noasan.test
+@@ -0,0 +1,22 @@
++--source include/have_geometry.inc
++--source include/not_asan.inc
++--source include/not_msan.inc
++--source include/not_ubsan.inc
++
++--echo #
++--echo # MDEV-40540 ST_GeomFromWKB stack overrun on deeply nested GeometryCollection
++--echo #
++set @a=concat(0x0107000000, repeat(0x010000000107000000, 120000), 0x00000000);
++--replace_regex /overrun:  [0-9]* bytes used of a [0-9]* byte stack, and [0-9]* bytes needed/overrun:  'used bytes' used of a 'available' byte stack, and 'X' bytes needed/
++--error ER_STACK_OVERRUN_NEED_MORE
++SELECT ST_GeomFromWKB(@a);
++
++set @b=concat(0x00000000, @a);
++--replace_regex /overrun:  [0-9]* bytes used of a [0-9]* byte stack, and [0-9]* bytes needed/overrun:  'used bytes' used of a 'available' byte stack, and 'X' bytes needed/
++--error ER_STACK_OVERRUN_NEED_MORE
++SELECT ST_AsText(@b);
++--replace_regex /overrun:  [0-9]* bytes used of a [0-9]* byte stack, and [0-9]* bytes needed/overrun:  'used bytes' used of a 'available' byte stack, and 'X' bytes needed/
++--error ER_STACK_OVERRUN_NEED_MORE
++SELECT ST_Area(@b);
++
++--echo # End of 10.6 tests
+diff --git a/sql/spatial.cc b/sql/spatial.cc
+index 20b8a551..d8ddcf9e 100644
+--- a/sql/spatial.cc
++++ b/sql/spatial.cc
+@@ -3270,6 +3270,9 @@ uint32 Gis_geometry_collection::get_data_size() const
+   Geometry_buffer buffer;
+   Geometry *geom;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, (uchar*)&buffer))
++    return GET_SIZE_ERROR;
++
+   if (no_data(data, 4))
+     return GET_SIZE_ERROR;
+   n_objects= uint4korr(data);
+@@ -3402,6 +3405,9 @@ uint Gis_geometry_collection::init_from_wkb(const char *wkb, uint len,
+   uint32 n_geom;
+   const char *wkb_orig= wkb;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, (uchar*)&n_geom))
++    return 0;
++
+   if (len < 4)
+     return 0;
+   n_geom= wkb_get_uint(wkb, bo);
+@@ -3487,6 +3493,9 @@ bool Gis_geometry_collection::get_data_as_wkt(String *txt,
+   Geometry *geom;
+   const char *data= m_data;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, (uchar*)&buffer))
++    return 1;
++
+   if (no_data(data, 4))
+     return 1;
+   n_objects= uint4korr(data);
+@@ -3531,6 +3540,9 @@ bool Gis_geometry_collection::get_data_as_json(String *txt, uint max_dec_digits,
+   Geometry *geom;
+   const char *data= m_data;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, (uchar*)&buffer))
++    return 1;
++
+   if (no_data(data, 4) || txt->reserve(1, 512))
+     return 1;
+   n_objects= uint4korr(data);
+@@ -3570,6 +3582,9 @@ bool Gis_geometry_collection::get_mbr(MBR *mbr, const char **end) const
+   Geometry_buffer buffer;
+   Geometry *geom;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, (uchar*)&buffer))
++    return 1;
++
+   if (no_data(data, 4))
+     return 1;
+   n_objects= uint4korr(data);
+@@ -3606,6 +3621,9 @@ int Gis_geometry_collection::area(double *ar,  const char **end) const
+   Geometry *geom;
+   double result;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, (uchar*)&buffer))
++    return 1;
++
+   if (no_data(data, 4))
+     return 1;
+   n_objects= uint4korr(data);
+@@ -3646,6 +3664,9 @@ int Gis_geometry_collection::geom_length(double *len, const char **end) const
+   Geometry *geom;
+   double result;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, (uchar*)&buffer))
++    return 1;
++
+   if (no_data(data, 4))
+     return 1;
+   n_objects= uint4korr(data);
+@@ -3747,6 +3768,9 @@ bool Gis_geometry_collection::dimension(uint32 *res_dim, const char **end) const
+   Geometry_buffer buffer;
+   Geometry *geom;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, (uchar*)&buffer))
++    return 1;
++
+   if (no_data(data, 4))
+     return 1;
+   n_objects= uint4korr(data);
+@@ -3787,6 +3811,9 @@ int Gis_geometry_collection::store_shapes(Gcalc_shape_transporter *trn) const
+   Geometry_buffer buffer;
+   Geometry *geom;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, (uchar*)&buffer))
++    return 1;
++
+   if (no_data(data, 4))
+     return 1;
+   n_objects= uint4korr(data);

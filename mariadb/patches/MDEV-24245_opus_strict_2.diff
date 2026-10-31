@@ -1,0 +1,108 @@
+diff --git a/mysql-test/suite/archive/repair.result b/mysql-test/suite/archive/repair.result
+index 9b17fdc7..2123416d 100644
+--- a/mysql-test/suite/archive/repair.result
++++ b/mysql-test/suite/archive/repair.result
+@@ -9,3 +9,37 @@ repair table t1;
+ Table	Op	Msg_type	Msg_text
+ test.t1	repair	error	Corrupt
+ drop table t1;
++#
++# MDEV-24245 REPAIR on ARCHIVE Database destroys TEXT Data
++#
++create table t1 (a int, t text, b blob) engine=archive;
++insert into t1 values (1, 'Testtext', 'blobdata'), (2, NULL, repeat('x', 1000)),
++(3, repeat('y', 60000), NULL);
++select a, t, b from t1 where a = 1;
++a	t	b
++1	Testtext	blobdata
++select a, length(t), md5(t), length(b), md5(b) from t1;
++a	length(t)	md5(t)	length(b)	md5(b)
++1	8	353b547363efaa5dfc474a9633a6ea47	8	a75fb09628f475fef180af802753bec3
++2	NULL	NULL	1000	398533d48111e9f664b1f64cb10c4b63
++3	60000	1dd9cf632a9b2454fb36229e2d0c861e	NULL	NULL
++repair table t1;
++Table	Op	Msg_type	Msg_text
++test.t1	repair	status	OK
++select a, t, b from t1 where a = 1;
++a	t	b
++1	Testtext	blobdata
++select a, length(t), md5(t), length(b), md5(b) from t1;
++a	length(t)	md5(t)	length(b)	md5(b)
++1	8	353b547363efaa5dfc474a9633a6ea47	8	a75fb09628f475fef180af802753bec3
++2	NULL	NULL	1000	398533d48111e9f664b1f64cb10c4b63
++3	60000	1dd9cf632a9b2454fb36229e2d0c861e	NULL	NULL
++optimize table t1;
++Table	Op	Msg_type	Msg_text
++test.t1	optimize	status	OK
++select a, length(t), md5(t), length(b), md5(b) from t1;
++a	length(t)	md5(t)	length(b)	md5(b)
++1	8	353b547363efaa5dfc474a9633a6ea47	8	a75fb09628f475fef180af802753bec3
++2	NULL	NULL	1000	398533d48111e9f664b1f64cb10c4b63
++3	60000	1dd9cf632a9b2454fb36229e2d0c861e	NULL	NULL
++drop table t1;
+diff --git a/mysql-test/suite/archive/repair.test b/mysql-test/suite/archive/repair.test
+index 48ec6b70..9da64776 100644
+--- a/mysql-test/suite/archive/repair.test
++++ b/mysql-test/suite/archive/repair.test
+@@ -17,3 +17,19 @@ select * from t1;
+ insert into t1 values (2);
+ repair table t1;
+ drop table t1;
++
++--echo #
++--echo # MDEV-24245 REPAIR on ARCHIVE Database destroys TEXT Data
++--echo #
++
++create table t1 (a int, t text, b blob) engine=archive;
++insert into t1 values (1, 'Testtext', 'blobdata'), (2, NULL, repeat('x', 1000)),
++                      (3, repeat('y', 60000), NULL);
++select a, t, b from t1 where a = 1;
++select a, length(t), md5(t), length(b), md5(b) from t1;
++repair table t1;
++select a, t, b from t1 where a = 1;
++select a, length(t), md5(t), length(b), md5(b) from t1;
++optimize table t1;
++select a, length(t), md5(t), length(b), md5(b) from t1;
++drop table t1;
+diff --git a/storage/archive/ha_archive.cc b/storage/archive/ha_archive.cc
+index 2d623507..9ed2ee04 100644
+--- a/storage/archive/ha_archive.cc
++++ b/storage/archive/ha_archive.cc
+@@ -1578,9 +1578,29 @@ int ha_archive::optimize(THD* thd, HA_CHECK_OPT* check_opt)
+       share->archive_write.auto_increment= 0;
+       MY_BITMAP *org_bitmap= tmp_use_all_columns(table, &table->read_set);
+ 
++      /*
++        get_row() unpacks the row into record_buffer, and blob fields
++        in table->record[0] keep pointing into that buffer. pack_row()
++        (called from real_write_row()) writes into record_buffer as well,
++        which would overwrite (or reallocate) the blob data while it is
++        being copied. Use a separate buffer for packing the rows.
++      */
++      archive_record_buffer *read_buffer= record_buffer;
++      archive_record_buffer *write_buffer=
++        create_record_buffer(record_buffer->length);
++      if (!write_buffer)
++      {
++        tmp_restore_column_map(&table->read_set, org_bitmap);
++        rc= HA_ERR_OUT_OF_MEM;
++        goto error;
++      }
++
+       while (!(rc= get_row(&archive, table->record[0])))
+       {
++        record_buffer= write_buffer;
+         real_write_row(table->record[0], &writer);
++        write_buffer= record_buffer;
++        record_buffer= read_buffer;
+         /*
+           Long term it should be possible to optimize this so that
+           it is not called on each row.
+@@ -1597,6 +1617,7 @@ int ha_archive::optimize(THD* thd, HA_CHECK_OPT* check_opt)
+         }
+       }
+ 
++      destroy_record_buffer(write_buffer);
+       tmp_restore_column_map(&table->read_set, org_bitmap);
+       share->rows_recorded= (ha_rows)writer.rows;
+     }

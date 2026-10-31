@@ -1,0 +1,211 @@
+diff --git a/.upgradenotes/MDL-89528-2026102400000000.yml b/.upgradenotes/MDL-89528-2026102400000000.yml
+new file mode 100644
+index 00000000000..e133f30277e
+--- /dev/null
++++ b/.upgradenotes/MDL-89528-2026102400000000.yml
+@@ -0,0 +1,11 @@
++issueNumber: MDL-89528
++notes:
++  core:
++    - message: >-
++        The Dependency Injection container now supports attribute-based
++        injection using the `#[\DI\Attribute\Inject]` attribute on properties
++        and methods. This also allows dependencies to be injected on to an
++        existing instance using `\core\di::get_container()->injectOn($this)`,
++        which is useful when migrating legacy classes and in routed
++        controllers.
++      type: improved
+diff --git a/public/lib/classes/di.php b/public/lib/classes/di.php
+index 46dd11354eb..7fb8fd1345e 100644
+--- a/public/lib/classes/di.php
++++ b/public/lib/classes/di.php
+@@ -89,10 +89,22 @@ class di {
+         // Configure the Container builder.
+         $builder = new \DI\ContainerBuilder();
+ 
+-        // At the moment we are using autowiring, but not automatic attribute injection.
+-        // Automatic attribute injection is a php-di specific feature.
++        // Enable autowiring of constructor arguments.
+         $builder->useAutowiring(true);
+ 
++        // Enable attribute-based injection (e.g. #[\DI\Attribute\Inject]) for properties and methods.
++        // Note: Attribute injection is a PHP-DI specific feature and is not a part of the PSR-11 standard.
++        // It is enabled to support injection into controllers, and the migration of legacy classes via
++        // the `injectOn()` method, for example:
++        //
++        //     #[\DI\Attribute\Inject]
++        //     private \moodle_database $db;
++        //
++        //     public function __construct() {
++        //         \core\di::get_container()->injectOn($this);
++        //     }
++        $builder->useAttributes(true);
++
+         if (!$CFG->debugdeveloper) {
+             // Enable compilation of the container and write proxies to disk in production.
+             // See https://php-di.org/doc/performances.html for information.
+diff --git a/public/lib/tests/di_test.php b/public/lib/tests/di_test.php
+index b99707f5aeb..4fba0f9b647 100644
+--- a/public/lib/tests/di_test.php
++++ b/public/lib/tests/di_test.php
+@@ -159,4 +159,47 @@ final class di_test extends \advanced_testcase {
+             $stringmanager,
+         );
+     }
++
++    /**
++     * Test that properties and methods marked with the Inject attribute are injected when fetched from the container.
++     */
++    public function test_attribute_injection(): void {
++        global $CFG, $DB;
++
++        require_once($CFG->libdir . '/tests/fixtures/di/attribute_injection.php');
++
++        $instance = di::get(\core\fixtures\di\attribute_injection::class);
++        $this->assertInstanceOf(\core\fixtures\di\attribute_injection::class, $instance);
++
++        // Property injection.
++        $this->assertSame($DB, $instance->get_db());
++        $this->assertInstanceOf(clock::class, $instance->get_clock());
++
++        // Method injection.
++        $this->assertSame(get_string_manager(), $instance->get_string_manager());
++    }
++
++    /**
++     * Test that dependencies can be injected on to an existing instance using injectOn.
++     */
++    public function test_attribute_injection_on_instance(): void {
++        global $CFG, $DB;
++
++        require_once($CFG->libdir . '/tests/fixtures/di/attribute_injection.php');
++
++        // The constructor calls injectOn with the container.
++        $instance = new \core\fixtures\di\attribute_injection_on_instance();
++        $this->assertSame($DB, $instance->get_db());
++
++        // Injection also works when explicitly called on an instance.
++        $instance = (new \ReflectionClass(\core\fixtures\di\attribute_injection::class))
++            ->newInstanceWithoutConstructor();
++        $this->assertNull($instance->get_db());
++
++        /** @var \DI\Container $container */
++        $container = di::get_container();
++        $container->injectOn($instance);
++        $this->assertSame($DB, $instance->get_db());
++        $this->assertSame(get_string_manager(), $instance->get_string_manager());
++    }
+ }
+diff --git a/public/lib/tests/fixtures/di/attribute_injection.php b/public/lib/tests/fixtures/di/attribute_injection.php
+new file mode 100644
+index 00000000000..cea37bfcfec
+--- /dev/null
++++ b/public/lib/tests/fixtures/di/attribute_injection.php
+@@ -0,0 +1,107 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\fixtures\di;
++
++use DI\Attribute\Inject;
++
++/**
++ * Fixture classes for testing attribute-based dependency injection.
++ *
++ * @package   core
++ * @copyright 2025 Andrew Lyons <andrew@nicols.co.uk>
++ * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class attribute_injection {
++    /** @var \moodle_database The database, injected via attribute */
++    #[Inject]
++    private \moodle_database $db;
++
++    /** @var \core\clock The clock, injected via attribute */
++    #[Inject]
++    private \core\clock $clock;
++
++    /** @var \core_string_manager|null The string manager, injected via a method attribute */
++    private ?\core_string_manager $stringmanager = null;
++
++    /**
++     * Setter injection via attribute.
++     *
++     * @param \core_string_manager $stringmanager
++     */
++    #[Inject]
++    public function set_string_manager(\core_string_manager $stringmanager): void {
++        $this->stringmanager = $stringmanager;
++    }
++
++    /**
++     * Get the injected database.
++     *
++     * @return \moodle_database|null
++     */
++    public function get_db(): ?\moodle_database {
++        return $this->db ?? null;
++    }
++
++    /**
++     * Get the injected clock.
++     *
++     * @return \core\clock|null
++     */
++    public function get_clock(): ?\core\clock {
++        return $this->clock ?? null;
++    }
++
++    /**
++     * Get the injected string manager.
++     *
++     * @return \core_string_manager|null
++     */
++    public function get_string_manager(): ?\core_string_manager {
++        return $this->stringmanager;
++    }
++}
++
++/**
++ * Fixture class which injects dependencies on itself from the constructor.
++ *
++ * @package   core
++ * @copyright 2025 Andrew Lyons <andrew@nicols.co.uk>
++ * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class attribute_injection_on_instance {
++    /** @var \moodle_database The database, injected via attribute */
++    #[Inject]
++    private \moodle_database $db;
++
++    /**
++     * Constructor which uses injectOn to inject dependencies on an existing instance.
++     */
++    public function __construct() {
++        /** @var \DI\Container $container */
++        $container = \core\di::get_container();
++        $container->injectOn($this);
++    }
++
++    /**
++     * Get the injected database.
++     *
++     * @return \moodle_database|null
++     */
++    public function get_db(): ?\moodle_database {
++        return $this->db ?? null;
++    }
++}

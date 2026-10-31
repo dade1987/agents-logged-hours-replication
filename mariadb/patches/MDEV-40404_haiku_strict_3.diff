@@ -1,0 +1,66 @@
+diff --git a/storage/innobase/row/row0sel.cc b/storage/innobase/row/row0sel.cc
+index f56810e9..8eb73e95 100644
+--- a/storage/innobase/row/row0sel.cc
++++ b/storage/innobase/row/row0sel.cc
+@@ -1209,6 +1209,11 @@ sel_set_rtr_rec_lock(
+ 		mtr->commit();
+ 		trx->error_state = err;
+ 		thr->lock_state = QUE_THR_LOCK_ROW;
++		/* Release the latch of the in-memory match block before
++		waiting for the lock. rtr_cur_search_with_match() below
++		re-initializes that block, which requires it to be unlatched. */
++		match->block->page.lock.x_unlock();
++
+ 		if (row_mysql_handle_errors(&err, trx, thr, 0)) {
+ 			thr->lock_state = QUE_THR_LOCK_NOLOCK;
+ 			mtr->start();
+@@ -1217,7 +1222,7 @@ sel_set_rtr_rec_lock(
+ 			if (!match->valid && match->matched_recs->empty()) {
+ 				mysql_mutex_unlock(&match->rtr_match_mutex);
+ 				err = DB_RECORD_NOT_FOUND;
+-				goto func_end;
++				goto func_end_unlocked;
+ 			}
+ 			mysql_mutex_unlock(&match->rtr_match_mutex);
+ 
+@@ -1228,12 +1233,12 @@ sel_set_rtr_rec_lock(
+ 				btr_pcur_get_block(pcur)->zip_size(),
+ 				RW_X_LATCH, NULL, BUF_GET, mtr, &err);
+ 			if (!cur_block) {
+-				goto func_end;
++				goto func_end_unlocked;
+ 			}
+ 			buf_page_make_young_if_needed(&cur_block->page);
+ 		} else {
+ 			mtr->start();
+-			goto func_end;
++			goto func_end_unlocked;
+ 		}
+ 
+ 		DEBUG_SYNC_C("rtr_set_lock_wait");
+@@ -1243,7 +1248,7 @@ sel_set_rtr_rec_lock(
+ 			mtr->commit();
+ 			mtr->start();
+ 			err = DB_RECORD_NOT_FOUND;
+-			goto func_end;
++			goto func_end_unlocked;
+ 		}
+ 
+ 		match->matched_recs->clear();
+@@ -1256,6 +1261,8 @@ sel_set_rtr_rec_lock(
+ 			&pcur->btr_cur.page_cur,
+ 			pcur->btr_cur.rtr_info);
+ 
++		match->block->page.lock.x_lock();
++
+ 		if (!page_is_leaf(buf_block_get_frame(cur_block))) {
+ 			/* Page got splitted and promoted (only for
+ 			root page it is possible).  Release the
+@@ -1313,6 +1320,7 @@ sel_set_rtr_rec_lock(
+ 
+ func_end:
+ 	match->block->page.lock.x_unlock();
++func_end_unlocked:
+ 	if (heap != NULL) {
+ 		mem_heap_free(heap);
+ 	}

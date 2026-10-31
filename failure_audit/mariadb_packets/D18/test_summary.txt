@@ -1,0 +1,124 @@
+Evaluation: the agent's diff (without its own mysql-test changes) was applied on the parent commit, the developers' mysql-test files from the fix were added, the server was built (debug) and the fix's mtr tests were run: ['compat/oracle.sp-package-security']
+On the parent commit these tests FAIL; with the human fix they PASS.
+
+AGENT RESULT: FAIL
+compat/oracle.sp-package-security        w4 [ fail ]
+        Test ended at 2026-10-29 00:46:32
+
+CURRENT_TEST: compat/oracle.sp-package-security
+mysqltest: At line 184: query 'DROP PACKAGE pkg2' failed: <Unknown> (2013): Lost connection to server during query
+
+The result from queries just before the failure was:
+< snip >
+#
+# Now u1 can also CREATE, DROP its own package specifications
+#
+CREATE PACKAGE pkg2 AS
+PROCEDURE p1;
+FUNCTION f1 RETURN TEXT;
+END;
+$$
+SHOW CREATE PACKAGE pkg2;
+Package	sql_mode	Create Package	character_set_client	collation_connection	Database Collation
+pkg2	PIPES_AS_CONCAT,ANSI_QUOTES,IGNORE_SPACE,ORACLE,NO_KEY_OPTIONS,NO_TABLE_OPTIONS,NO_FIELD_OPTIONS,NO_AUTO_CREATE_USER,SIMULTANEOUS_ASSIGNMENT	CREATE DEFINER="u1"@"localhost" PACKAGE "pkg2" AS
+PROCEDURE p1;
+FUNCTION f1 RETURN TEXT;
+END	latin1	latin1_swedish_ci	latin1_swedish_ci
+SHOW GRANTS;
+Grants for u1@localhost
+GRANT USAGE ON *.* TO "u1"@"localhost"
+GRANT SELECT, CREATE ROUTINE ON "db1".* TO "u1"@"localhost"
+GRANT EXECUTE, ALTER ROUTINE ON PACKAGE "db1"."pkg2" TO "u1"@"localhost"
+DROP PACKAGE pkg2;
+
+More results from queries before failure can be found in /home/mtr/var/t/4/log/sp-package-security.log
+
+
+Server [mysqld.1 - pid: 5313, winpid: 5313, exit: 256] failed during test run
+Server log from this test:
+----------SERVER LOG START-----------
+$ /home/user/mdb_build_dbg/sql/mariadbd --defaults-group-suffix=.1 --defaults-file=/home/mtr/var/t/4/my.cnf --log-output=file --core-file --loose-debug-sync-timeout=300
+2026-10-29  0:46:28 0 [Warning] Could not increase number of max_open_files to more than 1024 (request: 32186)
+2026-10-29  0:46:28 0 [Warning] Changed limits: max_open_files: 1024  max_connections: 151 (was 151)  table_cache: 421 (was 2000)
+2026-10-29  0:46:28 0 [Note] Starting MariaDB 10.6.28-MariaDB-debug-log source revision 3064caf84c692152d3b3a402c011d5772d64c2ff server_uid zuyo88trYl5F5y0WPhf4gXJsbDA= as process 5314
+2026-10-29  0:46:28 0 [Note] Plugin 'partition' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'SEQUENCE' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'InnoDB' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'INNODB_FT_CONFIG' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'INNODB_SYS_TABLESTATS' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'INNODB_CMP_PER_INDEX' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'INNODB_FT_DELETED' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'INNODB_CMP' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'THREAD_POOL_WAITS' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'INNODB_CMP_RESET' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'THREAD_POOL_QUEUES' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'INNODB_SYS_FIELDS' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'INNODB_BUFFER_PAGE_LRU' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'FEEDBACK' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'INNODB_FT_INDEX_TABLE' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'INNODB_CMPMEM' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'THREAD_POOL_GROUPS' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'INNODB_CMP_PER_INDEX_RESET' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'INNODB_SYS_FOREIGN_COLS' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'INNODB_FT_INDEX_CACHE' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'INNODB_BUFFER_POOL_STATS' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'INNODB_FT_BEING_DELETED' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'INNODB_SYS_FOREIGN' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'INNODB_CMPMEM_RESET' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'INNODB_FT_DEFAULT_STOPWORD' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'INNODB_SYS_TABLES' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'INNODB_SYS_COLUMNS' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'INNODB_SYS_TABLESPACES' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'INNODB_SYS_INDEXES' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'INNODB_SYS_VIRTUAL' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'user_variables' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'INNODB_TABLESPACES_ENCRYPTION' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'THREAD_POOL_STATS' is disabled.
+2026-10-29  0:46:28 0 [Note] Plugin 'unix_socket' is disabled.
+2026-10-29  0:46:28 0 [Warning] /home/user/mdb_build_dbg/sql/mariadbd: unknown option '--loose-pam-debug'
+2026-10-29  0:46:28 0 [Warning] /home/user/mdb_build_dbg/sql/mariadbd: unknown option '--loose-aria'
+2026-10-29  0:46:28 0 [Note] Server socket created on IP: '127.0.0.1'.
+2026-10-29  0:46:28 0 [Note] /home/user/mdb_build_dbg/sql/mariadbd: ready for connections.
+Version: '10.6.28-MariaDB-debug-log'  socket: '/home/mtr/var/t/tmp/4/mysqld.1.sock'  port: 19060  Source distribution
+mariadbd: /home/user/mdb_src/sql/sql_base.cc:5660: bool lock_tables(THD*, TABLE_LIST*, uint, uint): Assertion `thd->lock == 0' failed.
+261029  0:46:28 [ERROR] /home/user/mdb_build_dbg/sql/mariadbd got signal 6 ;
+Sorry, we probably made a mistake, and this is a bug.
+
+Your assistance in bug reporting will enable us to fix this for the next release.
+To report this bug, see https://mariadb.com/kb/en/reporting-bugs about how to report
+a bug on https://jira.mariadb.org/.
+
+Please include the information from the server start above, to the end of the
+information below.
+
+Server version: 10.6.28-MariaDB-debug-log source revision: 3064caf84c692152d3b3a402c011d5772d64c2ff
+
+The information page at https://mariadb.com/kb/en/how-to-produce-a-full-stack-trace-for-mariadbd/
+contains instructions to obtain a better version of the backtrace below.
+Following these instructions will help MariaDB developers provide a fix quicker.
+
+Attempting backtrace. Include this in the bug report.
+(note: Retrieving this information may fail)
+
+Thread pointer: 0x7f56f8000dc8
+stack_bottom = 0x7f571c325000 thread_stack 0x49000
+mysys/stacktrace.c:215(my_print_stacktrace)[0x559da4992ceb]
+sql/signal_handler.cc:230(handle_fatal_signal)[0x559da3fedefb]
+libc_sigaction.c:0(__restore_rt)[0x7f5721045330]
+nptl/pthread_kill.c:44(__pthread_kill_implementation)[0x7f572109ec0c]
+posix/raise.c:27(__GI_raise)[0x7f572104527e]
+stdlib/abort.c:81(__GI_abort)[0x7f57210288ff]
+intl/loadmsgcat.c:1177(_nl_load_domain)[0x7f572102881b]
+/lib/x86_64-linux-gnu/libc.so.6(+0x3b517)[0x7f572103b517]
+sql/sql_base.cc:5662(lock_tables(THD*, TABLE_LIST*, unsigned int, unsigned int))[0x559da3b6b45a]
+sql/sql_acl.cc:2062(Grant_tables::open_and_lock(THD*, int, thr_lock_type))[0x559da3b5c599]
+sql/sql_acl.cc:11794(sp_revoke_privileges(THD*, char const*, char const*, Sp_handler const*))[0x559da3b499f2]
+sql/sql_parse.cc:6789(drop_routine(THD*, LEX*))[0x559da3c22dca]
+sql/sql_parse.cc:5909(mysql_execute_command(THD*, bool))[0x559da3c1fefa]
+sql/sql_parse.cc:8211(mysql_parse(THD*, char*, unsigned int, Parser_state*))[0x559da3c262a5]
+sql/sql_parse.cc:1913(dispatch_command(enum_server_command, THD*, char*, unsigned int, bool))[0x559da3c145e1]
+sql/sql_parse.cc:1421(do_command(THD*, bool))[0x559da3c133e4]
+sql/sql_connect.cc:1393(do_handle_one_connection(CONNECT*, bool))[0x559da3df1e58]
+sql/sql_connect.cc:1307(handle_one_connection)[0x559da3df1be4]
+perfschema/pfs.cc:2203(pfs_spawn_thread)[0x559da436a9d8]
+nptl/pthread_create.c:447(start_thread)[0x7f572109cb84]

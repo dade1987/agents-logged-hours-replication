@@ -1,0 +1,59 @@
+diff --git a/mysql-test/suite/innodb_fts/r/misc.result b/mysql-test/suite/innodb_fts/r/misc.result
+index 4afd9bf1..d8bfabf7 100644
+--- a/mysql-test/suite/innodb_fts/r/misc.result
++++ b/mysql-test/suite/innodb_fts/r/misc.result
+@@ -1876,3 +1876,17 @@ id	a
+ 1	know database
+ 2	good database
+ DROP TABLE t1;
++#
++# MDEV-40985 row_end access out of bounds in ALTER TABLE
++#
++CREATE TABLE t1 (c1 TEXT,v1 INT AS(1),v2 INT AS(1),v3 INT AS(1),
++v4 INT AS(1),v5 INT AS(1),FULLTEXT(c1)) ENGINE=InnoDB WITH SYSTEM VERSIONING;
++INSERT INTO t1 (c1) VALUES ('mariadb database'),('innodb engine');
++ALTER TABLE t1 FORCE;
++SELECT c1 FROM t1 WHERE MATCH(c1) AGAINST('database');
++c1
++mariadb database
++CHECK TABLE t1;
++Table	Op	Msg_type	Msg_text
++test.t1	check	status	OK
++DROP TABLE t1;
+diff --git a/mysql-test/suite/innodb_fts/t/misc.test b/mysql-test/suite/innodb_fts/t/misc.test
+index f3c10d16..478ccaaf 100644
+--- a/mysql-test/suite/innodb_fts/t/misc.test
++++ b/mysql-test/suite/innodb_fts/t/misc.test
+@@ -1511,3 +1511,14 @@ SELECT * FROM t1 WHERE MATCH (a) AGAINST ('good *' IN NATURAL LANGUAGE MODE WITH
+ SELECT * FROM t1 WHERE MATCH (a) AGAINST ('g* database' IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION);
+ 
+ DROP TABLE t1;
++
++--echo #
++--echo # MDEV-40985 row_end access out of bounds in ALTER TABLE
++--echo #
++CREATE TABLE t1 (c1 TEXT,v1 INT AS(1),v2 INT AS(1),v3 INT AS(1),
++v4 INT AS(1),v5 INT AS(1),FULLTEXT(c1)) ENGINE=InnoDB WITH SYSTEM VERSIONING;
++INSERT INTO t1 (c1) VALUES ('mariadb database'),('innodb engine');
++ALTER TABLE t1 FORCE;
++SELECT c1 FROM t1 WHERE MATCH(c1) AGAINST('database');
++CHECK TABLE t1;
++DROP TABLE t1;
+diff --git a/storage/innobase/handler/handler0alter.cc b/storage/innobase/handler/handler0alter.cc
+index 99413f79..eb9bdc2a 100644
+--- a/storage/innobase/handler/handler0alter.cc
++++ b/storage/innobase/handler/handler0alter.cc
+@@ -4322,8 +4322,11 @@ ha_innobase_inplace_ctx::create_key_defs(
+ 		index->fields[0].descending = false;
+ 		index->fields[0].is_v_col = false;
+ 		if (nfields == 2) {
+-			index->fields[1].col_no
+-				= altered_table->s->vers.end_fieldno;
++			/* Convert the MySQL field number to an
++			InnoDB column number, skipping any virtual
++			columns that precede row_end. */
++			index->fields[1].col_no = innodb_col_no(
++				altered_table->vers_end_field());
+ 			index->fields[1].prefix_len = 0;
+ 			index->fields[1].descending = false;
+ 			index->fields[1].is_v_col = false;

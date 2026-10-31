@@ -1,0 +1,151 @@
+diff --git a/public/lib/classes/router/middleware/cors_middleware.php b/public/lib/classes/router/middleware/cors_middleware.php
+index b612fc12903..947d8cce433 100644
+--- a/public/lib/classes/router/middleware/cors_middleware.php
++++ b/public/lib/classes/router/middleware/cors_middleware.php
+@@ -25,6 +25,14 @@ use Slim\Routing\RouteContext;
+ /**
+  * Middleware to add CORS headers to the response.
+  *
++ * This middleware is only attached to the REST API and OAuth2 route groups, so the CORS headers
++ * are added to every response regardless of the request method or the Accept header.
++ *
++ * Browsers typically send an Accept header of "*\/*" for fetch() requests, so the presence (or
++ * absence) of "application/json" in the Accept header must not be used to decide whether the
++ * CORS headers are sent. If they were omitted, the browser would block the response even though
++ * Moodle had already processed the request.
++ *
+  * @package    core
+  * @copyright  2024 Andrew Lyons <andrew@nicols.co.uk>
+  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+@@ -32,29 +40,23 @@ use Slim\Routing\RouteContext;
+ class cors_middleware implements MiddlewareInterface {
+     #[\Override]
+     public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface {
+-        $acceptheader = $request->getHeaderLine('Accept');
+-        $accepted = array_map(
+-            fn (string $mimetype): string => trim(strtok($mimetype, ';')),
+-            explode(',', $acceptheader),
+-        );
+-
+         $response = $handler->handle($request);
+ 
+-        $cors = in_array('application/json', $accepted);
+-        $cors = $cors || $request->getMethod() === 'OPTIONS';
+-        $cors = $cors || $request->getMethod() === 'HEAD';
+-
+-        if (!$cors) {
+-            return $response;
+-        }
+-
+         $routecontext = RouteContext::fromRequest($request);
+         $routingresults = $routecontext->getRoutingResults();
+         $methods = $routingresults->getAllowedMethods();
+ 
++        if (!$response->hasHeader('Content-Type')) {
++            // The API is JSON by default. Only set the Content-Type if the response has not
++            // already specified one, so that responses of other types are not mislabelled.
++            $response = $response->withHeader('Content-Type', 'application/json');
++        }
++
++        if (!$response->hasHeader('Content-Disposition')) {
++            $response = $response->withHeader('Content-Disposition', 'inline');
++        }
++
+         return $response
+-            ->withHeader('Content-Type', 'application/json')
+-            ->withHeader('Content-Disposition', 'inline')
+             ->withHeader('Access-Control-Allow-Origin', '*')
+             ->withHeader('Access-Control-Allow-Methods', implode(',', $methods))
+             ->withHeader('Access-Control-Allow-Headers', 'Content-Type, api_key, Authorization');
+diff --git a/public/lib/tests/router/middleware/cors_middleware_test.php b/public/lib/tests/router/middleware/cors_middleware_test.php
+index 164e2d8230a..1600759d3ce 100644
+--- a/public/lib/tests/router/middleware/cors_middleware_test.php
++++ b/public/lib/tests/router/middleware/cors_middleware_test.php
+@@ -62,10 +62,16 @@ final class cors_middleware_test extends route_testcase {
+     }
+ 
+     /**
+-     * CORS headers are not added for a request which does not accept JSON and is not an OPTIONS
+-     * or HEAD request.
++     * CORS headers are added regardless of the Accept header.
++     *
++     * Browsers typically send "Accept: *\/*" for fetch() requests, and may send no Accept header
++     * at all. The CORS headers must be present in all of these cases, otherwise the browser will
++     * block a response for a request which Moodle has already processed.
++     *
++     * @param array $headers The request headers
+      */
+-    public function test_cors_headers_not_added_for_non_json_request(): void {
++    #[\PHPUnit\Framework\Attributes\DataProvider('non_json_accept_header_provider')]
++    public function test_cors_headers_added_regardless_of_accept_header(array $headers): void {
+         $app = $this->get_simple_app();
+         $app->add(di::get(cors_middleware::class));
+         $app->addRoutingMiddleware();
+@@ -74,17 +80,59 @@ final class cors_middleware_test extends route_testcase {
+             return $response;
+         });
+ 
+-        // Handle the request. No Accept header is provided.
+-        $request = new ServerRequest('GET', '/test');
++        $request = new ServerRequest('GET', '/test', $headers);
+         $returns = $app->handle($request);
+         $this->assertInstanceOf(ResponseInterface::class, $returns);
+ 
+-        // No CORS headers should have been added, and the response should be returned unmodified.
+-        $this->assertEquals('', $returns->getHeaderLine('Access-Control-Allow-Origin'));
+-        $this->assertEquals('', $returns->getHeaderLine('Access-Control-Allow-Methods'));
+-        $this->assertEquals('', $returns->getHeaderLine('Access-Control-Allow-Headers'));
+-        $this->assertEquals('', $returns->getHeaderLine('Content-Type'));
+-        $this->assertEquals('', $returns->getHeaderLine('Content-Disposition'));
++        $this->assertEquals('*', $returns->getHeaderLine('Access-Control-Allow-Origin'));
++        $this->assertEquals('GET', $returns->getHeaderLine('Access-Control-Allow-Methods'));
++        $this->assertEquals('application/json', $returns->getHeaderLine('Content-Type'));
++        $this->assertEquals('inline', $returns->getHeaderLine('Content-Disposition'));
++
++        $allowedheaders = $returns->getHeaderLine('Access-Control-Allow-Headers');
++        $this->assertStringContainsString('Content-Type', $allowedheaders);
++        $this->assertStringContainsString('api_key', $allowedheaders);
++        $this->assertStringContainsString('Authorization', $allowedheaders);
++    }
++
++    /**
++     * Data provider for test_cors_headers_added_regardless_of_accept_header.
++     *
++     * @return array
++     */
++    public static function non_json_accept_header_provider(): array {
++        return [
++            'No Accept header' => [[]],
++            'Wildcard Accept header (fetch default)' => [['Accept' => '*/*']],
++            'HTML Accept header' => [['Accept' => 'text/html']],
++            'Browser navigation Accept header' => [
++                ['Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'],
++            ],
++        ];
++    }
++
++    /**
++     * An existing Content-Type and Content-Disposition on the response are preserved.
++     */
++    public function test_cors_headers_preserve_existing_content_type(): void {
++        $app = $this->get_simple_app();
++        $app->add(di::get(cors_middleware::class));
++        $app->addRoutingMiddleware();
++
++        $app->map(['GET'], '/test', function ($request, $response) {
++            return $response
++                ->withHeader('Content-Type', 'text/html; charset=utf-8')
++                ->withHeader('Content-Disposition', 'attachment; filename="test.html"');
++        });
++
++        $request = new ServerRequest('GET', '/test', ['Accept' => '*/*']);
++        $returns = $app->handle($request);
++        $this->assertInstanceOf(ResponseInterface::class, $returns);
++
++        $this->assertEquals('*', $returns->getHeaderLine('Access-Control-Allow-Origin'));
++        $this->assertEquals('GET', $returns->getHeaderLine('Access-Control-Allow-Methods'));
++        $this->assertEquals('text/html; charset=utf-8', $returns->getHeaderLine('Content-Type'));
++        $this->assertEquals('attachment; filename="test.html"', $returns->getHeaderLine('Content-Disposition'));
+     }
+ 
+     /**

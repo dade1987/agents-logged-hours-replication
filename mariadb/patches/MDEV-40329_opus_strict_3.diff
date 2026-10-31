@@ -1,0 +1,53 @@
+diff --git a/mysql-test/main/gis.result b/mysql-test/main/gis.result
+index 171803ec..a934f314 100644
+--- a/mysql-test/main/gis.result
++++ b/mysql-test/main/gis.result
+@@ -5613,4 +5613,10 @@ NULL
+ select  glength(x'0000000001050000000100000001020000');
+ glength(x'0000000001050000000100000001020000')
+ NULL
++#
++# MDEV-40329 Assertion in Binary_string::qs_append(char) in AsText
++#
++SELECT LENGTH(ST_AsText(UNHEX(CONCAT('000000000', REPEAT('107000000010000000', 200), '10100000000000000000000000000000000000000')))) AS len;
++len
++4030
+ # End of 10.6 tests
+diff --git a/mysql-test/main/gis.test b/mysql-test/main/gis.test
+index 4cb51fdc..8e0f7875 100644
+--- a/mysql-test/main/gis.test
++++ b/mysql-test/main/gis.test
+@@ -3583,4 +3583,9 @@ select st_centroid(x'0000000001060000000100000001030000');
+ select  glength(x'0000000001050000000100000001020000');
+ 
+ 
++--echo #
++--echo # MDEV-40329 Assertion in Binary_string::qs_append(char) in AsText
++--echo #
++SELECT LENGTH(ST_AsText(UNHEX(CONCAT('000000000', REPEAT('107000000010000000', 200), '10100000000000000000000000000000000000000')))) AS len;
++
+ --echo # End of 10.6 tests
+diff --git a/sql/spatial.cc b/sql/spatial.cc
+index e3ce5786..0da95bb4 100644
+--- a/sql/spatial.cc
++++ b/sql/spatial.cc
+@@ -3494,7 +3494,8 @@ bool Gis_geometry_collection::get_data_as_wkt(String *txt,
+     goto exit;
+   }
+ 
+-  txt->qs_append('(');
++  if (txt->append('('))
++    return 1;
+   while (n_objects--)
+   {
+     uint32 wkb_type;
+@@ -3512,7 +3513,8 @@ bool Gis_geometry_collection::get_data_as_wkt(String *txt,
+     if (n_objects && txt->append(STRING_WITH_LEN(","), 512))
+       return 1;
+   }
+-  txt->qs_append(')');
++  if (txt->append(')'))
++    return 1;
+ exit:
+   *end= data;
+   return 0;

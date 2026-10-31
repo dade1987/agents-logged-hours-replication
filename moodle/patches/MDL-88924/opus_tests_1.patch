@@ -1,0 +1,90 @@
+diff --git a/public/admin/tool/mobile/classes/api.php b/public/admin/tool/mobile/classes/api.php
+index 6e77938c5bd..a04ade63956 100644
+--- a/public/admin/tool/mobile/classes/api.php
++++ b/public/admin/tool/mobile/classes/api.php
+@@ -211,6 +211,10 @@ class api {
+             'tool_mobile_androidappid' => get_config('tool_mobile', 'androidappid'),
+             'tool_mobile_setuplink' => clean_param(get_config('tool_mobile', 'setuplink'), PARAM_URL),
+             'tool_mobile_qrcodetype' => clean_param(get_config('tool_mobile', 'qrcodetype'), PARAM_INT),
++            'tool_mobile_enabledeeplinkautologin' => (int) clean_param(
++                get_config('tool_mobile', 'enabledeeplinkautologin'),
++                PARAM_BOOL
++            ),
+             'supportpage' => $sitesupportavailable ? clean_param($CFG->supportpage, PARAM_URL) : '',
+             'supportavailability' => clean_param($CFG->supportavailability, PARAM_INT),
+             'showloginform' => (int) get_config('core', 'showloginform'),
+diff --git a/public/admin/tool/mobile/classes/external.php b/public/admin/tool/mobile/classes/external.php
+index 5d80a52cc94..4db2d995830 100644
+--- a/public/admin/tool/mobile/classes/external.php
++++ b/public/admin/tool/mobile/classes/external.php
+@@ -190,6 +190,11 @@ class external extends external_api {
+                     VALUE_OPTIONAL),
+                 'tool_mobile_setuplink' => new external_value(PARAM_URL, 'App download page.', VALUE_OPTIONAL),
+                 'tool_mobile_qrcodetype' => new external_value(PARAM_INT, 'QR login configuration.', VALUE_OPTIONAL),
++                'tool_mobile_enabledeeplinkautologin' => new external_value(
++                    PARAM_INT,
++                    'Whether auto-login via deep links (passing token and privatetoken) is enabled.',
++                    VALUE_OPTIONAL
++                ),
+                 'warnings' => new external_warnings(),
+                 'showloginform' => new external_value(PARAM_INT, 'Display default login form.'),
+                 'tool_mfa_enabled' => new external_value(PARAM_BOOL, 'Whether MFA is enabled for the site.', VALUE_OPTIONAL),
+diff --git a/public/admin/tool/mobile/lang/en/tool_mobile.php b/public/admin/tool/mobile/lang/en/tool_mobile.php
+index ac256a847f2..e2c07d7c083 100644
+--- a/public/admin/tool/mobile/lang/en/tool_mobile.php
++++ b/public/admin/tool/mobile/lang/en/tool_mobile.php
+@@ -88,6 +88,8 @@ $string['disabledfeatures_desc'] = 'Select here the features you want to disable
+ $string['displayerrorswarning'] = 'Display debug messages (debugdisplay) is enabled. It should be disabled.';
+ $string['downloadcourse'] = 'Download course';
+ $string['downloadcourses'] = 'Download courses';
++$string['enabledeeplinkautologin'] = 'Enable auto-login in deep links';
++$string['enabledeeplinkautologin_desc'] = 'By enabling this option, users will be automatically logged in to their site in the mobile app via a deep link when the token and privatetoken are passed as parameters in the deep link.';
+ $string['enablesmartappbanners'] = 'Enable App Banners';
+ $string['enablesmartappbanners_desc'] = 'If enabled, a banner promoting the mobile app will be displayed when accessing the site using a mobile browser.';
+ $string['enhanced'] = 'Premium';
+diff --git a/public/admin/tool/mobile/settings.php b/public/admin/tool/mobile/settings.php
+index d405e714dfe..2d034026460 100644
+--- a/public/admin/tool/mobile/settings.php
++++ b/public/admin/tool/mobile/settings.php
+@@ -216,6 +216,13 @@ if ($hassiteconfig || has_capability('moodle/site:configview', context_system::i
+     ));
+     $temp->hide_if('tool_mobile/qrsameipcheck', 'tool_mobile/qrcodetype', 'neq', tool_mobile\api::QR_CODE_LOGIN);
+ 
++    $temp->add(new admin_setting_configcheckbox(
++        'tool_mobile/enabledeeplinkautologin',
++        new lang_string('enabledeeplinkautologin', 'tool_mobile'),
++        new lang_string('enabledeeplinkautologin_desc', 'tool_mobile'),
++        0
++    ));
++
+     if (!$ispremiumplan && get_config('tool_mobile', 'qrcodetype') == tool_mobile\api::QR_CODE_LOGIN) {
+         $featureparams['feature'] = get_string('qrcodetypelogin', 'tool_mobile');
+         $templatesubscribe['message'] = clean_text(get_string('qronlypremium', 'tool_mobile', $featureparams));
+diff --git a/public/admin/tool/mobile/tests/externallib_test.php b/public/admin/tool/mobile/tests/externallib_test.php
+index 2e5e913a342..abaf97abe9d 100644
+--- a/public/admin/tool/mobile/tests/externallib_test.php
++++ b/public/admin/tool/mobile/tests/externallib_test.php
+@@ -97,6 +97,7 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+             'tool_mobile_androidappid' => get_config('tool_mobile', 'androidappid'),
+             'tool_mobile_setuplink' => get_config('tool_mobile', 'setuplink'),
+             'tool_mobile_qrcodetype' => get_config('tool_mobile', 'qrcodetype'),
++            'tool_mobile_enabledeeplinkautologin' => 0,
+             'supportpage' => $CFG->supportpage,
+             'supportavailability' => $CFG->supportavailability,
+             'warnings' => [],
+@@ -121,6 +122,7 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+         set_config('lang', 'a_b');  // Set invalid lang.
+         set_config('disabledfeatures', 'myoverview', 'tool_mobile');
+         set_config('minimumversion', '3.8.0', 'tool_mobile');
++        set_config('enabledeeplinkautologin', 1, 'tool_mobile');
+         set_config('supportemail', 'test@test.com');
+         set_config('supportavailability', CONTACT_SUPPORT_ANYONE);
+ 
+@@ -146,6 +148,7 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+         $expected['lang'] = ''; // Expect empty because it was set to an invalid lang.
+         $expected['tool_mobile_disabledfeatures'] = 'myoverview';
+         $expected['tool_mobile_minimumversion'] = '3.8.0';
++        $expected['tool_mobile_enabledeeplinkautologin'] = 1;
+ 
+         if ($logourl = $OUTPUT->get_logo_url()) {
+             $expected['logourl'] = $logourl->out(false);

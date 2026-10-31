@@ -1,0 +1,72 @@
+diff --git a/public/blocks/recentlyaccesseditems/classes/helper.php b/public/blocks/recentlyaccesseditems/classes/helper.php
+index 61e215ca261..00494d8676e 100644
+--- a/public/blocks/recentlyaccesseditems/classes/helper.php
++++ b/public/blocks/recentlyaccesseditems/classes/helper.php
+@@ -74,12 +74,18 @@ class helper {
+                 continue;
+             }
+             foreach ($items as $key => $item) {
++                // Skip (and clean up) stale records whose course module no longer exists.
++                if (empty($modinfo->cms[$item->cmid])) {
++                    $DB->delete_records('block_recentlyaccesseditems', ['id' => $item->id]);
++                    continue;
++                }
++                $cm = $modinfo->cms[$item->cmid];
+                 // Exclude not visible items.
+-                if (!$modinfo->cms[$item->cmid]->uservisible) {
++                if (!$cm->uservisible) {
+                     continue;
+                 }
+-                $item->modname = $modinfo->cms[$item->cmid]->modname;
+-                $item->name = $modinfo->cms[$item->cmid]->name;
++                $item->modname = $cm->modname;
++                $item->name = $cm->name;
+                 $item->coursename = get_course_display_name_for_list($modinfo->get_course());
+                 $recentitems[$key] = $item;
+             }
+diff --git a/public/blocks/recentlyaccesseditems/tests/helper_test.php b/public/blocks/recentlyaccesseditems/tests/helper_test.php
+index 8021fe07118..63dc6a066fe 100644
+--- a/public/blocks/recentlyaccesseditems/tests/helper_test.php
++++ b/public/blocks/recentlyaccesseditems/tests/helper_test.php
+@@ -57,4 +57,41 @@ final class helper_test extends \advanced_testcase {
+         $recent2 = helper::get_recent_items();
+         self::assertCount(1, $recent2);
+     }
++
++    /**
++     * Tests that stale records referencing a course module that no longer exists are ignored and removed.
++     */
++    public function test_get_recent_items_missing_cm(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $course = self::getDataGenerator()->create_course();
++        $user = self::getDataGenerator()->create_and_enrol($course, 'student');
++        $forum = self::getDataGenerator()->create_module('forum', ['course' => $course]);
++        self::setUser($user);
++
++        $event = \mod_forum\event\course_module_viewed::create([
++            'context' => \context_module::instance($forum->cmid),
++            'objectid' => $forum->id,
++        ]);
++        $event->trigger();
++        self::assertCount(1, helper::get_recent_items());
++
++        // Insert an orphaned record pointing to a non-existent course module.
++        $staleid = $DB->insert_record('block_recentlyaccesseditems', (object) [
++            'userid' => $user->id,
++            'courseid' => $course->id,
++            'cmid' => $forum->cmid + 1000,
++            'timeaccess' => time() + 10,
++        ]);
++        self::assertCount(2, $DB->get_records('block_recentlyaccesseditems', ['userid' => $user->id]));
++
++        // The stale record must be ignored without any warnings, and it should be removed.
++        $recent = helper::get_recent_items();
++        self::assertCount(1, $recent);
++        $item = reset($recent);
++        self::assertEquals($forum->cmid, $item->cmid);
++        self::assertFalse($DB->record_exists('block_recentlyaccesseditems', ['id' => $staleid]));
++        self::assertCount(1, $DB->get_records('block_recentlyaccesseditems', ['userid' => $user->id]));
++    }
+ }

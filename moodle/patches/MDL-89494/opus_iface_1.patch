@@ -1,0 +1,89 @@
+diff --git a/public/admin/tool/customlang/locallib.php b/public/admin/tool/customlang/locallib.php
+index c76ff7829fb..2d8e056a093 100644
+--- a/public/admin/tool/customlang/locallib.php
++++ b/public/admin/tool/customlang/locallib.php
+@@ -154,7 +154,7 @@ class tool_customlang_utils {
+ 
+                 if (!is_null($progressbar)) {
+                     $done++;
+-                    $donepercent = floor(min($done, self::ROUGH_NUMBER_OF_STRINGS) / self::ROUGH_NUMBER_OF_STRINGS * 100);
++                    $donepercent = self::calculate_checkout_percent($done);
+                     $progressbar->update_full($donepercent, $strinprogress);
+                 }
+ 
+@@ -215,6 +215,21 @@ class tool_customlang_utils {
+         }
+     }
+ 
++    /**
++     * Calculates the checkout progress percentage based on the number of processed strings.
++     *
++     * The value is estimated from {@see self::ROUGH_NUMBER_OF_STRINGS} and is capped at 99 so that
++     * 100% is only reported once the checkout has really completed.
++     *
++     * @param int $done number of strings processed so far
++     * @return int percentage in the range 0 - 99
++     */
++    public static function calculate_checkout_percent(int $done): int {
++        $done = max(0, $done);
++        $percent = (int) floor(min($done, self::ROUGH_NUMBER_OF_STRINGS) / self::ROUGH_NUMBER_OF_STRINGS * 100);
++        return min($percent, 99);
++    }
++
+     /**
+      * Exports the translator database into disk files
+      *
+diff --git a/public/admin/tool/customlang/tests/checkout_percent_test.php b/public/admin/tool/customlang/tests/checkout_percent_test.php
+new file mode 100644
+index 00000000000..4fa2c5e5157
+--- /dev/null
++++ b/public/admin/tool/customlang/tests/checkout_percent_test.php
+@@ -0,0 +1,48 @@
++<?php
++// This file is part of Moodle - https://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
++
++namespace tool_customlang;
++
++use tool_customlang_utils;
++
++defined('MOODLE_INTERNAL') || die();
++
++global $CFG;
++require_once($CFG->dirroot . '/' . $CFG->admin . '/tool/customlang/locallib.php');
++
++/**
++ * Tests for the checkout progress calculation.
++ *
++ * @package    tool_customlang
++ * @category   test
++ * @copyright  2026 Moodle Pty Ltd
++ * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ * @covers     \tool_customlang_utils::calculate_checkout_percent
++ */
++final class checkout_percent_test extends \advanced_testcase {
++
++    /**
++     * The progress never reaches 100% while strings are still being processed.
++     */
++    public function test_calculate_checkout_percent(): void {
++        $rough = tool_customlang_utils::ROUGH_NUMBER_OF_STRINGS;
++        $this->assertSame(0, tool_customlang_utils::calculate_checkout_percent(0));
++        $this->assertSame(50, tool_customlang_utils::calculate_checkout_percent((int) ($rough / 2)));
++        $this->assertSame(99, tool_customlang_utils::calculate_checkout_percent($rough - 1));
++        $this->assertSame(99, tool_customlang_utils::calculate_checkout_percent($rough));
++        $this->assertSame(99, tool_customlang_utils::calculate_checkout_percent($rough * 3));
++    }
++}

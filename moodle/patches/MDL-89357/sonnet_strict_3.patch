@@ -1,0 +1,75 @@
+diff --git a/public/ai/classes/aiactions/base.php b/public/ai/classes/aiactions/base.php
+index 3a764df9ac1..72bfaf91fbd 100644
+--- a/public/ai/classes/aiactions/base.php
++++ b/public/ai/classes/aiactions/base.php
+@@ -68,7 +68,7 @@ abstract class base {
+      * @return string
+      */
+     public static function get_name(): string {
+-        $stringid = 'action_' . self::get_basename();
++        $stringid = 'action_' . static::get_basename();
+         return get_string($stringid, 'core_ai');
+     }
+ 
+@@ -80,7 +80,7 @@ abstract class base {
+      * @return string
+      */
+     public static function get_description(): string {
+-        $stringid = 'action_' . self::get_basename() . '_desc';
++        $stringid = 'action_' . static::get_basename() . '_desc';
+         return get_string($stringid, 'core_ai');
+     }
+ 
+@@ -90,7 +90,7 @@ abstract class base {
+      * @return string The system instruction for the action.
+      */
+     public static function get_system_instruction(): string {
+-        $stringid = 'action_' . self::get_basename() . '_instruction';
++        $stringid = 'action_' . static::get_basename() . '_instruction';
+ 
+         // If the string doesn't exist, return an empty string.
+         if (!get_string_manager()->string_exists($stringid, 'core_ai')) {
+@@ -126,6 +126,6 @@ abstract class base {
+      * @return string The class name of the response object.
+      */
+     public static function get_response_classname(): string {
+-        return responses::class . '\\response_' . self::get_basename();
++        return responses::class . '\\response_' . static::get_basename();
+     }
+ }
+diff --git a/public/ai/tests/aiactions/base_test.php b/public/ai/tests/aiactions/base_test.php
+index f9894e3493e..4b589414bca 100644
+--- a/public/ai/tests/aiactions/base_test.php
++++ b/public/ai/tests/aiactions/base_test.php
+@@ -102,4 +102,31 @@ final class base_test extends \advanced_testcase {
+         }
+     }
+ 
++    /**
++     * Test that static methods called from the base class use late static binding.
++     */
++    public function test_late_static_binding(): void {
++        $child = new class(1) extends \core_ai\aiactions\base {
++            /**
++             * Store the response.
++             * @param response_base $response
++             * @return int
++             */
++            public function store(response_base $response): int {
++                return 0;
++            }
++
++            /**
++             * Overridden basename.
++             * @return string
++             */
++            public static function get_basename(): string {
++                return 'summarise_text';
++            }
++        };
++        $class = get_class($child);
++        $this->assertEquals(\core_ai\aiactions\summarise_text::get_name(), $class::get_name());
++        $this->assertEquals(\core_ai\aiactions\summarise_text::get_description(), $class::get_description());
++        $this->assertEquals(\core_ai\aiactions\responses\response_summarise_text::class, $class::get_response_classname());
++    }
+ }

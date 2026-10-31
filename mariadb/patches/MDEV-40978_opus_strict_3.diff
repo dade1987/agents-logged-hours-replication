@@ -1,0 +1,102 @@
+diff --git a/mysql-test/main/partition_range_interval.result b/mysql-test/main/partition_range_interval.result
+index 6f7abf6d..4b6e1e9c 100644
+--- a/mysql-test/main/partition_range_interval.result
++++ b/mysql-test/main/partition_range_interval.result
+@@ -2557,3 +2557,24 @@ INTERVAL "hello" DAY
+ PARTITION p0 VALUES LESS THAN ('2026-04-20')
+ );
+ ERROR HY000: Wrong parameters for partitioned `t1`: wrong value for 'INTERVAL'
++#
++# MDEV-40978 PREPARE with INTERVAL ? in Partition DDL Crashes the Server
++#
++PREPARE s FROM 'CREATE TABLE t1 (c DATE)
++  PARTITION BY RANGE COLUMNS(c)
++  INTERVAL ? DAY
++  (PARTITION p0 VALUES LESS THAN (?))';
++ERROR HY000: Wrong parameters for partitioned `t1`: wrong value for 'INTERVAL'
++PREPARE s FROM 'CREATE TABLE t1 (c DATE)
++  PARTITION BY RANGE COLUMNS(c)
++  INTERVAL (? + 1) DAY
++  (PARTITION p0 VALUES LESS THAN (''2026-04-20''))';
++ERROR HY000: Wrong parameters for partitioned `t1`: wrong value for 'INTERVAL'
++EXECUTE IMMEDIATE 'CREATE TABLE t1 (c DATE)
++  PARTITION BY RANGE COLUMNS(c)
++  INTERVAL ? DAY
++  (PARTITION p0 VALUES LESS THAN (''2026-04-20''))' USING 1;
++ERROR HY000: Wrong parameters for partitioned `t1`: wrong value for 'INTERVAL'
++PREPARE s FROM 'CREATE TABLE t1 (x INT) WITH SYSTEM VERSIONING
++  PARTITION BY SYSTEM_TIME INTERVAL ? DAY PARTITIONS 3';
++ERROR HY000: Wrong parameters for partitioned `t1`: wrong value for 'INTERVAL'
+diff --git a/mysql-test/main/partition_range_interval.test b/mysql-test/main/partition_range_interval.test
+index df2e0b49..48a85e3b 100644
+--- a/mysql-test/main/partition_range_interval.test
++++ b/mysql-test/main/partition_range_interval.test
+@@ -1041,3 +1041,28 @@ INTERVAL "hello" DAY
+ (
+ PARTITION p0 VALUES LESS THAN ('2026-04-20')
+ );
++
++--echo #
++--echo # MDEV-40978 PREPARE with INTERVAL ? in Partition DDL Crashes the Server
++--echo #
++--error ER_PART_WRONG_VALUE
++PREPARE s FROM 'CREATE TABLE t1 (c DATE)
++  PARTITION BY RANGE COLUMNS(c)
++  INTERVAL ? DAY
++  (PARTITION p0 VALUES LESS THAN (?))';
++
++--error ER_PART_WRONG_VALUE
++PREPARE s FROM 'CREATE TABLE t1 (c DATE)
++  PARTITION BY RANGE COLUMNS(c)
++  INTERVAL (? + 1) DAY
++  (PARTITION p0 VALUES LESS THAN (''2026-04-20''))';
++
++--error ER_PART_WRONG_VALUE
++EXECUTE IMMEDIATE 'CREATE TABLE t1 (c DATE)
++  PARTITION BY RANGE COLUMNS(c)
++  INTERVAL ? DAY
++  (PARTITION p0 VALUES LESS THAN (''2026-04-20''))' USING 1;
++
++--error ER_PART_WRONG_VALUE
++PREPARE s FROM 'CREATE TABLE t1 (x INT) WITH SYSTEM VERSIONING
++  PARTITION BY SYSTEM_TIME INTERVAL ? DAY PARTITIONS 3';
+diff --git a/sql/partition_info.cc b/sql/partition_info.cc
+index d1f85e26..dc051206 100644
+--- a/sql/partition_info.cc
++++ b/sql/partition_info.cc
+@@ -2828,6 +2828,15 @@ bool partition_info::vers_set_interval(THD* thd, Item* interval,
+   /* 1. assign INTERVAL to interval.step */
+   if (interval->fix_fields_if_needed_for_scalar(thd, &interval))
+     return true;
++  /*
++    The interval value is evaluated at parse time, so it can not depend
++    on a prepared statement parameter, which has no value yet.
++  */
++  if (interval->with_param())
++  {
++    my_error(ER_PART_WRONG_VALUE, MYF(0), table_name, "INTERVAL");
++    return true;
++  }
+   bool error= get_interval_value(thd, interval, int_type, &vers_info->interval.step) ||
+           vers_info->interval.step.neg || vers_info->interval.step.second_part ||
+         !(vers_info->interval.step.year || vers_info->interval.step.month ||
+diff --git a/sql/sql_partition_auto_interval.cc b/sql/sql_partition_auto_interval.cc
+index 2f599e64..8c45654a 100644
+--- a/sql/sql_partition_auto_interval.cc
++++ b/sql/sql_partition_auto_interval.cc
+@@ -404,6 +404,15 @@ bool partition_info::set_range_interval(THD* thd, Item* ival,
+ {
+   if (ival->fix_fields_if_needed_for_scalar(thd, &ival))
+     return true;
++  /*
++    The interval value is evaluated at parse time, so it can not depend
++    on a prepared statement parameter, which has no value yet.
++  */
++  if (ival->with_param())
++  {
++    my_error(ER_PART_WRONG_VALUE, MYF(0), table_name, "INTERVAL");
++    return true;
++  }
+   bool error= get_interval_value(thd, ival, type, &interval) ||
+     interval.neg || interval.second_part ||
+     !(interval.year || interval.month || interval.day || interval.hour ||

@@ -1,0 +1,119 @@
+diff --git a/mysql-test/suite/compat/oracle/r/sp-record.result b/mysql-test/suite/compat/oracle/r/sp-record.result
+index 5b66c6fa..45454170 100644
+--- a/mysql-test/suite/compat/oracle/r/sp-record.result
++++ b/mysql-test/suite/compat/oracle/r/sp-record.result
+@@ -895,3 +895,44 @@ NULL;
+ END;
+ $$
+ ERROR HY000: Data type 'rec0_t' doesn't support CHARACTER SET attribute.
++#
++# MDEV-40153 Assertion `rec->field->head()->charset == nullptr' failed in Type_handler_row::Column_definition_prepare_stage1
++#
++CREATE PACKAGE pk_crash AS
++TYPE r IS RECORD (b BLOB);
++FUNCTION f RETURN r;
++PROCEDURE p1;
++END;
++$$
++CREATE PACKAGE BODY pk_crash AS
++FUNCTION f RETURN r AS
++rr r;
++BEGIN
++rr.b:= 'abc';
++RETURN rr;
++END;
++PROCEDURE p1 AS
++rr r;
++BEGIN
++rr:= f();
++SELECT rr.b;
++END;
++END;
++$$
++CREATE PROCEDURE p1 AS
++TYPE r IS RECORD (a VARBINARY(10), b BLOB);
++rr r;
++BEGIN
++rr.a:= 'x';
++rr.b:= 'yz';
++SELECT rr.a || rr.b;
++END;
++$$
++CALL pk_crash.p1;
++rr.b
++abc
++CALL p1;
++rr.a || rr.b
++xyz
++DROP PROCEDURE p1;
++DROP PACKAGE pk_crash;
+diff --git a/mysql-test/suite/compat/oracle/t/sp-record.test b/mysql-test/suite/compat/oracle/t/sp-record.test
+index b75a739d..7debd5cc 100644
+--- a/mysql-test/suite/compat/oracle/t/sp-record.test
++++ b/mysql-test/suite/compat/oracle/t/sp-record.test
+@@ -975,3 +975,44 @@ BEGIN
+ END;
+ $$
+ DELIMITER ;$$
++
++--echo #
++--echo # MDEV-40153 Assertion `rec->field->head()->charset == nullptr' failed in Type_handler_row::Column_definition_prepare_stage1
++--echo #
++
++DELIMITER $$;
++CREATE PACKAGE pk_crash AS
++  TYPE r IS RECORD (b BLOB);
++  FUNCTION f RETURN r;
++  PROCEDURE p1;
++END;
++$$
++CREATE PACKAGE BODY pk_crash AS
++  FUNCTION f RETURN r AS
++    rr r;
++  BEGIN
++    rr.b:= 'abc';
++    RETURN rr;
++  END;
++  PROCEDURE p1 AS
++    rr r;
++  BEGIN
++    rr:= f();
++    SELECT rr.b;
++  END;
++END;
++$$
++CREATE PROCEDURE p1 AS
++  TYPE r IS RECORD (a VARBINARY(10), b BLOB);
++  rr r;
++BEGIN
++  rr.a:= 'x';
++  rr.b:= 'yz';
++  SELECT rr.a || rr.b;
++END;
++$$
++DELIMITER ;$$
++CALL pk_crash.p1;
++CALL p1;
++DROP PROCEDURE p1;
++DROP PACKAGE pk_crash;
+diff --git a/sql/sql_type_row.cc b/sql/sql_type_row.cc
+index 97d48ed3..14666d5c 100644
+--- a/sql/sql_type_row.cc
++++ b/sql/sql_type_row.cc
+@@ -252,7 +252,15 @@ bool Type_handler_row::
+   {
+     DBUG_ASSERT(rec->field);
+     DBUG_ASSERT(rec->field->elements);
+-    DBUG_ASSERT(rec->field->head()->charset == nullptr); // Not prepared
++    /*
++      Note, we cannot use "rec->field->head()->charset == nullptr" here
++      as an indicator that rec->field has not been prepared yet:
++      binary string data types (BLOB, BINARY, VARBINARY, etc) get
++      their charset set to &my_charset_bin already at parse time,
++      so the first member's charset can be non-null in an unprepared
++      record structure. The "rec" structure itself is never prepared
++      in place: it's always deep-copied before preparation.
++    */
+     Row_definition_list *row= rec->field->deep_copy(thd);
+     if (!row || thd->lex->sphead->row_fill_field_definitions(thd, row))
+       return true; // Error

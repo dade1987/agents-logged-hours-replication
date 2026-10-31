@@ -1,0 +1,23 @@
+diff --git a/storage/myisam/mi_open.c b/storage/myisam/mi_open.c
+index 414e483a..15e0a12f 100644
+--- a/storage/myisam/mi_open.c
++++ b/storage/myisam/mi_open.c
+@@ -371,6 +371,18 @@ MI_INFO *mi_open(const char *name, int mode, uint open_flags)
+             my_errno= HA_ERR_CRASHED;
+             goto err;
+           }
++          /*
++            A key segment can never be longer than the maximum key length
++            (fulltext and spatial keys build their keys with their own
++            segments). A larger value means the index file is corrupted
++            and would cause buffer overflows when building keys.
++          */
++          if (!(keyinfo->flag & (HA_FULLTEXT | HA_SPATIAL)) &&
++              pos->length > HA_MAX_KEY_LENGTH)
++          {
++            my_errno= HA_ERR_CRASHED;
++            goto err;
++          }
+ 	  if (pos->type == HA_KEYTYPE_TEXT ||
+               pos->type == HA_KEYTYPE_VARTEXT1 ||
+               pos->type == HA_KEYTYPE_VARTEXT2)

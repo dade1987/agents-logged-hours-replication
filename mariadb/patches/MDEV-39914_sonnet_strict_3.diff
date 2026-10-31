@@ -1,0 +1,22 @@
+diff --git a/sql/spatial.cc b/sql/spatial.cc
+index 5df5a555..218c5f6b 100644
+--- a/sql/spatial.cc
++++ b/sql/spatial.cc
+@@ -2377,6 +2377,8 @@ int Gis_polygon::simplify(String *result, double max_distance) const
+   Geometry *geometry= NULL;
+   String exterior_ring= 0;
+ 
++  if (exterior_ring.reserve(SRID_SIZE))
++    return 1;
+   exterior_ring.q_append(SRID_PLACEHOLDER);
+   if (this->num_interior_ring(&num_interior_ring) ||
+       this->exterior_ring(&exterior_ring) ||
+@@ -2407,6 +2409,8 @@ int Gis_polygon::simplify(String *result, double max_distance) const
+   for (uint32 i = 1; i <= num_interior_ring; i++)
+   {
+     String interior_ring= 0;
++    if (interior_ring.reserve(SRID_SIZE))
++      return 1;
+     interior_ring.q_append((uint) 0);
+     if (this->interior_ring_n(i, &interior_ring) ||
+         !(geometry= Geometry::construct(&buffer, interior_ring.ptr(),

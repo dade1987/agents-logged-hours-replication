@@ -1,0 +1,47 @@
+diff --git a/client/mysqlimport.cc b/client/mysqlimport.cc
+index 06f44b5b..2baadfa3 100644
+--- a/client/mysqlimport.cc
++++ b/client/mysqlimport.cc
+@@ -836,23 +836,25 @@ int table_load_params::load_data(MYSQL *mysql)
+ 
+ 
+ 
+-static void lock_table(MYSQL *mysql, int tablecount, char **raw_tablename)
++static void lock_table(MYSQL *mysql,
++                       const std::vector<table_load_params> &files)
+ {
+   DYNAMIC_STRING query;
+-  int i;
+-  char tablename[FN_REFLEN];
+ 
+   if (verbose)
+     fprintf(stdout, "Locking tables for write\n");
+   init_dynamic_string(&query, "LOCK TABLES ", 256, 1024);
+-  for (i=0 ; i < tablecount ; i++)
++  for (size_t i= 0; i < files.size(); i++)
+   {
+-    fn_format(tablename, raw_tablename[i], "", "", 1 | 2);
+-    dynstr_append(&query, tablename);
+-    dynstr_append(&query, " WRITE,");
++    if (i)
++      dynstr_append(&query, ", ");
++    std::string quoted= quote_identifier(files[i].tablename.c_str());
++    dynstr_append(&query, quoted.c_str());
++    dynstr_append(&query, " WRITE");
+   }
+-  if (mysql_real_query(mysql, query.str, (ulong)query.length-1))
++  if (mysql_real_query(mysql, query.str, (ulong)query.length))
+     db_error(mysql); /* We shall continue here, if --force was given */
++  dynstr_free(&query);
+ }
+ 
+ 
+@@ -1361,7 +1363,7 @@ int main(int argc, char **argv)
+   else
+   {
+     if (lock_tables)
+-      lock_table(mysql, argc, argv);
++      lock_table(mysql, files_to_load);
+     for (auto &f : files_to_load)
+     {
+       if ((error= f.load_data(mysql)))

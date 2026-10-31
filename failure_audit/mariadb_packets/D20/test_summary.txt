@@ -1,0 +1,76 @@
+Evaluation: the agent's diff (without its own mysql-test changes) was applied on the parent commit, the developers' mysql-test files from the fix were added, the server was built (debug) and the fix's mtr tests were run: ['main.ctype_collate', 'main.user_var']
+On the parent commit these tests FAIL; with the human fix they PASS.
+
+AGENT RESULT: FAIL
+main.user_var                            w4 [ fail ]
+        Test ended at 2026-10-28 08:27:30
+
+CURRENT_TEST: main.user_var
+--- /home/user/mdb_src/mysql-test/main/user_var.result	2026-10-28 08:26:18.006237848 +0000
++++ /home/mtr/var/t/4/log/user_var.reject	2026-10-28 08:27:30.547534819 +0000
+@@ -162,13 +162,13 @@
+ latin2_general_ci
+ select coercibility(@a:=_latin2'test');
+ coercibility(@a:=_latin2'test')
+-5
++6
+ select collation(@a:=_latin2'test' collate latin2_bin);
+ collation(@a:=_latin2'test' collate latin2_bin)
+ latin2_bin
+ select coercibility(@a:=_latin2'test' collate latin2_bin);
+ coercibility(@a:=_latin2'test' collate latin2_bin)
+-5
++6
+ select (@a:=_latin2'test' collate latin2_bin) = _latin2'TEST';
+ (@a:=_latin2'test' collate latin2_bin) = _latin2'TEST'
+ 0
+
+Result content mismatch
+
+ - saving '/home/mtr/var/t/4/log/main.user_var/' to '/home/mtr/var/t/log/main.user_var/'
+main.ctype_collate                       w1 [ fail ]
+        Test ended at 2026-10-28 08:27:30
+
+CURRENT_TEST: main.ctype_collate
+mysqltest: At line 285: query 'CREATE TABLE t1 AS SELECT ' - ' AS a UNION SELECT getText()' succeeded - should have failed with error ER_CANT_AGGREGATE_NCOLLATIONS (1271)...
+
+The result from queries just before the failure was:
+< snip >
+exp
+abc
+#
+# Bug#11765016 57926: ILLEGAL MIX OF COLLATIONS FOR OPERATION 'UNION' .. USING CONCAT/FUNCTION/
+# Not a bug: only adding coverage tests
+#
+SET NAMES latin1 COLLATE latin1_german2_ci;
+CREATE DATABASE test1 DEFAULT CHARACTER SET latin1 COLLATE latin1_german2_ci;
+USE test1;
+#
+# Using "COLLATE latin1_swedish_ci" as the default collation for latin1
+#
+CREATE FUNCTION `getText`() RETURNS varchar(20) CHARSET latin1
+BEGIN
+RETURN "Testtext";
+END;//
+SELECT getText(), CHARSET(getText()), COLLATION(getText()), COERCIBILITY(getText());
+getText()	CHARSET(getText())	COLLATION(getText())	COERCIBILITY(getText())
+Testtext	latin1	latin1_swedish_ci	6
+CREATE TABLE t1 AS SELECT ' - ' AS a UNION SELECT getText();
+
+More results from queries before failure can be found in /home/mtr/var/t/1/log/ctype_collate.log
+
+ - saving '/home/mtr/var/t/1/log/main.ctype_collate/' to '/home/mtr/var/t/log/main.ctype_collate/'
+--------------------------------------------------------------------------
+The servers were restarted 0 times
+Spent 0.000 of 2 seconds executing testcases
+
+Completed: Failed 2/2 tests, 0.00% were successful.
+
+Failing test(s): main.user_var main.ctype_collate
+
+The log files in var/log may give you some hint of what went wrong.
+
+If you want to report this error, MariaDB's bug tracker is found at
+https://jira.mariadb.org
+
+mysql-test-run: *** ERROR: there were failing test cases

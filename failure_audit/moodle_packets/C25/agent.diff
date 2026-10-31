@@ -1,0 +1,244 @@
+diff --git a/.upgradenotes/MDL-89890-2026102412000000.yml b/.upgradenotes/MDL-89890-2026102412000000.yml
+new file mode 100644
+index 00000000000..75c9bec9b7f
+--- /dev/null
++++ b/.upgradenotes/MDL-89890-2026102412000000.yml
+@@ -0,0 +1,15 @@
++issueNumber: MDL-89890
++notes:
++  mod_forum:
++    - message: >-
++        The view/manage subscribers selector in the `mod_forum/forum_subscription_action`
++        template is now rendered using `core/tertiary_navigation_selector` (a
++        `\core\output\select_menu`) instead of `core/url_select`. For backwards
++        compatibility, the `viewandmanageselect` context exported by
++        `\mod_forum\output\subscription_actionbar::export_for_template()` still
++        contains the `core/url_select` compatible data (`formid`, `id`, `classes`,
++        `sesskey`, `action`, ...) so that overridden or copied templates which still
++        use `{{>core/url_select}}` keep working. This compatibility data is
++        deprecated and will be removed in a future version; templates should be
++        updated to use `{{>core/tertiary_navigation_selector}}`.
++      type: deprecated
+diff --git a/public/mod/forum/classes/output/subscription_actionbar.php b/public/mod/forum/classes/output/subscription_actionbar.php
+index 43e34dbfc43..135e7526d39 100644
+--- a/public/mod/forum/classes/output/subscription_actionbar.php
++++ b/public/mod/forum/classes/output/subscription_actionbar.php
+@@ -117,11 +117,11 @@ class subscription_actionbar implements renderable, templatable {
+     }
+ 
+     /**
+-     * Create view and manage subscribers select menu tertiary navigation item.
++     * Get the view/manage subscribers menu options.
+      *
+-     * @return select_menu|null get select_menu object.
++     * @return array|null Array of url => label, or null if the menu should not be displayed.
+      */
+-    private function create_view_manage_menu(): ?select_menu {
++    private function get_view_manage_menu_options(): ?array {
+         // If forced subscription is used then no need to show the view.
+         if (\mod_forum\subscriptions::is_forcesubscribed($this->forum)) {
+             return null;
+@@ -140,6 +140,21 @@ class subscription_actionbar implements renderable, templatable {
+         } else {
+             $this->currenturl = $managelink;
+         }
++
++        return $menu;
++    }
++
++    /**
++     * Create view and manage subscribers select menu tertiary navigation item.
++     *
++     * @return select_menu|null get select_menu object.
++     */
++    private function create_view_manage_menu(): ?select_menu {
++        $menu = $this->get_view_manage_menu_options();
++        if ($menu === null) {
++            return null;
++        }
++
+         $urlselect = new select_menu(
+             'selectviewandmanagesubscribers',
+             $menu,
+@@ -149,6 +164,27 @@ class subscription_actionbar implements renderable, templatable {
+         return $urlselect;
+     }
+ 
++    /**
++     * Create the legacy url_select version of the view and manage subscribers menu.
++     *
++     * This is only kept so that the data exported for the template remains compatible with
++     * templates (e.g. theme overrides or third-party copies of mod_forum/forum_subscription_action)
++     * still rendering the view/manage selector using core/url_select.
++     *
++     * @deprecated since Moodle 5.2 MDL-89890. The view/manage selector is now a select_menu.
++     * @return url_select|null the url_select object.
++     */
++    private function create_view_manage_url_select(): ?url_select {
++        $menu = $this->get_view_manage_menu_options();
++        if ($menu === null) {
++            return null;
++        }
++
++        $urlselect = new url_select($menu, $this->currenturl->out(false), null, 'selectviewandmanagesubscribers');
++        $urlselect->set_label(get_string('subscribers', 'forum'), ['class' => 'accesshide']);
++        return $urlselect;
++    }
++
+     /**
+      * Data for the template.
+      *
+@@ -164,7 +200,13 @@ class subscription_actionbar implements renderable, templatable {
+             $data ['subscriptionoptions'] = $subscribeoptionselect->export_for_template($output);
+         }
+         if ($viewmanageselect) {
+-            $data['viewandmanageselect'] = $viewmanageselect->export_for_template($output);
++            $viewmanagedata = $viewmanageselect->export_for_template($output);
++            // The view/manage selector used to be rendered using core/url_select. Keep exporting the url_select
++            // compatible data too, so that templates which have not yet been updated to use the
++            // core/tertiary_navigation_selector (select_menu) still work. The select_menu values take precedence.
++            // Note: the url_select compatible data is deprecated and will be removed in a future version.
++            $legacydata = $this->create_view_manage_url_select()->export_for_template($output);
++            $data['viewandmanageselect'] = (object) array_merge((array) $legacydata, (array) $viewmanagedata);
+         }
+         return $data;
+     }
+diff --git a/public/mod/forum/templates/forum_subscription_action.mustache b/public/mod/forum/templates/forum_subscription_action.mustache
+index 4d38c216f2c..b50749bd20d 100644
+--- a/public/mod/forum/templates/forum_subscription_action.mustache
++++ b/public/mod/forum/templates/forum_subscription_action.mustache
+@@ -23,6 +23,9 @@
+     * data-region
+     Context variables required for this template:
+     * see mod/forum/classes/output/subscription_actionbar.php
++    * viewandmanageselect - data for core/tertiary_navigation_selector (core/select_menu). For backwards
++      compatibility it also contains the core/url_select data (formid, id, classes, sesskey, action, ...)
++      previously used by this template. The url_select compatible data is deprecated.
+     Example context (json):
+     {
+         "subscriptionoptions": {
+@@ -44,6 +47,11 @@
+             ]
+         },
+         "viewandmanageselect": {
++            "formid": "selectviewandmanagesubscribers",
++            "id": "url_select12345",
++            "classes": "urlselect",
++            "sesskey": "abcdef",
++            "action": "http://localhost/course/jumpto.php",
+             "name": "selectviewandmanagesubscribers",
+             "value": "/mod/forum/subscribers.php?id=3&edit=off",
+             "baseid": "select-menu56789",
+diff --git a/public/mod/forum/tests/output_subscription_actionbar_test.php b/public/mod/forum/tests/output_subscription_actionbar_test.php
+new file mode 100644
+index 00000000000..8042797f4eb
+--- /dev/null
++++ b/public/mod/forum/tests/output_subscription_actionbar_test.php
+@@ -0,0 +1,107 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace mod_forum;
++
++use mod_forum\output\subscription_actionbar;
++use moodle_url;
++
++defined('MOODLE_INTERNAL') || die();
++
++global $CFG;
++require_once("{$CFG->dirroot}/mod/forum/lib.php");
++
++/**
++ * Tests for the subscription action bar output component.
++ *
++ * @package    mod_forum
++ * @category   test
++ * @copyright  2026 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ * @covers     \mod_forum\output\subscription_actionbar
++ */
++final class output_subscription_actionbar_test extends \advanced_testcase {
++    /**
++     * Test the data exported for the view/manage subscribers selector.
++     *
++     * The selector is rendered using core/tertiary_navigation_selector, but the exported data must also
++     * remain compatible with core/url_select so that overridden templates keep working.
++     */
++    public function test_export_for_template_view_manage_select(): void {
++        global $PAGE;
++
++        $this->resetAfterTest();
++        $this->setAdminUser();
++
++        $course = $this->getDataGenerator()->create_course();
++        $forum = $this->getDataGenerator()->create_module('forum', [
++            'course' => $course->id,
++            'forcesubscribe' => FORUM_CHOOSESUBSCRIBE,
++        ]);
++
++        $url = new moodle_url('/mod/forum/subscribers.php', ['id' => $forum->id]);
++        $actionbar = new subscription_actionbar($forum->id, $url, $forum, 0);
++        $output = $PAGE->get_renderer('mod_forum');
++        $data = $actionbar->export_for_template($output);
++
++        $this->assertArrayHasKey('subscriptionoptions', $data);
++        $this->assertArrayHasKey('viewandmanageselect', $data);
++
++        $select = $data['viewandmanageselect'];
++
++        // The select_menu (core/tertiary_navigation_selector) data.
++        $this->assertSame('selectviewandmanagesubscribers', $select->name);
++        $this->assertNotEmpty($select->baseid);
++        $this->assertSame(get_string('forum:viewsubscribers', 'forum'), $select->selectedoption);
++        $this->assertSame(get_string('subscribers', 'forum'), $select->label);
++        $this->assertCount(2, $select->options);
++        $this->assertTrue($select->options[0]['selected']);
++        $this->assertFalse($select->options[1]['selected']);
++        $this->assertStringContainsString('edit=off', $select->options[0]['value']);
++        $this->assertStringContainsString('edit=on', $select->options[1]['value']);
++        $this->assertSame($select->options[0]['value'], $select->value);
++
++        // The legacy core/url_select compatible data.
++        $this->assertSame('selectviewandmanagesubscribers', $select->formid);
++        $this->assertNotEmpty($select->id);
++        $this->assertSame(sesskey(), $select->sesskey);
++        $this->assertSame((new moodle_url('/course/jumpto.php'))->out(false), $select->action);
++        $this->assertObjectHasProperty('classes', $select);
++
++        // Both the new and the legacy templates must render the selector.
++        $html = $output->render_from_template('core/tertiary_navigation_selector', $select);
++        $this->assertStringContainsString('tertiary-navigation-selector', $html);
++        $html = $output->render_from_template('core/url_select', $select);
++        $this->assertStringContainsString('id="selectviewandmanagesubscribers"', $html);
++        $this->assertStringContainsString('edit=on', $html);
++
++        // Manage subscribers view.
++        $actionbar = new subscription_actionbar($forum->id, $url, $forum, 1);
++        $data = $actionbar->export_for_template($output);
++        $this->assertArrayNotHasKey('subscriptionoptions', $data);
++        $select = $data['viewandmanageselect'];
++        $this->assertSame(get_string('managesubscriptionson', 'forum'), $select->selectedoption);
++        $this->assertFalse($select->options[0]['selected']);
++        $this->assertTrue($select->options[1]['selected']);
++
++        // Forced subscription: no view/manage selector.
++        $forum->forcesubscribe = FORUM_FORCESUBSCRIBE;
++        $actionbar = new subscription_actionbar($forum->id, $url, $forum, 0);
++        $data = $actionbar->export_for_template($output);
++        $this->assertArrayNotHasKey('viewandmanageselect', $data);
++        $this->assertArrayHasKey('subscriptionoptions', $data);
++    }
++}

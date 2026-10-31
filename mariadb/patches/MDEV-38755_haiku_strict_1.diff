@@ -1,0 +1,35 @@
+diff --git a/sql/item_sum.cc b/sql/item_sum.cc
+index a2a875e2..2250f6d3 100644
+--- a/sql/item_sum.cc
++++ b/sql/item_sum.cc
+@@ -4720,6 +4720,18 @@ Item_func_collect::Item_func_collect(THD *thd, bool is_distinct, Item_func_colle
+ }
+ 
+ 
++bool Item_func_collect::is_null()
++{
++  /*
++    Item_sum::is_null() only returns null_value, which is set by val_str().
++    Evaluate the aggregate first so the NULL state is correct.
++  */
++  String buf;
++  (void) val_str(&buf);
++  return null_value;
++}
++
++
+ String *Item_func_collect::val_str(String *str)
+ {
+   Geometry_buffer buffer;
+diff --git a/sql/item_sum.h b/sql/item_sum.h
+index 540d0a37..0e09fd79 100644
+--- a/sql/item_sum.h
++++ b/sql/item_sum.h
+@@ -2229,6 +2229,7 @@ class Item_func_collect : public Item_sum_str
+ public:
+   Item_func_collect(THD *thd, bool is_distinct, Item *item_par);
+   Item_func_collect(THD *thd, bool is_distinct, Item_func_collect *item);
++  bool is_null() override;
+ 
+ protected:
+   Item *shallow_copy(THD *thd) const override

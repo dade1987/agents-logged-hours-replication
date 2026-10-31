@@ -1,0 +1,78 @@
+# Dashboard-class React/ESM pages load many small unbundled JS module files (investigate bundling/HTTP2)
+
+h2. Problem statement
+
+Dashboard-class pages built on Moodle's React/ESM pipeline (first found on /my/index.php during MDL-89636) load roughly 100 separate small ES module files as individual, unbundled HTTP requests. This is a platform-level characteristic of the ESM/design-system build output, not something specific to the dashboard: @moodlehq/design-system alone contributes about 31 of the files and is used site-wide wherever the design system appears, not just on this page.
+
+Also, on HTTP/1.1, browsers cap concurrent per-host connections at roughly 6, so the ~100 files load in slow serial waves instead of in parallel, adding real, measurable time to any page built on this pipeline.
+
+h2. Current behaviour
+
+A single dashboard page load fetches close to 100 small ES module files (each roughly 1-3KB), none bundled. Breakdown from one real measurement: @moodlehq/design-system about 31 files (site-wide impact, biggest single contributor); @moodle/lms about 42 files (covers core_my's own dashboard components and pre-existing block_timeline view files); Bootstrap internals (util/dom submodules) about 14 files; floating-ui/popperjs/tabbable dependency chain about 9 files.
+
+Some webservers are configured to serve HTTP/1.1 only.
+
+ESM files are already served through a revisioned path ({{/esm/{revision}/{scriptpath}}}, see {{esm_controller.php}}), using the same revision-validity check as core's existing jsrev-based JS caching. When the revision is valid, the response gets a 1-year immutable {{Cache-Control}} header plus an ETag with 304 support; when invalid (or in dev mode), it falls back to a 2-second-expiry path instead. *Confirmed by this investigation: this caching is active and working correctly on a standard install* (see Findings below).
+
+h2. Expected behaviour
+
+This investigation should proceed in the following order, since the candidate mitigations interact and some may make others unnecessary:
+
+# HTTP/2 (or HTTP/3) first: determine whether enabling it on a production-representative server config dramatically reduces or resolves the waterfall, and what server-side changes are actually required to get h2 negotiating correctly.
+# Caching correctness second: confirm whether ESM files are being served with correct revision-based, long-term immutable caching (as already implemented in {{esm_controller.php}}) in the environment under test, and how much that changes the measured cost on a warm/repeat-visit basis versus the cold-cache baseline. Fix this if it is not behaving as designed, before evaluating bundling.
+# Bundling last, and only if still needed after 1 and 2: re-assess whether bundling the ESM build output is still worth pursuing. HTTP/2 is explicitly designed to make many small parallel downloads competitive with (or better than) one large serial download, and bundling would work against the swizzle/theme-override mechanism, which deliberately keeps components as separate modules today. Any bundling recommendation should explicitly weigh that trade-off rather than defaulting to bundling as the fix.
+
+Whichever mitigation(s) from steps 1-3 prove safe and quick to apply should be implemented as part of this issue. Anything that is a bigger undertaking (for example a full production HTTP/2 rollout) should be documented with the investigation's findings and filed as a linked follow-up ticket rather than blocking this one.
+
+h2. Findings and resolution
+
+*1. HTTP/2* -  A genuine PHP-FPM + mpm_event + mod_http2 build was measured: real HTTP/2 confirmed end-to-end ({{curl --http2}}, and the browser's Resource Timing {{nextHopProtocol}} reporting {{h2}} for every request). This is the single largest lever measured in this investigation. It is an infrastructure/webserver-layer change outside Moodle's own codebase (either a PHP-FPM + mpm_event backend migration, or - the standard, lower-risk production pattern - a fronting reverse-proxy/CDN edge that terminates HTTP/2 with the browser and speaks HTTP/1.1 to an unchanged backend); full guidance filed as MDL-89729.
+
+*2. ESM caching* - confirmed already working correctly as designed, no code change needed. Cold-cache (first visit): 89 ESM requests, median last-ESM-response ~18.7s. Warm/repeat visit (normal reload): 0 of 89 ESM files re-transferred over the network (served from disk cache via the existing immutable {{Cache-Control}} + ETag), load event ~900ms.
+
+*3. Bundling* - not pursued; confirmed an antipattern for the current architecture, not merely lower priority. The swizzle/theme-override mechanism works because each component resolves through its own bare specifier in the import map, so a theme can override one component by pointing that one specifier at a different file. Bundling multiple modules together removes that per-specifier override granularity. With caching already effective for repeat visits and HTTP/2 (or a shared cache, see MDL-89729) already addressing cold visits with no architectural cost, bundling's narrow remaining benefit does not justify breaking the override mechanism.
+
+*4. Implemented (this issue)* - {{page_requirements_manager::get_import_map()}} now emits a {{modulepreload}} link for each concrete, active-theme import map entry - {{react}}, {{react-dom}}, {{tabbable}}, {{bootstrap/bootstrap.js}}, and the active theme's design-system bundle - so the browser can start fetching those foundational dependencies in parallel with page parsing instead of only discovering them one import-graph level at a time. The {{modulepreload}} links must be emitted _after_ the {{importmap}} script tag: browsers only honour an import map for bare-specifier resolution if it is registered before the first module-related resource is processed. Final, verified measurement (fresh isolated browser contexts, cold cache, Xdebug off, median of 3 runs, clean console, 89/89 ESM files on every run):
+|| Configuration || Median cold-cache last-ESM-response ||
+| HTTP/1.1, no modulepreload (original baseline) | 18,667 ms |
+| HTTP/1.1, with the modulepreload fix | 17,856 ms (~4.3% faster) |
+| HTTP/2 (PHP-FPM + mpm_event + mod_http2), with the modulepreload fix | 15,882 ms (~11% further, ~15% combined) |
+
+No regression to swizzle/theme-override resolution ({{get_path_for_script()}} untouched) or existing {{import_map}}/{{esm_controller}} PHPUnit coverage. The PHP-FPM + mpm_event + mod_http2 stack itself was also validated against the existing PHPUnit external-services suites (redis, ldap) and Behat (non-JS and JS/Selenium), all passing except two failures independently reproduced as pre-existing under a plain mod_php control build (a solr status-check test blocked by this dev site's default curl-security host/port allowlist, and one AI-provider admin-modal Behat scenario) - neither caused by this issue's changes.
+
+*5. Follow-up filed*: MDL-89729 (linked, Relates) documents the HTTP/2 production rollout (reverse-proxy/CDN termination recommended first, no backend change; PHP-FPM + mpm_event migration as the alternative for self-managed Apache, with the real numbers above), HTTP/3 (guidance only - automatic h2/HTTP-1.1 fallback via {{Alt-Svc}}, no separate Moodle-side work needed), and Varnish/CDN shared-cache guidance (a cookie-stripping fix for the {{/core/esm/}} path, since a shared cache's default cache-key hashing on the session cookie would otherwise fragment the cache per logged-in user, with a reference VCL snippet).
+
+h2. Value
+
+Faster page loads across every ESM/design-system-based page (not only the dashboard) by removing an HTTP/1.1 request-waterfall bottleneck that is currently platform-wide. The improvement should be concretely quantified before and after using real browser Navigation/Resource Timing metrics, not assumed.
+
+h2. Scope
+
+h3. In scope:
+
+* determining whether HTTP/2 (or HTTP/3) materially closes the gap on a production-representative stack and what server config that requires (investigated first);
+* confirming whether ESM files are served with correct revision-based, long-term caching in the environment under test, and fixing that if it is not behaving as designed (investigated second);
+* measuring and documenting the ESM/module request waterfall using the methodology in the Testing Instructions field, across the above phases;
+* only after the above, re-assessing whether bundling ESM build output is still needed, and whether it can be done without breaking swizzle/theme overrides;
+* evaluating lower-cost request-level wins (keep-alive tuning, Early Hints/modulepreload) alongside the above;
+* implementing whichever of the above mitigations is safely achievable within this issue based on the findings.
+
+h3. Out of scope:
+
+The narrow dashboard-only file consolidation already done under MDL-89636 (that was a local tweak, not a fix for this platform-wide issue); a full production HTTP/2 rollout or other infra-level server changes, if the investigation shows that is a bigger undertaking than fits this issue (file as a follow-up instead); redesigning the swizzle/theme-override system itself.
+
+h2. Acceptance criteria
+
+# HTTP/2 (or HTTP/3) is investigated first and measured following the methodology in the Testing Instructions field (XHProf-based profiling ruled unreliable and not used; browser Navigation/Resource Timing APIs used instead; Xdebug off during measurement; at least 3-5 repeated runs with the median reported); a documented recommendation is reached on how much it closes the gap. *Met* - see Findings above.
+# ESM file caching behaviour is checked second: confirmed correct (valid revision, immutable long-term Cache-Control, ETag) or fixed if not, with cold-cache versus warm-cache measurements documented. *Met* - confirmed correct, no fix needed.
+# Bundling feasibility is only assessed after 1 and 2, and the recommendation explicitly weighs HTTP/2's parallel-download model and the swizzle/theme-override constraint rather than defaulting to bundling. *Met* - not pursued, confirmed an antipattern.
+# Findings are documented for each phase: per-run counts of ESM requests, nav.responseEnd, the dashboard AJAX call's start/end time, and the last ESM resource's responseEnd. *Met* - see comments for full per-run figures.
+# Whichever mitigation(s) are determined to be low-risk and implementable within this issue are implemented, and the same measurement methodology shows a measurable reduction in load time and/or request count, with no regression to swizzle/theme-override behaviour. *Met* - modulepreload fix implemented and measured.
+# Any larger-scope mitigation not implemented here (for example a full HTTP/2 rollout) is filed as a linked follow-up ticket with the investigation's findings attached. *Met* - MDL-89729.
+# No regression in existing dashboard/ESM page functionality: existing Behat, PHPUnit, and Jest coverage for touched areas still passes. *Met* - see Findings above.
+
+h2. Notes
+
+Related background (context only, not separately re-investigated or modified by this issue): MDL-87830 (secondary navigation migrated to the design-system nav pill component), MDL-89294 (top navigation migrated to the design-system nav pill component), and MDL-88287 (Timeline block migrated to ESM + React) are prior work that moved components onto the ESM/design-system pipeline and are part of why the file count is now this high.
+
+MDL-89636 already made one narrow, in-scope mitigation of its own (consolidating a couple of its own non-swizzled dashboard component files) - that is a local tweak, not a fix for this platform-wide issue.

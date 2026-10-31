@@ -1,0 +1,94 @@
+diff --git a/mysql-test/main/func_concat.result b/mysql-test/main/func_concat.result
+index 4b91fb97..7c1398e5 100644
+--- a/mysql-test/main/func_concat.result
++++ b/mysql-test/main/func_concat.result
+@@ -304,3 +304,38 @@ f
+ NULL
+ DROP TABLE t1;
+ # End of 10.5 tests
++#
++# MDEV-40673 CONCAT() drops the first argument when it is
++# JSON_TYPE() or GET_FORMAT() (buffer not owned by the String)
++#
++SELECT CONCAT(JSON_TYPE('{"a":1}'), 'X') AS c1;
++c1
++OBJECTX
++SELECT CONCAT(GET_FORMAT(DATE, 'USA'), 'X') AS c2;
++c2
++%m.%d.%YX
++SELECT CONCAT(JSON_TYPE('{"a":1}'), JSON_TYPE('[1]')) AS c3;
++c3
++OBJECTARRAY
++SELECT CONCAT(JSON_TYPE('{"a":1}'), '') AS c4;
++c4
++OBJECT
++SELECT LENGTH(CONCAT(JSON_TYPE('{"a":1}'), 'X')) AS c5;
++c5
++7
++SELECT CONCAT('P', JSON_TYPE('{"a":1}')) AS c6;
++c6
++POBJECT
++CREATE TABLE t1 (j JSON);
++INSERT INTO t1 VALUES ('{"a":1}'), ('[1,2]');
++SELECT CONCAT(JSON_TYPE(j), '.') AS c FROM t1;
++c
++OBJECT.
++ARRAY.
++DROP TABLE t1;
++SET sql_mode='ORACLE';
++SELECT JSON_TYPE('{"a":1}') || 'X' AS c7;
++c7
++OBJECTX
++SET sql_mode=DEFAULT;
++# End of MDEV-40673 tests
+diff --git a/mysql-test/main/func_concat.test b/mysql-test/main/func_concat.test
+index f93b150f..3d409640 100644
+--- a/mysql-test/main/func_concat.test
++++ b/mysql-test/main/func_concat.test
+@@ -281,3 +281,24 @@ SELECT CONCAT_WS(' ', a, b, PASSWORD(c)) AS f FROM t1 GROUP BY f WITH ROLLUP;
+ DROP TABLE t1;
+ 
+ --echo # End of 10.5 tests
++
++--echo #
++--echo # MDEV-40673 CONCAT() drops the first argument when it is
++--echo # JSON_TYPE() or GET_FORMAT() (buffer not owned by the String)
++--echo #
++
++SELECT CONCAT(JSON_TYPE('{"a":1}'), 'X') AS c1;
++SELECT CONCAT(GET_FORMAT(DATE, 'USA'), 'X') AS c2;
++SELECT CONCAT(JSON_TYPE('{"a":1}'), JSON_TYPE('[1]')) AS c3;
++SELECT CONCAT(JSON_TYPE('{"a":1}'), '') AS c4;
++SELECT LENGTH(CONCAT(JSON_TYPE('{"a":1}'), 'X')) AS c5;
++SELECT CONCAT('P', JSON_TYPE('{"a":1}')) AS c6;
++CREATE TABLE t1 (j JSON);
++INSERT INTO t1 VALUES ('{"a":1}'), ('[1,2]');
++SELECT CONCAT(JSON_TYPE(j), '.') AS c FROM t1;
++DROP TABLE t1;
++SET sql_mode='ORACLE';
++SELECT JSON_TYPE('{"a":1}') || 'X' AS c7;
++SET sql_mode=DEFAULT;
++
++--echo # End of MDEV-40673 tests
+diff --git a/sql/item_strfunc.cc b/sql/item_strfunc.cc
+index b4388f12..9f8be019 100644
+--- a/sql/item_strfunc.cc
++++ b/sql/item_strfunc.cc
+@@ -676,6 +676,8 @@ String *Item_func_concat::val_str(String *str)
+ 
+   if (res != str)
+     str->copy_or_move(res->ptr(), res->length(), res->charset());
++  else if (!str->is_alloced() && str->copy())
++    goto null; // args[0] returned a buffer it does not own; take ownership
+ 
+   for (uint i= 1 ; i < arg_count ; i++)
+   {
+@@ -712,6 +714,8 @@ String *Item_func_concat_operator_oracle::val_str(String *str)
+ 
+   if (res != str)
+     str->copy_or_move(res->ptr(), res->length(), res->charset());
++  else if (!str->is_alloced() && str->copy())
++    goto null; // args[i] returned a buffer it does not own; take ownership
+ 
+   for (i++ ; i < arg_count ; i++)
+   {

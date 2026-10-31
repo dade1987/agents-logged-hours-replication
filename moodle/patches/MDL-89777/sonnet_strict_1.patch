@@ -1,0 +1,70 @@
+diff --git a/public/lib/classes/router/middleware/cors_middleware.php b/public/lib/classes/router/middleware/cors_middleware.php
+index b612fc12903..a64b15b1311 100644
+--- a/public/lib/classes/router/middleware/cors_middleware.php
++++ b/public/lib/classes/router/middleware/cors_middleware.php
+@@ -40,23 +40,26 @@ class cors_middleware implements MiddlewareInterface {
+ 
+         $response = $handler->handle($request);
+ 
+-        $cors = in_array('application/json', $accepted);
+-        $cors = $cors || $request->getMethod() === 'OPTIONS';
+-        $cors = $cors || $request->getMethod() === 'HEAD';
+-
+-        if (!$cors) {
+-            return $response;
+-        }
++        $json = in_array('application/json', $accepted)
++            || $request->getMethod() === 'OPTIONS'
++            || $request->getMethod() === 'HEAD';
+ 
+         $routecontext = RouteContext::fromRequest($request);
+         $routingresults = $routecontext->getRoutingResults();
+         $methods = $routingresults->getAllowedMethods();
+ 
+-        return $response
+-            ->withHeader('Content-Type', 'application/json')
+-            ->withHeader('Content-Disposition', 'inline')
++        // CORS headers are always added: browsers commonly send 'Accept: */*', and omitting them blocks the response.
++        $response = $response
+             ->withHeader('Access-Control-Allow-Origin', '*')
+             ->withHeader('Access-Control-Allow-Methods', implode(',', $methods))
+             ->withHeader('Access-Control-Allow-Headers', 'Content-Type, api_key, Authorization');
++
++        if ($json) {
++            $response = $response
++                ->withHeader('Content-Type', 'application/json')
++                ->withHeader('Content-Disposition', 'inline');
++        }
++
++        return $response;
+     }
+ }
+diff --git a/public/lib/tests/router/middleware/cors_middleware_test.php b/public/lib/tests/router/middleware/cors_middleware_test.php
+index 164e2d8230a..5b046ac6005 100644
+--- a/public/lib/tests/router/middleware/cors_middleware_test.php
++++ b/public/lib/tests/router/middleware/cors_middleware_test.php
+@@ -62,8 +62,8 @@ final class cors_middleware_test extends route_testcase {
+     }
+ 
+     /**
+-     * CORS headers are not added for a request which does not accept JSON and is not an OPTIONS
+-     * or HEAD request.
++     * CORS headers are added for a request which does not explicitly accept JSON (e.g. Accept: *\/*),
++     * but the content type is left untouched.
+      */
+     public function test_cors_headers_not_added_for_non_json_request(): void {
+         $app = $this->get_simple_app();
+@@ -79,10 +79,9 @@ final class cors_middleware_test extends route_testcase {
+         $returns = $app->handle($request);
+         $this->assertInstanceOf(ResponseInterface::class, $returns);
+ 
+-        // No CORS headers should have been added, and the response should be returned unmodified.
+-        $this->assertEquals('', $returns->getHeaderLine('Access-Control-Allow-Origin'));
+-        $this->assertEquals('', $returns->getHeaderLine('Access-Control-Allow-Methods'));
+-        $this->assertEquals('', $returns->getHeaderLine('Access-Control-Allow-Headers'));
++        $this->assertEquals('*', $returns->getHeaderLine('Access-Control-Allow-Origin'));
++        $this->assertEquals('GET', $returns->getHeaderLine('Access-Control-Allow-Methods'));
++        $this->assertNotEquals('', $returns->getHeaderLine('Access-Control-Allow-Headers'));
+         $this->assertEquals('', $returns->getHeaderLine('Content-Type'));
+         $this->assertEquals('', $returns->getHeaderLine('Content-Disposition'));
+     }

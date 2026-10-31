@@ -1,0 +1,33 @@
+# Fix purge of missing subplugins
+
+When a plugin and its subplugins are removed from a codebase, the uninstall script is not able to remove subplugin references from the database:
+
+{noformat}> php admin/cli/uninstall_plugins.php --show-missing
+local_dummy     dummy
+        alpha
+        beta
+> php admin/cli/uninstall_plugins.php --purge-missing
+Will be uninstalled: local_dummy        dummy
+Can not be uninstalled:         alpha
+Can not be uninstalled:         beta
+{noformat}
+
+
+
+*Replication steps*
+
+# Install test plugin that registers subplugins and webservices
+{noformat} git clone -b main git@github.com:djarran/moodle-local_dummy.git public/local/dummy{noformat}
+# Upgrade site
+# Confirm that new external services exist:
+{code:sql}SELECT * FROM mdl_external_functions WHERE "name" LIKE '%dummy%';{code}
+# Remove plugin from codebase
+# Go to page {{admin/plugins.php}}
+# Confirm that the two subplugins cannot be uninstalled
+!image-20260707-021725.png|width=526,alt="image-20260707-021725.png"!
+# Run CLI scripts
+{noformat}php admin/cli/uninstall_plugins.php --show-missing
+php admin/cli/uninstall_plugins.php --purge-missing
+php admin/cli/uninstall_plugins.php --purge-missing --run{noformat}
+# Confirm you see the same output as in description above
+# Confirm that subplugin’s external services still exist

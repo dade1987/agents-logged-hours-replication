@@ -1,0 +1,170 @@
+diff --git a/mysql-test/suite/innodb_gis/r/rtree_lock_wait_rescan.result b/mysql-test/suite/innodb_gis/r/rtree_lock_wait_rescan.result
+new file mode 100644
+index 00000000..87bfa125
+--- /dev/null
++++ b/mysql-test/suite/innodb_gis/r/rtree_lock_wait_rescan.result
+@@ -0,0 +1,38 @@
++#
++# MDEV-40404 Assertion !lock.is_locked_or_waiting() failed
++# in buf_page_t::init() on R-tree search after lock wait
++#
++CREATE TABLE t1 (
++id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
++pt POINT NOT NULL,
++SPATIAL INDEX(pt)
++) ENGINE=InnoDB;
++CREATE PROCEDURE p1(IN imax INT)
++BEGIN
++DECLARE i INT DEFAULT 0;
++DECLARE CONTINUE HANDLER FOR SQLEXCEPTION BEGIN END;
++SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE;
++SET SESSION autocommit = 0;
++WHILE i < imax DO
++INSERT INTO t1 (pt) VALUES (ST_GeomFromText(CONCAT('POINT(', FLOOR(RAND() * 10), ' ', FLOOR(RAND() * 10), ')')));
++SELECT id, ST_AsText(pt) FROM t1 WHERE ST_Within(pt, ST_GeomFromText('POLYGON((0 0, 100 0, 100 100, 0 100, 0 0))')) LIMIT 3;
++IF i MOD 5 = 4 THEN
++ROLLBACK;
++END IF;
++SET i = i + 1;
++END WHILE;
++ROLLBACK;
++END$$
++connect  con1,localhost,root,,test;
++connect  con2,localhost,root,,test;
++connection con1;
++CALL p1(5000);
++connection con2;
++CALL p1(5000);
++connection con1;
++connection con2;
++connection default;
++disconnect con1;
++disconnect con2;
++DROP PROCEDURE p1;
++DROP TABLE t1;
+diff --git a/mysql-test/suite/innodb_gis/t/rtree_lock_wait_rescan.test b/mysql-test/suite/innodb_gis/t/rtree_lock_wait_rescan.test
+new file mode 100644
+index 00000000..13d4fa20
+--- /dev/null
++++ b/mysql-test/suite/innodb_gis/t/rtree_lock_wait_rescan.test
+@@ -0,0 +1,52 @@
++--source include/have_innodb.inc
++--source include/big_test.inc
++
++--echo #
++--echo # MDEV-40404 Assertion !lock.is_locked_or_waiting() failed
++--echo # in buf_page_t::init() on R-tree search after lock wait
++--echo #
++
++CREATE TABLE t1 (
++id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
++pt POINT NOT NULL,
++SPATIAL INDEX(pt)
++) ENGINE=InnoDB;
++
++delimiter $$;
++CREATE PROCEDURE p1(IN imax INT)
++BEGIN
++DECLARE i INT DEFAULT 0;
++DECLARE CONTINUE HANDLER FOR SQLEXCEPTION BEGIN END;
++SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE;
++SET SESSION autocommit = 0;
++WHILE i < imax DO
++INSERT INTO t1 (pt) VALUES (ST_GeomFromText(CONCAT('POINT(', FLOOR(RAND() * 10), ' ', FLOOR(RAND() * 10), ')')));
++SELECT id, ST_AsText(pt) FROM t1 WHERE ST_Within(pt, ST_GeomFromText('POLYGON((0 0, 100 0, 100 100, 0 100, 0 0))')) LIMIT 3;
++IF i MOD 5 = 4 THEN
++ROLLBACK;
++END IF;
++SET i = i + 1;
++END WHILE;
++ROLLBACK;
++END$$
++delimiter ;$$
++
++--connect (con1,localhost,root,,test)
++--connect (con2,localhost,root,,test)
++--connection con1
++--disable_result_log
++--send CALL p1(5000)
++--connection con2
++--disable_result_log
++--send CALL p1(5000)
++--connection con1
++--reap
++--enable_result_log
++--connection con2
++--reap
++--enable_result_log
++--connection default
++--disconnect con1
++--disconnect con2
++DROP PROCEDURE p1;
++DROP TABLE t1;
+diff --git a/storage/innobase/row/row0sel.cc b/storage/innobase/row/row0sel.cc
+index f56810e9..4ccf73be 100644
+--- a/storage/innobase/row/row0sel.cc
++++ b/storage/innobase/row/row0sel.cc
+@@ -1206,6 +1206,11 @@ sel_set_rtr_rec_lock(
+ 
+ 	if (err == DB_LOCK_WAIT) {
+ re_scan:
++		/* Release the latch on the private copy of the page.
++		rtr_cur_search_with_match() will reinitialize
++		match->block in rtr_init_match(), which requires
++		that the block is not latched. */
++		match->block->page.lock.x_unlock();
+ 		mtr->commit();
+ 		trx->error_state = err;
+ 		thr->lock_state = QUE_THR_LOCK_ROW;
+@@ -1217,7 +1222,7 @@ sel_set_rtr_rec_lock(
+ 			if (!match->valid && match->matched_recs->empty()) {
+ 				mysql_mutex_unlock(&match->rtr_match_mutex);
+ 				err = DB_RECORD_NOT_FOUND;
+-				goto func_end;
++				goto func_end_unlatched;
+ 			}
+ 			mysql_mutex_unlock(&match->rtr_match_mutex);
+ 
+@@ -1228,12 +1233,12 @@ sel_set_rtr_rec_lock(
+ 				btr_pcur_get_block(pcur)->zip_size(),
+ 				RW_X_LATCH, NULL, BUF_GET, mtr, &err);
+ 			if (!cur_block) {
+-				goto func_end;
++				goto func_end_unlatched;
+ 			}
+ 			buf_page_make_young_if_needed(&cur_block->page);
+ 		} else {
+ 			mtr->start();
+-			goto func_end;
++			goto func_end_unlatched;
+ 		}
+ 
+ 		DEBUG_SYNC_C("rtr_set_lock_wait");
+@@ -1243,7 +1248,7 @@ sel_set_rtr_rec_lock(
+ 			mtr->commit();
+ 			mtr->start();
+ 			err = DB_RECORD_NOT_FOUND;
+-			goto func_end;
++			goto func_end_unlatched;
+ 		}
+ 
+ 		match->matched_recs->clear();
+@@ -1256,6 +1261,10 @@ sel_set_rtr_rec_lock(
+ 			&pcur->btr_cur.page_cur,
+ 			pcur->btr_cur.rtr_info);
+ 
++		/* Re-acquire the latch on the private copy of the page
++		for the lock_sec_rec_read_check_and_lock() calls. */
++		match->block->page.lock.x_lock();
++
+ 		if (!page_is_leaf(buf_block_get_frame(cur_block))) {
+ 			/* Page got splitted and promoted (only for
+ 			root page it is possible).  Release the
+@@ -1313,6 +1322,7 @@ sel_set_rtr_rec_lock(
+ 
+ func_end:
+ 	match->block->page.lock.x_unlock();
++func_end_unlatched:
+ 	if (heap != NULL) {
+ 		mem_heap_free(heap);
+ 	}

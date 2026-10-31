@@ -1,0 +1,128 @@
+diff --git a/mysql-test/suite/innodb_gis/r/rtree_lock_wait_rescan.result b/mysql-test/suite/innodb_gis/r/rtree_lock_wait_rescan.result
+new file mode 100644
+index 00000000..68990928
+--- /dev/null
++++ b/mysql-test/suite/innodb_gis/r/rtree_lock_wait_rescan.result
+@@ -0,0 +1,38 @@
++#
++# MDEV-40404 Assertion !lock.is_locked_or_waiting() failed in
++# buf_page_t::init() on rtr_init_match() after a lock wait
++#
++CREATE TABLE t1 (
++id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
++pt POINT NOT NULL,
++SPATIAL INDEX(pt)
++) ENGINE=InnoDB;
++CREATE PROCEDURE p1(IN imax INT)
++BEGIN
++DECLARE i INT DEFAULT 0;
++DECLARE CONTINUE HANDLER FOR SQLEXCEPTION BEGIN END;
++SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE;
++SET SESSION autocommit = 0;
++WHILE i < imax DO
++INSERT INTO t1 (pt) VALUES (ST_GeomFromText(CONCAT('POINT(', FLOOR(RAND() * 10), ' ', FLOOR(RAND() * 10), ')')));
++SELECT id, ST_AsText(pt) FROM t1 WHERE ST_Within(pt, ST_GeomFromText('POLYGON((0 0, 100 0, 100 100, 0 100, 0 0))')) LIMIT 3;
++IF i MOD 5 = 4 THEN
++ROLLBACK;
++END IF;
++SET i = i + 1;
++END WHILE;
++ROLLBACK;
++END$$
++connect  con1,localhost,root,,test;
++connect  con2,localhost,root,,test;
++connection con1;
++CALL p1(2000);
++connection con2;
++CALL p1(2000);
++connection con1;
++connection con2;
++connection default;
++disconnect con1;
++disconnect con2;
++DROP PROCEDURE p1;
++DROP TABLE t1;
+diff --git a/mysql-test/suite/innodb_gis/t/rtree_lock_wait_rescan.test b/mysql-test/suite/innodb_gis/t/rtree_lock_wait_rescan.test
+new file mode 100644
+index 00000000..dba7f364
+--- /dev/null
++++ b/mysql-test/suite/innodb_gis/t/rtree_lock_wait_rescan.test
+@@ -0,0 +1,51 @@
++--source include/have_innodb.inc
++
++--echo #
++--echo # MDEV-40404 Assertion !lock.is_locked_or_waiting() failed in
++--echo # buf_page_t::init() on rtr_init_match() after a lock wait
++--echo #
++
++CREATE TABLE t1 (
++  id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
++  pt POINT NOT NULL,
++  SPATIAL INDEX(pt)
++) ENGINE=InnoDB;
++
++delimiter $$;
++CREATE PROCEDURE p1(IN imax INT)
++BEGIN
++  DECLARE i INT DEFAULT 0;
++  DECLARE CONTINUE HANDLER FOR SQLEXCEPTION BEGIN END;
++  SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE;
++  SET SESSION autocommit = 0;
++  WHILE i < imax DO
++    INSERT INTO t1 (pt) VALUES (ST_GeomFromText(CONCAT('POINT(', FLOOR(RAND() * 10), ' ', FLOOR(RAND() * 10), ')')));
++    SELECT id, ST_AsText(pt) FROM t1 WHERE ST_Within(pt, ST_GeomFromText('POLYGON((0 0, 100 0, 100 100, 0 100, 0 0))')) LIMIT 3;
++    IF i MOD 5 = 4 THEN
++      ROLLBACK;
++    END IF;
++    SET i = i + 1;
++  END WHILE;
++  ROLLBACK;
++END$$
++delimiter ;$$
++
++--connect (con1,localhost,root,,test)
++--connect (con2,localhost,root,,test)
++--connection con1
++--disable_result_log
++--send CALL p1(2000)
++--connection con2
++--disable_result_log
++--send CALL p1(2000)
++--connection con1
++--reap
++--enable_result_log
++--connection con2
++--reap
++--enable_result_log
++--connection default
++--disconnect con1
++--disconnect con2
++DROP PROCEDURE p1;
++DROP TABLE t1;
+diff --git a/storage/innobase/row/row0sel.cc b/storage/innobase/row/row0sel.cc
+index f56810e9..c6d12428 100644
+--- a/storage/innobase/row/row0sel.cc
++++ b/storage/innobase/row/row0sel.cc
+@@ -1249,6 +1249,13 @@ sel_set_rtr_rec_lock(
+ 		match->matched_recs->clear();
+ 		// FIXME: check for !cur_block
+ 
++		/* rtr_cur_search_with_match() will reinitialize
++		match->block via rtr_init_match(), which requires that
++		match->block->page.lock is not held by anyone, including
++		ourselves. Release the latch for the duration of the
++		re-search and reacquire it afterwards. */
++		match->block->page.lock.x_unlock();
++
+ 		rtr_cur_search_with_match(
+ 			cur_block, index,
+ 			pcur->btr_cur.rtr_info->search_tuple,
+@@ -1256,6 +1263,8 @@ sel_set_rtr_rec_lock(
+ 			&pcur->btr_cur.page_cur,
+ 			pcur->btr_cur.rtr_info);
+ 
++		match->block->page.lock.x_lock();
++
+ 		if (!page_is_leaf(buf_block_get_frame(cur_block))) {
+ 			/* Page got splitted and promoted (only for
+ 			root page it is possible).  Release the

@@ -1,0 +1,82 @@
+diff --git a/mysql-test/main/func_kdf.result b/mysql-test/main/func_kdf.result
+index e334125c..81093f15 100644
+--- a/mysql-test/main/func_kdf.result
++++ b/mysql-test/main/func_kdf.result
+@@ -183,3 +183,35 @@ KDF('secret','salt') IS NOT NULL
+ #
+ # End of 11.4 tests
+ #
++#
++# MDEV-41094 KDF() silently reduces large PBKDF2 iteration counts
++#            to weak 32-bit aliases
++#
++SELECT HEX(KDF('foo','bar',4294968296,'pbkdf2_hmac',256));
++HEX(KDF('foo','bar',4294968296,'pbkdf2_hmac',256))
++NULL
++Warnings:
++Warning	3047	Invalid argument error: 4294968296 in function kdf.
++SELECT HEX(KDF('foo','bar',2147483648,'pbkdf2_hmac',256));
++HEX(KDF('foo','bar',2147483648,'pbkdf2_hmac',256))
++NULL
++Warnings:
++Warning	3047	Invalid argument error: 2147483648 in function kdf.
++SELECT HEX(KDF('foo','bar',9223372036854775807,'pbkdf2_hmac',256));
++HEX(KDF('foo','bar',9223372036854775807,'pbkdf2_hmac',256))
++NULL
++Warnings:
++Warning	3047	Invalid argument error: 9223372036854775807 in function kdf.
++SELECT HEX(KDF('foo','bar',18446744073709551615,'pbkdf2_hmac',256));
++HEX(KDF('foo','bar',18446744073709551615,'pbkdf2_hmac',256))
++NULL
++Warnings:
++Warning	3047	Invalid argument error: 18446744073709551615 in function kdf.
++SELECT HEX(KDF('foo','bar',4294968296)) = HEX(KDF('foo','bar',1000));
++HEX(KDF('foo','bar',4294968296)) = HEX(KDF('foo','bar',1000))
++NULL
++Warnings:
++Warning	3047	Invalid argument error: 4294968296 in function kdf.
++#
++# End of 12.3 tests
++#
+diff --git a/mysql-test/main/func_kdf.test b/mysql-test/main/func_kdf.test
+index 279323ed..14f71970 100644
+--- a/mysql-test/main/func_kdf.test
++++ b/mysql-test/main/func_kdf.test
+@@ -76,3 +76,18 @@ SELECT KDF('secret','salt') IS NOT NULL;
+ --echo # End of 11.4 tests
+ --echo #
+ 
++
++--echo #
++--echo # MDEV-41094 KDF() silently reduces large PBKDF2 iteration counts
++--echo #            to weak 32-bit aliases
++--echo #
++# 2^32+1000 must not alias to 1000 iterations
++SELECT HEX(KDF('foo','bar',4294968296,'pbkdf2_hmac',256));
++SELECT HEX(KDF('foo','bar',2147483648,'pbkdf2_hmac',256));
++SELECT HEX(KDF('foo','bar',9223372036854775807,'pbkdf2_hmac',256));
++SELECT HEX(KDF('foo','bar',18446744073709551615,'pbkdf2_hmac',256));
++SELECT HEX(KDF('foo','bar',4294968296)) = HEX(KDF('foo','bar',1000));
++
++--echo #
++--echo # End of 12.3 tests
++--echo #
+diff --git a/sql/item_strfunc.cc b/sql/item_strfunc.cc
+index 34e47988..c0511c7e 100644
+--- a/sql/item_strfunc.cc
++++ b/sql/item_strfunc.cc
+@@ -572,7 +572,13 @@ String *Item_func_kdf::val_str(String *buf)
+   else
+   {
+     longlong iter= arg_count > 2 ? args[2]->val_int() : 1000;
+-    if (iter <= 0)
++    /*
++      PKCS5_PBKDF2_HMAC() takes the iteration count as an int. A value
++      that does not fit into an int must be rejected, otherwise a large
++      iteration count would be silently truncated to a (much smaller)
++      32-bit alias, deriving a key with a weaker work factor than requested.
++    */
++    if (iter <= 0 || iter > INT_MAX32)
+     {
+       if (!args[2]->null_value)
+         invalid_argument_error(func_name(),

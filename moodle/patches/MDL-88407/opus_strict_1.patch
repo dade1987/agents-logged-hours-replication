@@ -1,0 +1,103 @@
+diff --git a/public/grade/classes/penalty_container.php b/public/grade/classes/penalty_container.php
+index c545cd2c37e..ce2e35591a6 100644
+--- a/public/grade/classes/penalty_container.php
++++ b/public/grade/classes/penalty_container.php
+@@ -104,10 +104,14 @@ final class penalty_container {
+     /**
+      * Get the grade before penalties are applied.
+      *
++     * This is the raw grade, as the penalised grade is saved back as the raw grade of the grade item.
++     * Using the final grade would cause grade item adjustments (such as multiplicator and offset)
++     * to be applied twice.
++     *
+      * @return float The grade before penalties are applied
+      */
+     public function get_grade_before_penalties(): float {
+-        return $this->gradegrade->finalgrade;
++        return (float) $this->gradegrade->rawgrade;
+     }
+ 
+     /**
+diff --git a/public/mod/assign/tests/penalty_test.php b/public/mod/assign/tests/penalty_test.php
+index 6281d9da0f0..b7ed889aabc 100644
+--- a/public/mod/assign/tests/penalty_test.php
++++ b/public/mod/assign/tests/penalty_test.php
+@@ -276,4 +276,78 @@ final class penalty_test extends \advanced_testcase {
+         // Check the grade.
+         $this->assertEquals(50, $gradeitem->get_final($student->id)->finalgrade);
+     }
++
++    /**
++     * Data provider for test_apply_penalty_with_grade_item_adjustments.
++     *
++     * @return array
++     */
++    public static function apply_penalty_with_adjustments_provider(): array {
++        return [
++            // Submission date, multfactor, plusfactor, expected final grade.
++            'On time, multiplicator' => [DAYSECS, 1.5, 0, 75],
++            'Late, multiplicator' => [DAYSECS + 1, 1.5, 0, 45],
++            'On time, offset' => [DAYSECS, 1.0, 10, 60],
++            'Late, offset' => [DAYSECS + 1, 1.0, 10, 40],
++            'On time, multiplicator and offset' => [DAYSECS, 1.5, 10, 85],
++            'Late, multiplicator and offset' => [DAYSECS + 1, 1.5, 10, 55],
++        ];
++    }
++
++    /**
++     * Test that grade item multiplicator and offset are applied only once when penalty is enabled.
++     *
++     * @dataProvider apply_penalty_with_adjustments_provider
++     * @covers \core_grades\penalty_manager::apply_grade_penalty_to_user
++     *
++     * @param int $submissiondate The submission date.
++     * @param float $multfactor The grade item multiplicator.
++     * @param float $plusfactor The grade item offset.
++     * @param float $expectedgrade The expected final grade.
++     */
++    public function test_apply_penalty_with_grade_item_adjustments(
++        int $submissiondate,
++        float $multfactor,
++        float $plusfactor,
++        float $expectedgrade,
++    ): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        [$course, $student] = $this->set_up_test();
++
++        $generator = $this->getDataGenerator();
++        $assignmentgenerator = $generator->get_plugin_generator('mod_assign');
++        $instance = $assignmentgenerator->create_instance([
++            'course' => $course->id,
++            'duedate' => DAYSECS,
++            'assignsubmission_onlinetext_enabled' => 1,
++            'gradepenalty' => 1,
++            'grade' => 200,
++        ]);
++        $cm = get_coursemodule_from_instance('assign', $instance->id);
++        $context = \context_module::instance($cm->id);
++        $assign = new mod_assign_testable_assign($context, $cm, $course);
++
++        $gradeitemparams = [
++            'courseid' => $course->id,
++            'itemtype' => 'mod',
++            'itemmodule' => 'assign',
++            'iteminstance' => $instance->id,
++            'itemnumber' => 0,
++        ];
++        $gradeitem = grade_item::fetch($gradeitemparams);
++        $gradeitem->multfactor = $multfactor;
++        $gradeitem->plusfactor = $plusfactor;
++        $gradeitem->update();
++
++        $this->add_submission($student, $assign, 'Sample text');
++        $this->submit_for_grading($student, $assign);
++        $DB->set_field('assign_submission', 'timemodified', $submissiondate, ['userid' => $student->id]);
++        $assign->testable_apply_grade_to_user((object)['grade' => 50], $student->id, 0);
++        $this->assertDebuggingCalledCount(2);
++
++        $gradeitem = grade_item::fetch($gradeitemparams);
++        $this->assertEquals($expectedgrade, $gradeitem->get_final($student->id)->finalgrade);
++    }
+ }

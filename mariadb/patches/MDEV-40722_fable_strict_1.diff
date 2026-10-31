@@ -1,0 +1,159 @@
+diff --git a/mysql-test/suite/compat/oracle/r/sp-package-security.result b/mysql-test/suite/compat/oracle/r/sp-package-security.result
+index c08b78cb..456f540e 100644
+--- a/mysql-test/suite/compat/oracle/r/sp-package-security.result
++++ b/mysql-test/suite/compat/oracle/r/sp-package-security.result
+@@ -320,3 +320,30 @@ SESSION_USER()	CURRENT_USER()	msg
+ root@localhost	root@localhost	p1.p1
+ DROP PACKAGE p1;
+ DROP USER xxx@localhost;
++#
++# MDEV-40722 DROP PACKAGE leaves PACKAGE BODY grant in mysql.procs_priv
++#
++CREATE PACKAGE pkg1 AS
++FUNCTION f RETURN VARCHAR2(64);
++END
++$$
++CREATE PACKAGE BODY pkg1 AS
++FUNCTION f RETURN VARCHAR2(64) AS
++BEGIN RETURN 'benign';
++END;
++END
++$$
++CREATE USER reader@localhost;
++GRANT EXECUTE ON PACKAGE test.pkg1 TO reader@localhost;
++GRANT EXECUTE ON PACKAGE BODY test.pkg1 TO reader@localhost;
++SELECT host,db,user,routine_name,routine_type,proc_priv FROM mysql.procs_priv ORDER BY routine_type;
++host	db	user	routine_name	routine_type	proc_priv
++localhost	test	reader	pkg1	PACKAGE	Execute
++localhost	test	reader	pkg1	PACKAGE BODY	Execute
++DROP PACKAGE pkg1;
++SELECT host,db,user,routine_name,routine_type,proc_priv FROM mysql.procs_priv ORDER BY routine_type;
++host	db	user	routine_name	routine_type	proc_priv
++SHOW GRANTS FOR reader@localhost;
++Grants for reader@localhost
++GRANT USAGE ON *.* TO `reader`@`localhost`
++DROP USER reader@localhost;
+diff --git a/mysql-test/suite/compat/oracle/t/sp-package-security.test b/mysql-test/suite/compat/oracle/t/sp-package-security.test
+index 583f70af..2068e473 100644
+--- a/mysql-test/suite/compat/oracle/t/sp-package-security.test
++++ b/mysql-test/suite/compat/oracle/t/sp-package-security.test
+@@ -330,3 +330,29 @@ DELIMITER ;$$
+ CALL p1.p1;
+ DROP PACKAGE p1;
+ DROP USER xxx@localhost;
++
++
++--echo #
++--echo # MDEV-40722 DROP PACKAGE leaves PACKAGE BODY grant in mysql.procs_priv
++--echo #
++
++DELIMITER $$;
++CREATE PACKAGE pkg1 AS
++  FUNCTION f RETURN VARCHAR2(64);
++END
++$$
++CREATE PACKAGE BODY pkg1 AS
++  FUNCTION f RETURN VARCHAR2(64) AS
++    BEGIN RETURN 'benign';
++  END;
++END
++$$
++DELIMITER ;$$
++CREATE USER reader@localhost;
++GRANT EXECUTE ON PACKAGE test.pkg1 TO reader@localhost;
++GRANT EXECUTE ON PACKAGE BODY test.pkg1 TO reader@localhost;
++SELECT host,db,user,routine_name,routine_type,proc_priv FROM mysql.procs_priv ORDER BY routine_type;
++DROP PACKAGE pkg1;
++SELECT host,db,user,routine_name,routine_type,proc_priv FROM mysql.procs_priv ORDER BY routine_type;
++SHOW GRANTS FOR reader@localhost;
++DROP USER reader@localhost;
+diff --git a/sql/sql_acl.cc b/sql/sql_acl.cc
+index 3dc5f391..c24e886e 100644
+--- a/sql/sql_acl.cc
++++ b/sql/sql_acl.cc
+@@ -11778,29 +11778,15 @@ Silence_routine_definer_errors::handle_condition(
+     < 0         Error. Error message not yet sent.
+ */
+ 
+-bool sp_revoke_privileges(THD *thd, const char *sp_db, const char *sp_name,
+-                          const Sp_handler *sph)
++static void sp_revoke_privileges_from_hash(THD *thd, TABLE *procs_priv_table,
++                                           const char *sp_db,
++                                           const char *sp_name,
++                                           const Sp_handler *sph)
+ {
+   uint counter, revoked;
+-  int result;
+   HASH *hash= sph->get_priv_hash();
+-  Silence_routine_definer_errors error_handler;
+-  DBUG_ENTER("sp_revoke_privileges");
+-
+-  Grant_tables tables;
+-  const uint tables_to_open= Table_user | Table_db | Table_tables_priv |
+-                             Table_columns_priv | Table_procs_priv |
+-                             Table_proxies_priv | Table_roles_mapping;
+-  if ((result= tables.open_and_lock(thd, tables_to_open, TL_WRITE)))
+-    DBUG_RETURN(result != 1);
+ 
+-  DBUG_ASSERT(!thd->is_current_stmt_binlog_format_row());
+-
+-  /* Be sure to pop this before exiting this scope! */
+-  thd->push_internal_handler(&error_handler);
+-
+-  mysql_rwlock_wrlock(&LOCK_grant);
+-  mysql_mutex_lock(&acl_cache->lock);
++  mysql_mutex_assert_owner(&acl_cache->lock);
+ 
+   /* Remove procedure access */
+   do
+@@ -11816,8 +11802,7 @@ bool sp_revoke_privileges(THD *thd, const char *sp_db, const char *sp_name,
+ 	lex_user.user.length= strlen(grant_proc->user);
+         lex_user.host.str= safe_str(grant_proc->host.hostname);
+         lex_user.host.length= strlen(lex_user.host.str);
+-        if (replace_routine_table(thd, grant_proc,
+-                                  tables.procs_priv_table().table(), lex_user,
++        if (replace_routine_table(thd, grant_proc, procs_priv_table, lex_user,
+                                   grant_proc->db, grant_proc->tname,
+                                   sph, ALL_KNOWN_ACL, 1) == 0)
+ 	{
+@@ -11828,6 +11813,40 @@ bool sp_revoke_privileges(THD *thd, const char *sp_db, const char *sp_name,
+       counter++;
+     }
+   } while (revoked);
++}
++
++
++bool sp_revoke_privileges(THD *thd, const char *sp_db, const char *sp_name,
++                          const Sp_handler *sph)
++{
++  int result;
++  Silence_routine_definer_errors error_handler;
++  DBUG_ENTER("sp_revoke_privileges");
++
++  Grant_tables tables;
++  const uint tables_to_open= Table_user | Table_db | Table_tables_priv |
++                             Table_columns_priv | Table_procs_priv |
++                             Table_proxies_priv | Table_roles_mapping;
++  if ((result= tables.open_and_lock(thd, tables_to_open, TL_WRITE)))
++    DBUG_RETURN(result != 1);
++
++  DBUG_ASSERT(!thd->is_current_stmt_binlog_format_row());
++
++  /* Be sure to pop this before exiting this scope! */
++  thd->push_internal_handler(&error_handler);
++
++  mysql_rwlock_wrlock(&LOCK_grant);
++  mysql_mutex_lock(&acl_cache->lock);
++
++  sp_revoke_privileges_from_hash(thd, tables.procs_priv_table().table(),
++                                 sp_db, sp_name, sph);
++  /*
++    "DROP PACKAGE pkg" implicitly performs "DROP PACKAGE BODY pkg",
++    so privileges granted on the PACKAGE BODY must be revoked as well.
++  */
++  if (sph->type() == SP_TYPE_PACKAGE)
++    sp_revoke_privileges_from_hash(thd, tables.procs_priv_table().table(),
++                                   sp_db, sp_name, &sp_handler_package_body);
+ 
+   mysql_mutex_unlock(&acl_cache->lock);
+   mysql_rwlock_unlock(&LOCK_grant);

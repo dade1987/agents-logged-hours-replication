@@ -1,0 +1,61 @@
+diff --git a/public/lib/form/duration.php b/public/lib/form/duration.php
+index f21cec34eb7..5d5a1146ae2 100644
+--- a/public/lib/form/duration.php
++++ b/public/lib/form/duration.php
+@@ -107,6 +107,10 @@ class MoodleQuickForm_duration extends MoodleQuickForm_group {
+                 $displayunits[$requestedunit] = $availableunits[$requestedunit];
+             }
+             krsort($displayunits, SORT_NUMERIC);
++            if (!array_key_exists($this->_options['defaultunit'], $displayunits)) {
++                throw new coding_exception('The defaultunit option (' . $this->_options['defaultunit'] .
++                        ') must be one of the units specified in the units option of the duration form field.');
++            }
+             $this->_options['units'] = $displayunits;
+         }
+     }
+@@ -299,7 +303,9 @@ class MoodleQuickForm_duration extends MoodleQuickForm_group {
+         if ($this->_options['optional'] && empty($valuearray['enabled'])) {
+             return $this->_prepareValue(0, $assoc);
+         }
+-        return $this->_prepareValue(
+-                (int) round($valuearray['number'] * $valuearray['timeunit']), $assoc);
++        // A disabled child control is not submitted, so fall back to sensible defaults.
++        $number = $valuearray['number'] ?? 0;
++        $timeunit = $valuearray['timeunit'] ?? $this->_options['defaultunit'];
++        return $this->_prepareValue((int) round($number * $timeunit), $assoc);
+     }
+ }
+diff --git a/public/lib/form/tests/duration_test.php b/public/lib/form/tests/duration_test.php
+index d225e45425b..b65e2d6449d 100644
+--- a/public/lib/form/tests/duration_test.php
++++ b/public/lib/form/tests/duration_test.php
+@@ -81,6 +81,29 @@ final class duration_test extends \basic_testcase {
+         $this->assertStringNotContainsString('value="3600"', $html);
+     }
+ 
++    /**
++     * Test the constructor rejects a defaultunit that is not in the restricted units.
++     */
++    public function test_constructor_rejects_defaultunit_not_in_units(): void {
++        $mform = $this->get_test_form();
++        $this->expectException(\coding_exception::class);
++        $mform->addElement('duration', 'testel', null, ['units' => [DAYSECS, WEEKSECS]]);
++    }
++
++    /**
++     * Test exportValue copes when the timeunit (and number) were not submitted, e.g. disabled controls.
++     */
++    public function test_export_value_missing_timeunit(): void {
++        $mform = $this->get_test_form();
++        $el = $mform->addElement('duration', 'testel', null, ['defaultunit' => HOURSECS]);
++
++        $values = ['testel' => ['number' => '2']];
++        $this->assertEquals(2 * HOURSECS, $el->exportValue($values));
++
++        $values = ['testel' => ['timeunit' => DAYSECS]];
++        $this->assertEquals(0, $el->exportValue($values));
++    }
++
+     /**
+      * Testcase for testing units (seconds, minutes, hours and days)
+      */

@@ -1,0 +1,136 @@
+diff --git a/mysql-test/suite/compat/oracle/r/func_to_date.result b/mysql-test/suite/compat/oracle/r/func_to_date.result
+index fc40cbb8..4003978b 100644
+--- a/mysql-test/suite/compat/oracle/r/func_to_date.result
++++ b/mysql-test/suite/compat/oracle/r/func_to_date.result
+@@ -960,4 +960,58 @@ t
+ NULL
+ Warnings:
+ Warning	1411	Incorrect datetime value: '-2024-05-10' for function to_date
++#
++# MDEV-41657 TO_DATE no longer works as a variable
++#
++SET sql_mode=DEFAULT;
++SET @to_date='2001-01-01';
++SELECT @to_date;
++@to_date
++2001-01-01
++CREATE TABLE t1 (to_date DATE, from_date DATE);
++INSERT INTO t1 VALUES ('2001-01-02','2001-01-01');
++SELECT to_date, from_date FROM t1;
++to_date	from_date
++2001-01-02	2001-01-01
++SELECT t1.to_date FROM t1 WHERE to_date > from_date;
++to_date
++2001-01-02
++DROP TABLE t1;
++CREATE PROCEDURE p1()
++BEGIN
++DECLARE to_date DATE DEFAULT '2001-01-03';
++SELECT to_date;
++END;
++$$
++CALL p1;
++to_date
++2001-01-03
++DROP PROCEDURE p1;
++SET sql_mode=ORACLE;
++SET @to_date='2001-01-01';
++SELECT @to_date;
++@to_date
++2001-01-01
++CREATE TABLE t1 (to_date DATE, from_date DATE);
++INSERT INTO t1 VALUES ('2001-01-02','2001-01-01');
++SELECT to_date, from_date FROM t1;
++to_date	from_date
++2001-01-02	2001-01-01
++SELECT t1.to_date FROM t1 WHERE to_date > from_date;
++to_date
++2001-01-02
++DROP TABLE t1;
++CREATE PROCEDURE p1 AS
++to_date DATE := '2001-01-03';
++BEGIN
++SELECT to_date;
++END;
++$$
++CALL p1;
++to_date
++2001-01-03
++DROP PROCEDURE p1;
++SELECT TO_DATE('2001-01-04','YYYY-MM-DD') AS t;
++t
++2001-01-04 00:00:00
+ # End of 12.3 tests
+diff --git a/mysql-test/suite/compat/oracle/t/func_to_date.test b/mysql-test/suite/compat/oracle/t/func_to_date.test
+index b3894243..a28bdc6d 100644
+--- a/mysql-test/suite/compat/oracle/t/func_to_date.test
++++ b/mysql-test/suite/compat/oracle/t/func_to_date.test
+@@ -507,4 +507,48 @@ SELECT TO_DATE('2002 February 10', 'YYYY MONTH DD') AS t;
+ --echo # Testing negative year (SYYYY) with separators
+ SELECT TO_DATE('-2024-05-10', 'SYYYY-MM-DD') AS t;
+ 
++
++--echo #
++--echo # MDEV-41657 TO_DATE no longer works as a variable
++--echo #
++
++SET sql_mode=DEFAULT;
++SET @to_date='2001-01-01';
++SELECT @to_date;
++CREATE TABLE t1 (to_date DATE, from_date DATE);
++INSERT INTO t1 VALUES ('2001-01-02','2001-01-01');
++SELECT to_date, from_date FROM t1;
++SELECT t1.to_date FROM t1 WHERE to_date > from_date;
++DROP TABLE t1;
++DELIMITER $$;
++CREATE PROCEDURE p1()
++BEGIN
++  DECLARE to_date DATE DEFAULT '2001-01-03';
++  SELECT to_date;
++END;
++$$
++DELIMITER ;$$
++CALL p1;
++DROP PROCEDURE p1;
++
++SET sql_mode=ORACLE;
++SET @to_date='2001-01-01';
++SELECT @to_date;
++CREATE TABLE t1 (to_date DATE, from_date DATE);
++INSERT INTO t1 VALUES ('2001-01-02','2001-01-01');
++SELECT to_date, from_date FROM t1;
++SELECT t1.to_date FROM t1 WHERE to_date > from_date;
++DROP TABLE t1;
++DELIMITER $$;
++CREATE PROCEDURE p1 AS
++  to_date DATE := '2001-01-03';
++BEGIN
++  SELECT to_date;
++END;
++$$
++DELIMITER ;$$
++CALL p1;
++DROP PROCEDURE p1;
++SELECT TO_DATE('2001-01-04','YYYY-MM-DD') AS t;
++
+ --echo # End of 12.3 tests
+diff --git a/sql/lex.h b/sql/lex.h
+index 709d949c..7f81d051 100644
+--- a/sql/lex.h
++++ b/sql/lex.h
+@@ -675,7 +675,6 @@ SYMBOL symbols[] = {
+   { "TINYINT",		SYM(TINYINT)},
+   { "TINYTEXT",		SYM(TINYTEXT)},
+   { "TO",		SYM(TO_SYM)},
+-  { "TO_DATE",		SYM(TO_DATE)},
+   { "TRAILING",		SYM(TRAILING)},
+   { "TRANSACTION",	SYM(TRANSACTION_SYM)},
+   { "TRANSACTIONAL",	SYM(TRANSACTIONAL_SYM)},
+@@ -791,6 +790,7 @@ SYMBOL sql_functions[] = {
+   { "SUBSTRING",	SYM(SUBSTRING)},
+   { "SUM",		SYM(SUM_SYM)},
+   { "SYSTEM_USER",      SYM(USER_SYM)},
++  { "TO_DATE",		SYM(TO_DATE)},
+   { "TRIM",		SYM(TRIM)},
+   { "TRIM_ORACLE",	SYM(TRIM_ORACLE)},
+   { "VARIANCE",		SYM(VARIANCE_SYM)},

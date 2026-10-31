@@ -1,0 +1,69 @@
+diff --git a/public/course/format/classes/local/linearnavigationsettings.php b/public/course/format/classes/local/linearnavigationsettings.php
+index 28866ba5989..cb6089e05a4 100644
+--- a/public/course/format/classes/local/linearnavigationsettings.php
++++ b/public/course/format/classes/local/linearnavigationsettings.php
+@@ -131,6 +131,10 @@ class linearnavigationsettings {
+             // Not on an activity page, do not add the sticky footer.
+             return false;
+         }
++        if ($page->cm->is_stealth()) {
++            // Stealth activities are not part of the course linear path, do not add the sticky footer.
++            return false;
++        }
+         if ($page->has_sticky_footer()) {
+             // If there is already a sticky footer, do not add another one.
+             return false;
+diff --git a/public/course/format/tests/local/linearnavigationsettings_test.php b/public/course/format/tests/local/linearnavigationsettings_test.php
+index d081ae584d8..6b1851ed80f 100644
+--- a/public/course/format/tests/local/linearnavigationsettings_test.php
++++ b/public/course/format/tests/local/linearnavigationsettings_test.php
+@@ -34,6 +34,7 @@ final class linearnavigationsettings_test extends \advanced_testcase {
+      * @param bool $shownavigationfooter Whether the navigation footer should be shown.
+      * @param bool $hascm Whether the page is on an activity page.
+      * @param bool $expected The expected result.
++     * @param bool $stealth Whether the activity is a stealth activity.
+      */
+     #[\PHPUnit\Framework\Attributes\DataProvider('show_navigation_footer_provider')]
+     public function test_show_navigation_footer(
+@@ -43,14 +44,24 @@ final class linearnavigationsettings_test extends \advanced_testcase {
+         bool $shownavigationfooter,
+         bool $hascm,
+         bool $expected,
++        bool $stealth = false,
+     ): void {
+         $this->resetAfterTest();
++        if ($stealth) {
++            set_config('allowstealth', 1);
++        }
+ 
+         $course = $this->getDataGenerator()->create_course([
+             'format' => $format,
+             'enablelinearnav' => $enablelinearnav,
+         ]);
+-        $page = $this->getDataGenerator()->create_module('page', ['course' => $course->id]);
++        $moduledata = ['course' => $course->id];
++        if ($stealth) {
++            // Stealth: visible but not shown on the course page.
++            $moduledata['visible'] = 1;
++            $moduledata['visibleoncoursepage'] = 0;
++        }
++        $page = $this->getDataGenerator()->create_module('page', $moduledata);
+ 
+         $moodlepage = new \moodle_page();
+         $moodlepage->set_course($course);
+@@ -119,6 +130,15 @@ final class linearnavigationsettings_test extends \advanced_testcase {
+                 'hascm' => true,
+                 'expected' => false,
+             ],
++            'Stealth activity' => [
++                'format' => 'topics',
++                'enablelinearnav' => 1,
++                'hasstickyfooter' => false,
++                'shownavigationfooter' => true,
++                'hascm' => true,
++                'expected' => false,
++                'stealth' => true,
++            ],
+         ];
+     }
+ 

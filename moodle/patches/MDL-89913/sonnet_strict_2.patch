@@ -1,0 +1,24 @@
+diff --git a/public/lib/classes/oauth2/server/repository/client_repository.php b/public/lib/classes/oauth2/server/repository/client_repository.php
+index b8ae134a371..4945bca38e0 100644
+--- a/public/lib/classes/oauth2/server/repository/client_repository.php
++++ b/public/lib/classes/oauth2/server/repository/client_repository.php
+@@ -45,6 +45,11 @@ class client_repository implements ClientRepositoryInterface {
+             return null;
+         }
+ 
++        // Record the last accessed time of the client (authorization and token exchange both look up the client).
++        $now = time();
++        $DB->set_field('oauth2_server_clients', 'lastaccessed', $now, ['id' => $clientrecord->id]);
++        $clientrecord->lastaccessed = $now;
++
+         // Fetch redirect URIs.
+         $urirecords = $DB->get_records(
+             'oauth2_server_client_redirect_uris',
+@@ -91,6 +96,7 @@ class client_repository implements ClientRepositoryInterface {
+ 
+         foreach ($secrets as $secret) {
+             if (password_verify($clientsecret, $secret->secret)) {
++                $DB->set_field('oauth2_server_client_secrets', 'lastaccessed', time(), ['id' => $secret->id]);
+                 return true;
+             }
+         }

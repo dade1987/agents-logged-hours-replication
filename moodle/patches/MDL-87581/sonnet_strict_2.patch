@@ -1,0 +1,19 @@
+diff --git a/public/admin/tool/uploadcourse/classes/course.php b/public/admin/tool/uploadcourse/classes/course.php
+index b4a35053d3a..004c125df1b 100644
+--- a/public/admin/tool/uploadcourse/classes/course.php
++++ b/public/admin/tool/uploadcourse/classes/course.php
+@@ -918,6 +918,14 @@ class tool_uploadcourse_course {
+             if ($rc->get_status() == backup::STATUS_REQUIRE_CONV) {
+                 $rc->convert();
+             }
++
++            // Restore the course-level configuration (including the summary and overview files).
++            // Without this, restore_course_structure_step is not added when importing into an existing course.
++            $plan = $rc->get_plan();
++            if ($plan->setting_exists('overwrite_conf')) {
++                $plan->get_setting('overwrite_conf')->set_value(true);
++            }
++
+             if ($rc->execute_precheck()) {
+                 $rc->execute_plan();
+                 $this->status('courserestored', new lang_string('courserestored', 'tool_uploadcourse'));

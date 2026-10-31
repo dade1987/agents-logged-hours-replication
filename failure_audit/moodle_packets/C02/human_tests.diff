@@ -1,0 +1,245 @@
+diff --git a/public/lib/tests/core_renderer_test.php b/public/lib/tests/core_renderer_test.php
+index 7e7947c91d4..5de5a49aa21 100644
+--- a/public/lib/tests/core_renderer_test.php
++++ b/public/lib/tests/core_renderer_test.php
+@@ -35,6 +35,7 @@ use moodle_page;
+ #[\PHPUnit\Framework\Attributes\CoversClass(\core\hook\output\before_standard_footer_html_generation::class)]
+ #[\PHPUnit\Framework\Attributes\CoversClass(\core\hook\output\after_standard_main_region_html_generation::class)]
+ #[\PHPUnit\Framework\Attributes\CoversClass(\core\hook\output\before_html_attributes::class)]
++#[\PHPUnit\Framework\Attributes\CoversClass(\core\hook\output\before_help_icon_rendered::class)]
+ final class core_renderer_test extends \advanced_testcase {
+ 
+     /**
+@@ -561,4 +562,59 @@ EOF
+ 
+         $this->assertNull($renderer->edit_switch());
+     }
++
++    /**
++     * Test that the help icon hook can completely replace the output.
++     */
++    public function test_before_help_icon_rendered_replacement(): void {
++        require_once(__DIR__ . '/fixtures/core_renderer/before_help_icon_rendered_replacement_callbacks.php');
++
++        \core\di::set(
++            \core\hook\manager::class,
++            \core\hook\manager::phpunit_get_instance([
++                'test_plugin1' => __DIR__ . '/fixtures/core_renderer/before_help_icon_rendered_replacement_hooks.php',
++            ]),
++        );
++
++        $page = new moodle_page();
++        $renderer = new core_renderer($page, RENDERER_TARGET_GENERAL);
++
++        $html = $renderer->help_icon('moodledocslink', 'core');
++        $this->assertIsString($html);
++        $this->assertStringContainsString('Replaced help icon', $html);
++        $this->assertStringContainsString('custom-replacement', $html);
++        // The original help icon template output should not be present.
++        $this->assertStringNotContainsString('data-bs-toggle="popover"', $html);
++    }
++
++    /**
++     * Test that the help icon hook can add content before and after the icon.
++     */
++    public function test_before_help_icon_rendered_before_and_after(): void {
++        require_once(__DIR__ . '/fixtures/core_renderer/before_help_icon_rendered_beforeafter_callbacks.php');
++
++        \core\di::set(
++            \core\hook\manager::class,
++            \core\hook\manager::phpunit_get_instance([
++                'test_plugin1' => __DIR__ . '/fixtures/core_renderer/before_help_icon_rendered_beforeafter_hooks.php',
++            ]),
++        );
++
++        $page = new moodle_page();
++        $renderer = new core_renderer($page, RENDERER_TARGET_GENERAL);
++
++        $html = $renderer->help_icon('moodledocslink', 'core');
++        $this->assertIsString($html);
++        // The original help icon should still be present.
++        $this->assertStringContainsString('data-bs-toggle="popover"', $html);
++        // Before and after content should be present.
++        $this->assertStringContainsString('before-help-icon', $html);
++        $this->assertStringContainsString('after-help-icon', $html);
++        // Verify order: before comes first, after comes last.
++        $beforepos = strpos($html, 'before-help-icon');
++        $popoverpos = strpos($html, 'data-bs-toggle="popover"');
++        $afterpos = strpos($html, 'after-help-icon');
++        $this->assertLessThan($popoverpos, $beforepos);
++        $this->assertGreaterThan($popoverpos, $afterpos);
++    }
+ }
+diff --git a/public/lib/tests/fixtures/core_renderer/before_help_icon_rendered_beforeafter_callbacks.php b/public/lib/tests/fixtures/core_renderer/before_help_icon_rendered_beforeafter_callbacks.php
+new file mode 100644
+index 00000000000..099cd314383
+--- /dev/null
++++ b/public/lib/tests/fixtures/core_renderer/before_help_icon_rendered_beforeafter_callbacks.php
+@@ -0,0 +1,40 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace test_fixtures\core_renderer;
++
++/**
++ * Hook fixture for help icon before/after test.
++ *
++ * @package   core
++ * @category  test
++ * @copyright 2026 ISB Bayern
++ * @author    Dr. Peter Mayer
++ * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++final class before_help_icon_rendered_beforeafter_callbacks {
++    /**
++     * Add content before and after the help icon.
++     *
++     * @param \core\hook\output\before_help_icon_rendered $hook
++     */
++    public static function add_before_and_after(
++        \core\hook\output\before_help_icon_rendered $hook,
++    ): void {
++        $hook->add_before_icon('<span class="before-help-icon">Before</span>');
++        $hook->add_after_icon('<span class="after-help-icon">After</span>');
++    }
++}
+diff --git a/public/lib/tests/fixtures/core_renderer/before_help_icon_rendered_beforeafter_hooks.php b/public/lib/tests/fixtures/core_renderer/before_help_icon_rendered_beforeafter_hooks.php
+new file mode 100644
+index 00000000000..4615e9f665c
+--- /dev/null
++++ b/public/lib/tests/fixtures/core_renderer/before_help_icon_rendered_beforeafter_hooks.php
+@@ -0,0 +1,35 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++/**
++ * Hook fixture for help icon before/after test.
++ *
++ * @package   core
++ * @category  test
++ * @copyright 2026 ISB Bayern
++ * @author    Dr. Peter Mayer
++ * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++
++defined('MOODLE_INTERNAL') || die();
++
++$callbacks = [
++    [
++        'hook' => \core\hook\output\before_help_icon_rendered::class,
++        'callback' => \test_fixtures\core_renderer\before_help_icon_rendered_beforeafter_callbacks::class
++            . '::add_before_and_after',
++    ],
++];
+diff --git a/public/lib/tests/fixtures/core_renderer/before_help_icon_rendered_replacement_callbacks.php b/public/lib/tests/fixtures/core_renderer/before_help_icon_rendered_replacement_callbacks.php
+new file mode 100644
+index 00000000000..c7a98523954
+--- /dev/null
++++ b/public/lib/tests/fixtures/core_renderer/before_help_icon_rendered_replacement_callbacks.php
+@@ -0,0 +1,39 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace test_fixtures\core_renderer;
++
++/**
++ * Hook fixture for help icon replacement test.
++ *
++ * @package   core
++ * @category  test
++ * @copyright 2026 ISB Bayern
++ * @author    Dr. Peter Mayer
++ * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++final class before_help_icon_rendered_replacement_callbacks {
++    /**
++     * Replace the help icon output entirely.
++     *
++     * @param \core\hook\output\before_help_icon_rendered $hook
++     */
++    public static function replace_help_icon(
++        \core\hook\output\before_help_icon_rendered $hook,
++    ): void {
++        $hook->set_replacement('<span class="custom-replacement">Replaced help icon</span>');
++    }
++}
+diff --git a/public/lib/tests/fixtures/core_renderer/before_help_icon_rendered_replacement_hooks.php b/public/lib/tests/fixtures/core_renderer/before_help_icon_rendered_replacement_hooks.php
+new file mode 100644
+index 00000000000..42a30ded77d
+--- /dev/null
++++ b/public/lib/tests/fixtures/core_renderer/before_help_icon_rendered_replacement_hooks.php
+@@ -0,0 +1,35 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++/**
++ * Hook fixture for help icon replacement test.
++ *
++ * @package   core
++ * @category  test
++ * @copyright 2026 ISB Bayern
++ * @author    Dr. Peter Mayer
++ * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++
++defined('MOODLE_INTERNAL') || die();
++
++$callbacks = [
++    [
++        'hook' => \core\hook\output\before_help_icon_rendered::class,
++        'callback' => \test_fixtures\core_renderer\before_help_icon_rendered_replacement_callbacks::class
++            . '::replace_help_icon',
++    ],
++];

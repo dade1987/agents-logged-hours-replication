@@ -1,0 +1,25 @@
+diff --git a/sql/json_table.cc b/sql/json_table.cc
+index e5ac6008..b8fce549 100644
+--- a/sql/json_table.cc
++++ b/sql/json_table.cc
+@@ -388,6 +388,20 @@ static void store_json_in_field(Field *f, const json_engine_t *je)
+     break;
+   };
+   st_append_json(&res_tmp, je->s.cs, je->value, je->value_len);
++  if (f->type() == MYSQL_TYPE_BIT)
++  {
++    /*
++      Field_bit::store(const char*) treats its input as a binary string,
++      so the text "0" would be stored as the byte 0x30. Convert the JSON
++      scalar to a number first.
++    */
++    int err;
++    char *end;
++    ulonglong nr= je->s.cs->strntoull10rnd(res_tmp.ptr(), res_tmp.length(),
++                                           true, &end, &err);
++    f->store((longlong) nr, true);
++    return;
++  }
+   f->store((const char *) res_tmp.ptr(), (uint32) res_tmp.length(), je->s.cs);
+ }
+ 

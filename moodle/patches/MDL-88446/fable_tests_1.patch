@@ -1,0 +1,61 @@
+diff --git a/public/media/player/videojs/classes/plugin.php b/public/media/player/videojs/classes/plugin.php
+index c9c4320e99c..dcc368ae6a9 100644
+--- a/public/media/player/videojs/classes/plugin.php
++++ b/public/media/player/videojs/classes/plugin.php
+@@ -279,8 +279,9 @@ class media_videojs_plugin extends core_media_player_native {
+ 
+     public function list_supported_urls(array $urls, array $options = array()) {
+         $result = [];
+-        // Youtube.
++        // Reset the tech flags so that nothing leaks from a previous call on the same instance.
+         $this->youtube = false;
++        $this->ogvtech = false;
+         if (count($urls) == 1 && get_config('media_videojs', 'youtube')) {
+             $url = reset($urls);
+ 
+@@ -307,7 +308,6 @@ class media_videojs_plugin extends core_media_player_native {
+             }
+ 
+             // Ogv.JS Tech.
+-            $this->ogvtech = false;
+             /* The following browsers do not support OGV natively:
+                 - Chrome (since version 120)
+                 - Edge (since version 122)
+diff --git a/public/media/player/videojs/tests/player_test.php b/public/media/player/videojs/tests/player_test.php
+index 4f0d81eb931..e5619ab8eea 100644
+--- a/public/media/player/videojs/tests/player_test.php
++++ b/public/media/player/videojs/tests/player_test.php
+@@ -284,6 +284,33 @@ final class player_test extends \advanced_testcase {
+         $this->assertStringNotContainsString('mediaplugin_videojs', $t);
+     }
+ 
++    /**
++     * Test that embedding an OGV/WebM video before a YouTube video does not leak the
++     * Ogv.JS tech order into the YouTube embed (MDL-88446).
++     */
++    public function test_youtube_after_ogv(): void {
++        set_config('youtube', 1, 'media_videojs');
++
++        $manager = core_media_manager::instance();
++
++        // First embed a WebM video, which enables the Ogv.JS tech.
++        $t = $manager->embed_url(new moodle_url('http://example.org/1.webm'));
++        $this->assertStringContainsString('mediaplugin_videojs', $t);
++        $this->assertStringContainsString('&quot;techOrder&quot;: [&quot;OgvJS&quot;]', $t);
++
++        // Then embed a YouTube video using the same manager/plugin instance.
++        $t = $manager->embed_url(new moodle_url('http://www.youtube.com/watch?v=vyrwMmsufJc'));
++        $this->youtube_plugin_engaged($t);
++        $this->assertStringNotContainsString('OgvJS', $t);
++
++        // And a regular non-OGV file after a WebM one must not get the Ogv.JS tech either.
++        $t = $manager->embed_url(new moodle_url('http://example.org/1.webm'));
++        $this->assertStringContainsString('&quot;techOrder&quot;: [&quot;OgvJS&quot;]', $t);
++        $t = $manager->embed_url(new moodle_url('http://example.org/1.mp4'));
++        $this->assertStringContainsString('mediaplugin_videojs', $t);
++        $this->assertStringNotContainsString('OgvJS', $t);
++    }
++
+     /**
+      * Data provider for {@see test_youtube_start_time}
+      *

@@ -1,0 +1,111 @@
+diff --git a/public/lib/classes/cron.php b/public/lib/classes/cron.php
+index 120b9ec33cf..b9d02c09bbd 100644
+--- a/public/lib/classes/cron.php
++++ b/public/lib/classes/cron.php
+@@ -352,6 +352,11 @@ class cron {
+     /**
+      * Execute all failed adhoc tasks.
+      *
++     * This is only ever triggered by an explicit administrator action (web UI "Run all failed" button or the
++     * CLI --failed flag), never by the regular cron run. As such it intentionally does not check the
++     * attemptsavailable field: the same as running a single failed task via run_adhoc_task(), tasks which
++     * have exhausted their retry attempts (including no-retry tasks) can still be re-run for recovery.
++     *
+      * @param string|null  $classname Run only tasks of this class
+      */
+     public static function run_failed_adhoc_tasks(?string $classname = null): void {
+@@ -364,8 +369,6 @@ class cron {
+             $params['classname'] = \core\task\manager::get_canonical_class_name($classname);
+         }
+ 
+-        // Only rerun the failed tasks that allow to be re-tried or have the remaining attempts available.
+-        $where .= ' AND (attemptsavailable > 0 OR attemptsavailable IS NULL)';
+         $tasks = $DB->get_records_sql("SELECT * from {task_adhoc} WHERE $where", $params);
+         foreach ($tasks as $t) {
+             self::run_adhoc_task($t->id);
+diff --git a/public/lib/tests/cron_test.php b/public/lib/tests/cron_test.php
+index 8e2a6bd384c..e55f5f4ba05 100644
+--- a/public/lib/tests/cron_test.php
++++ b/public/lib/tests/cron_test.php
+@@ -154,4 +154,81 @@ final class cron_test extends \advanced_testcase {
+ 
+         // phpcs:enable
+     }
++
++    /**
++     * Test that run_failed_adhoc_tasks() re-runs every failed task, including tasks that have no attempts left.
++     *
++     * @covers ::run_failed_adhoc_tasks
++     */
++    public function test_run_failed_adhoc_tasks_ignores_attempts_available(): void {
++        global $DB;
++        $this->resetAfterTest();
++        require_once(__DIR__ . '/fixtures/task_fixtures.php');
++
++        $clock = $this->mock_clock_with_frozen();
++        $now = $clock->time();
++
++        // Queue a normal (retrying) task and a no-retry task, then fail both of them.
++        $taskid1 = \core\task\manager::queue_adhoc_task(new \core\task\adhoc_test_task());
++        $taskid2 = \core\task\manager::queue_adhoc_task(new \core\task\no_retry_adhoc_task());
++
++        while ($task = \core\task\manager::get_next_adhoc_task($now)) {
++            \core\task\manager::adhoc_task_failed($task);
++        }
++
++        // The retrying task still has attempts available, the no-retry task has none.
++        $this->assertGreaterThan(0, $DB->get_field('task_adhoc', 'attemptsavailable', ['id' => $taskid1]));
++        $this->assertEquals(0, $DB->get_field('task_adhoc', 'attemptsavailable', ['id' => $taskid2]));
++        $this->assertGreaterThan(0, $DB->get_field('task_adhoc', 'faildelay', ['id' => $taskid1]));
++        $this->assertGreaterThan(0, $DB->get_field('task_adhoc', 'faildelay', ['id' => $taskid2]));
++
++        // The regular cron must not pick either of them up yet (the fail delay has not elapsed).
++        $this->assertNull(\core\task\manager::get_next_adhoc_task($now));
++
++        // Explicitly running all failed tasks must run both of them, regardless of attempts available.
++        ob_start();
++        cron::run_failed_adhoc_tasks();
++        $output = ob_get_clean();
++
++        $this->assertStringContainsString('Adhoc task id: ' . $taskid1, $output);
++        $this->assertStringContainsString('Adhoc task id: ' . $taskid2, $output);
++
++        // Both tasks completed successfully and were removed from the queue.
++        $this->assertFalse($DB->record_exists('task_adhoc', ['id' => $taskid1]));
++        $this->assertFalse($DB->record_exists('task_adhoc', ['id' => $taskid2]));
++        $this->assertEquals(0, $DB->count_records('task_adhoc'));
++    }
++
++    /**
++     * Test that run_failed_adhoc_tasks() with a classname only runs failed tasks of that class.
++     *
++     * @covers ::run_failed_adhoc_tasks
++     */
++    public function test_run_failed_adhoc_tasks_classname(): void {
++        global $DB;
++        $this->resetAfterTest();
++        require_once(__DIR__ . '/fixtures/task_fixtures.php');
++
++        $clock = $this->mock_clock_with_frozen();
++        $now = $clock->time();
++
++        $taskid1 = \core\task\manager::queue_adhoc_task(new \core\task\adhoc_test_task());
++        $taskid2 = \core\task\manager::queue_adhoc_task(new \core\task\no_retry_adhoc_task());
++
++        while ($task = \core\task\manager::get_next_adhoc_task($now)) {
++            \core\task\manager::adhoc_task_failed($task);
++        }
++        $this->assertEquals(0, $DB->get_field('task_adhoc', 'attemptsavailable', ['id' => $taskid2]));
++
++        // Only re-run the no-retry task, which has no attempts available.
++        ob_start();
++        cron::run_failed_adhoc_tasks(\core\task\no_retry_adhoc_task::class);
++        $output = ob_get_clean();
++
++        $this->assertStringNotContainsString('Adhoc task id: ' . $taskid1, $output);
++        $this->assertStringContainsString('Adhoc task id: ' . $taskid2, $output);
++
++        $this->assertTrue($DB->record_exists('task_adhoc', ['id' => $taskid1]));
++        $this->assertFalse($DB->record_exists('task_adhoc', ['id' => $taskid2]));
++    }
+ }

@@ -1,0 +1,94 @@
+diff --git a/mysql-test/main/path_bugs.result b/mysql-test/main/path_bugs.result
+index fd89b07f..50654899 100644
+--- a/mysql-test/main/path_bugs.result
++++ b/mysql-test/main/path_bugs.result
+@@ -14,4 +14,14 @@ c
+ drop database test1;
+ use test;
+ drop procedure p1;
++#
++# MDEV-40009 SIGSEGV in Sql_path::from_text
++#
++SET NAMES swe7;
++SET PATH '`';
++SET PATH DEFAULT;
++SET NAMES utf8mb4;
++SET PATH _swe7 0x60;
++SET PATH DEFAULT;
++SET NAMES DEFAULT;
+ # End of 12.3 tests
+diff --git a/mysql-test/main/path_bugs.test b/mysql-test/main/path_bugs.test
+index 2774c244..514d2929 100644
+--- a/mysql-test/main/path_bugs.test
++++ b/mysql-test/main/path_bugs.test
+@@ -14,4 +14,15 @@ drop database test1;
+ use test;
+ drop procedure p1;
+ 
++--echo #
++--echo # MDEV-40009 SIGSEGV in Sql_path::from_text
++--echo #
++SET NAMES swe7;
++SET PATH '`';
++SET PATH DEFAULT;
++SET NAMES utf8mb4;
++SET PATH _swe7 0x60;
++SET PATH DEFAULT;
++SET NAMES DEFAULT;
++
+ --echo # End of 12.3 tests
+diff --git a/sql/sql_path.cc b/sql/sql_path.cc
+index 982fbffa..0cddbaf8 100644
+--- a/sql/sql_path.cc
++++ b/sql/sql_path.cc
+@@ -282,7 +282,9 @@ bool Sql_path::from_text(const system_variables &sv, String *str)
+   free();
+   while (curr < end)
+   {
+-    auto len = cs->charlen(curr, end);
++    int len= cs->charlen(curr, end);
++    if (len <= 0) // Ill-formed or truncated multi-byte sequence
++      goto err_bad_val;
+ 
+     switch (state)
+     {
+diff --git a/sql/sys_vars.inl b/sql/sys_vars.inl
+index 0f8aa1eb..bead5ea2 100644
+--- a/sql/sys_vars.inl
++++ b/sql/sys_vars.inl
+@@ -3099,9 +3099,33 @@ class Sys_var_path: public sys_var
+ 
+   static bool from_item(THD *thd, Sql_path *path, Item *item)
+   {
+-    String *value, buffer;
+-    if (!(value= item->val_str_ascii(&buffer)))
++    /*
++      Sql_path::from_text() parses the value as utf8mb3 (the character
++      set of identifiers). Make sure the value is converted to utf8mb3
++      before parsing: e.g. in swe7 the byte 0x60 (ASCII '`') is not
++      a backtick, and val_str_ascii() would convert it to a latin1 byte
++      which is not a valid utf8mb3 sequence.
++    */
++    char buff[STRING_BUFFER_USUAL_SIZE], buff2[STRING_BUFFER_USUAL_SIZE];
++    String str(buff, sizeof(buff), system_charset_info);
++    String str2(buff2, sizeof(buff2), system_charset_info), *value;
++    if (!(value= item->val_str(&str)))
+       return true;
++    uint32 unused;
++    if (String::needs_conversion(value->length(), value->charset(),
++                                 system_charset_info, &unused))
++    {
++      uint errors;
++      if (str2.copy(value->ptr(), value->length(), value->charset(),
++                    system_charset_info, &errors))
++        return true;
++      if (errors)
++      {
++        my_error(ER_WRONG_VALUE_FOR_VAR, MYF(0), "PATH", value->c_ptr_safe());
++        return true;
++      }
++      value= &str2;
++    }
+     return path->from_text(thd->variables, value);
+   }
+ 

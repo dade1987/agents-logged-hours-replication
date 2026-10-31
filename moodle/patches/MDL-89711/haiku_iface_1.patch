@@ -1,0 +1,51 @@
+diff --git a/public/mod/quiz/UPGRADING.md b/public/mod/quiz/UPGRADING.md
+index 25b4b3948a8..aa84abb3dea 100644
+--- a/public/mod/quiz/UPGRADING.md
++++ b/public/mod/quiz/UPGRADING.md
+@@ -19,6 +19,12 @@
+ 
+   For more information see [MDL-82521](https://tracker.moodle.org/browse/MDL-82521)
+ 
++### Deprecated
++
++- The static method `mod_quiz\local\override_manager::get_effective_open_close_times()` is deprecated in favour of `mod_quiz\local\override_manager::get_effective_times()`. The deprecated method still returns only the `timeopen` and `timeclose` values.
++
++  For more information see [MDL-89711](https://tracker.moodle.org/browse/MDL-89711)
++
+ ### Changed
+ 
+ - If your plugin implements its own quiz report (a subclass of `mod_quiz\local\reports\report_base`), you need to update it to keep the old group selector working, because `report_base::print_header_and_tabs()` no longer prints it, and to pick up the new navigation bar (report selector, group selector, user search and initials filter).
+diff --git a/public/mod/quiz/classes/local/override_manager.php b/public/mod/quiz/classes/local/override_manager.php
+index ea84b8e88de..5fd077b56b1 100644
+--- a/public/mod/quiz/classes/local/override_manager.php
++++ b/public/mod/quiz/classes/local/override_manager.php
+@@ -698,6 +698,29 @@ class override_manager {
+         return $result;
+     }
+ 
++    /**
++     * Computes the effective overridden open and close times for a user for a given quiz.
++     *
++     * @deprecated since Moodle 5.3 MDL-89711. Use get_effective_times() instead.
++     * @param int $quizid The quiz ID.
++     * @param int $userid The user ID.
++     * @return array Array with optional keys 'timeopen' and 'timeclose'.
++     */
++    #[\core\attribute\deprecated(
++        replacement: 'mod_quiz\local\override_manager::get_effective_times',
++        since: '5.3',
++        reason: 'The method has been renamed and now also returns the duedate override',
++        mdl: 'MDL-89711',
++    )]
++    public static function get_effective_open_close_times(int $quizid, int $userid): array {
++        \core\deprecation::emit_deprecation(__METHOD__);
++
++        return array_intersect_key(
++            self::get_effective_times($quizid, $userid),
++            array_flip(['timeopen', 'timeclose']),
++        );
++    }
++
+     /**
+      * Resolves a set of group override dates (for timeclose or duedate) to a single effective
+      * date: the latest of them, unless one of them is 0 ("no date"), which takes precedence.

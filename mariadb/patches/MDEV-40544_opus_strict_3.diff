@@ -1,0 +1,90 @@
+diff --git a/mysql-test/suite/binlog/r/binlog_mysqlbinlog_force_read_checksum.result b/mysql-test/suite/binlog/r/binlog_mysqlbinlog_force_read_checksum.result
+new file mode 100644
+index 00000000..d1ed09a8
+--- /dev/null
++++ b/mysql-test/suite/binlog/r/binlog_mysqlbinlog_force_read_checksum.result
+@@ -0,0 +1,5 @@
++RESET MASTER;
++FLUSH BINARY LOGS;
++FOUND 1 /Unknown event.*/ in mdev40544.out
++NOT FOUND /crc check failed/ in mdev40544.out
++NOT FOUND /ERROR/ in mdev40544.out
+diff --git a/mysql-test/suite/binlog/t/binlog_mysqlbinlog_force_read_checksum.test b/mysql-test/suite/binlog/t/binlog_mysqlbinlog_force_read_checksum.test
+new file mode 100644
+index 00000000..e443da9b
+--- /dev/null
++++ b/mysql-test/suite/binlog/t/binlog_mysqlbinlog_force_read_checksum.test
+@@ -0,0 +1,25 @@
++#
++# MDEV-40544 Assertion fail / Memory leak in `mariadb-binlog --force-read`
++#
++# Under --force-read, events failing the checksum test must be output as
++# "Unknown event"s rather than generating an error.
++#
++--source include/have_debug.inc
++--source include/have_binlog_format_mixed.inc
++
++RESET MASTER;
++FLUSH BINARY LOGS;
++
++--let $MYSQLD_DATADIR= `SELECT @@datadir`
++--let $out_file= $MYSQLTEST_VARDIR/tmp/mdev40544.out
++--exec $MYSQL_BINLOG --verify-binlog-checksum --force-read --debug=d,simulate_checksum_test_failure $MYSQLD_DATADIR/master-bin.000001 > $out_file 2>&1
++
++--let SEARCH_FILE= $out_file
++--let SEARCH_PATTERN= Unknown event.*
++--source include/search_pattern_in_file.inc
++--let SEARCH_PATTERN= crc check failed
++--source include/search_pattern_in_file.inc
++--let SEARCH_PATTERN= ERROR
++--source include/search_pattern_in_file.inc
++
++--remove_file $out_file
+diff --git a/sql/log_event.cc b/sql/log_event.cc
+index 5039c21c..8d612b39 100644
+--- a/sql/log_event.cc
++++ b/sql/log_event.cc
+@@ -996,6 +996,8 @@ Log_event* Log_event::read_log_event(IO_CACHE* file, int *out_error,
+   if (unlikely(error))
+   {
+     DBUG_ASSERT(!res);
++    delete res;    // Do not leak an event in release builds
++    res= 0;
+ #ifdef MYSQL_CLIENT
+     if (force_opt)
+       DBUG_RETURN(new Unknown_log_event());
+@@ -1110,15 +1112,19 @@ Log_event* Log_event::read_log_event(const uchar *buf, uint event_len,
+   if (crc_check && event_checksum_test(const_cast<uchar*>(buf), event_len, alg))
+   {
+ #ifdef MYSQL_CLIENT
+-    *error= "Event crc check failed! Most likely there is event corruption.";
+     if (force_opt)
+     {
++      /*
++        --force-read: output the event as an "Unknown event" rather than
++        reporting an error (the caller must not get both an event and an
++        error, see MDEV-40544).
++      */
+       event_len-= BINLOG_CHECKSUM_LEN;
+       ev= new Unknown_log_event(buf, fdle);
+       goto exit;
+     }
+-    else
+-      DBUG_RETURN(NULL);
++    *error= "Event crc check failed! Most likely there is event corruption.";
++    DBUG_RETURN(NULL);
+ #else
+     *error= ER_THD_OR_DEFAULT(current_thd, ER_BINLOG_READ_EVENT_CHECKSUM_FAILURE);
+     if (print_errors)
+@@ -1359,6 +1365,11 @@ Log_event* Log_event::read_log_event(const uchar *buf, uint event_len,
+       DBUG_RETURN(0);
+     }
+     ev= new Unknown_log_event(buf, fdle);
++    /*
++      --force-read outputs invalid events as "Unknown event"s rather than
++      errors; do not return both an event and an error (MDEV-40544).
++    */
++    *error= 0;
+ #else
+     if (!*error)
+       *error= "Found invalid event in binary log";

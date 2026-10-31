@@ -1,0 +1,38 @@
+diff --git a/public/lib/editor/tiny/plugins/recordrtc/amd/build/base_recorder.min.js b/public/lib/editor/tiny/plugins/recordrtc/amd/build/base_recorder.min.js
+index 3299229ed830e8e723c567a19f7987615f1c8890..79e8f13436abed772f995fb847ad2a37bb55603e 100644
+GIT binary patch
+delta 40
+vcmZ2gezbhU1S9E^jLc%a^wbjH#EQ^@oczR;;LNI24NW@(HMPwXjHEaLS5yw#
+
+delta 12
+TcmX?FzN&n~1f$KXjifjMD$)gm
+
+diff --git a/public/lib/editor/tiny/plugins/recordrtc/amd/src/base_recorder.js b/public/lib/editor/tiny/plugins/recordrtc/amd/src/base_recorder.js
+index c9ce7d6daf1..99c259ee10a 100644
+--- a/public/lib/editor/tiny/plugins/recordrtc/amd/src/base_recorder.js
++++ b/public/lib/editor/tiny/plugins/recordrtc/amd/src/base_recorder.js
+@@ -875,7 +875,8 @@ export default class {
+             const newSize = this.data.blobSize + event.data.size;
+             // Recording stops when either the maximum upload size is reached, or the time limit expires.
+             // The time limit is checked in the `updateButtonTime` function.
+-            if (newSize >= this.getMaxUploadSize()) {
++            const maxUploadSize = this.getMaxUploadSize();
++            if (maxUploadSize > 0 && newSize >= maxUploadSize) {
+                 this.stopRecorder();
+                 this.displayFileLimitHitMessage();
+             } else {
+diff --git a/public/lib/editor/tiny/plugins/recordrtc/classes/plugininfo.php b/public/lib/editor/tiny/plugins/recordrtc/classes/plugininfo.php
+index 12c05c16a8d..f8b81bb07f0 100644
+--- a/public/lib/editor/tiny/plugins/recordrtc/classes/plugininfo.php
++++ b/public/lib/editor/tiny/plugins/recordrtc/classes/plugininfo.php
+@@ -116,7 +116,9 @@ class plugininfo extends plugin implements
+         }
+ 
+         $maxrecsize = get_max_upload_file_size();
+-        if (!empty($options['maxbytes'])) {
++        // Users who can ignore file size limits are only bound by the server limits.
++        $canignorelimits = has_capability('moodle/course:ignorefilesizelimits', $context);
++        if (!$canignorelimits && !empty($options['maxbytes']) && $options['maxbytes'] > 0) {
+             $maxrecsize = min($maxrecsize, $options['maxbytes']);
+         }
+         $params = [

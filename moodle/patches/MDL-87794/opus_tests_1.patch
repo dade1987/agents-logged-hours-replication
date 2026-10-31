@@ -1,0 +1,126 @@
+diff --git a/public/lib/csvlib.class.php b/public/lib/csvlib.class.php
+index 15f972cd350..67116689561 100644
+--- a/public/lib/csvlib.class.php
++++ b/public/lib/csvlib.class.php
+@@ -176,7 +176,8 @@ class csv_import_reader {
+         $filepointer = fopen($filename, "w");
+         // The information has been stored in csv format, as serialized data has issues
+         // with special characters and line returns.
+-        $storedata = csv_export_writer::print_array($columns, ',', '"', true);
++        // Formula escaping must not be applied here, as this is imported data, not a spreadsheet for download.
++        $storedata = csv_export_writer::print_array($columns, ',', '"', true, false);
+         fwrite($filepointer, $storedata);
+ 
+         fclose($fp);
+@@ -394,6 +395,10 @@ class csv_export_writer {
+      * @var boolean $bom  If true prefix file with byte order mark (BOM).
+      */
+     private $bom = false;
++    /**
++     * @var bool $escapeformulas  If true, values that look like spreadsheet formulas are escaped.
++     */
++    protected bool $escapeformulas = true;
+     /**
+      * @var resource $fp  File pointer for the csv file.
+      */
+@@ -406,8 +411,15 @@ class csv_export_writer {
+      * @param string $enclosure      The character used for determining the enclosures.
+      * @param string $mimetype       Mime type of the file that we are exporting.
+      * @param boolean $bom           If true, prefix file with byte order mark.
+-     */
+-    public function __construct($delimiter = 'comma', $enclosure = '"', $mimetype = 'application/download', $bom = false) {
++     * @param bool $escapeformulas   If true, escape values that could be interpreted as spreadsheet formulas.
++     */
++    public function __construct(
++        $delimiter = 'comma',
++        $enclosure = '"',
++        $mimetype = 'application/download',
++        $bom = false,
++        bool $escapeformulas = true,
++    ) {
+         $this->delimiter = $delimiter;
+         // Check that the enclosure is a single character.
+         if (strlen($enclosure) == 1) {
+@@ -418,6 +430,7 @@ class csv_export_writer {
+         $this->filename = "Moodle-data-export.csv";
+         $this->mimetype = $mimetype;
+         $this->bom = $bom;
++        $this->escapeformulas = $escapeformulas;
+     }
+ 
+     /**
+@@ -449,8 +462,10 @@ class csv_export_writer {
+             }
+         }
+         $delimiter = csv_import_reader::get_delimiter($this->delimiter);
+-        foreach ($row as $key => $value) {
+-            $row[$key] = \core\dataformat::escape_spreadsheet_formula($value);
++        if ($this->escapeformulas) {
++            foreach ($row as $key => $value) {
++                $row[$key] = \core\dataformat::escape_spreadsheet_formula($value);
++            }
+         }
+         fputcsv($this->fp, $row, $delimiter, $this->csvenclosure, '\\');
+     }
+@@ -551,10 +566,17 @@ class csv_export_writer {
+      * @param string $delimiter  The name of the delimiter. Supported types(comma, tab, semicolon, colon, cfg)
+      * @param string $enclosure  How speical fields are enclosed.
+      * @param bool $return       If true will return a string with the csv data.
++     * @param bool $escapeformulas If true, escape values that could be interpreted as spreadsheet formulas.
+      * @return ?string           csv data.
+      */
+-    public static function print_array(array &$records, $delimiter = 'comma', $enclosure = '"', $return = false) {
+-        $csvdata = new csv_export_writer($delimiter, $enclosure);
++    public static function print_array(
++        array &$records,
++        $delimiter = 'comma',
++        $enclosure = '"',
++        $return = false,
++        bool $escapeformulas = true,
++    ) {
++        $csvdata = new csv_export_writer($delimiter, $enclosure, 'application/download', false, $escapeformulas);
+         foreach ($records as $row) {
+             $csvdata->add_data($row);
+         }
+diff --git a/public/lib/tests/csvclass_test.php b/public/lib/tests/csvclass_test.php
+index fa45977d193..bf30cfbae01 100644
+--- a/public/lib/tests/csvclass_test.php
++++ b/public/lib/tests/csvclass_test.php
+@@ -150,4 +150,37 @@ final class csvclass_test extends \advanced_testcase {
+         // Five lines including the headings should be imported.
+         $this->assertEquals($contentcount, 5);
+     }
++    /**
++     * Test that importing CSV content does not escape values that look like spreadsheet formulas.
++     */
++    public function test_csv_import_does_not_escape_formulas(): void {
++        $content = "lastname;firstname;username;email;password\n" .
++            "Testy;Testx;test25@example.com;test25@example.com;@ChangeMe!\n" .
++            "=1+2;+foo;-bar;\tbaz;=HYPERLINK(\"x\")\n";
++
++        $iid = csv_import_reader::get_new_iid('formula');
++        $csvimport = new csv_import_reader($iid, 'formula');
++        $this->assertEquals(3, $csvimport->load_csv_content($content, 'utf-8', 'semicolon'));
++        $csvimport->init();
++        $records = [];
++        while ($record = $csvimport->next()) {
++            $records[] = $record;
++        }
++        $csvimport->cleanup();
++        $csvimport->close();
++
++        $this->assertSame([
++            ['Testy', 'Testx', 'test25@example.com', 'test25@example.com', '@ChangeMe!'],
++            ['=1+2', '+foo', '-bar', "\tbaz", '=HYPERLINK("x")'],
++        ], $records);
++    }
++
++    /**
++     * Test that the CSV export writer escapes formulas by default, and that it can be disabled.
++     */
++    public function test_csv_export_formula_escaping(): void {
++        $records = [['@ChangeMe!', '=1+2']];
++        $this->assertSame("'@ChangeMe!,'=1+2\n", csv_export_writer::print_array($records, 'comma', '"', true));
++        $this->assertSame("@ChangeMe!,=1+2\n", csv_export_writer::print_array($records, 'comma', '"', true, false));
++    }
+ }

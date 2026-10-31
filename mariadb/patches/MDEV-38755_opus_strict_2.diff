@@ -1,0 +1,69 @@
+diff --git a/mysql-test/main/spatial_utility_function_collect.result b/mysql-test/main/spatial_utility_function_collect.result
+index cd3b3885..cf7aa57c 100644
+--- a/mysql-test/main/spatial_utility_function_collect.result
++++ b/mysql-test/main/spatial_utility_function_collect.result
+@@ -260,3 +260,26 @@ DROP TABLE t1;
+ #
+ SELECT 1 FROM dual WHERE group_concat(1, 1);
+ ERROR HY000: Invalid use of group function
++#
++# MDEV-38755 ST_COLLECT(1) IS NULL is false
++#
++SELECT ST_COLLECT(1), ST_COLLECT(1) IS NULL, ST_COLLECT(1) IS NOT NULL;
++ST_COLLECT(1)	ST_COLLECT(1) IS NULL	ST_COLLECT(1) IS NOT NULL
++NULL	1	0
++SELECT ST_COLLECT(NULL) IS NULL, ST_COLLECT(POINT(1,1)) IS NULL;
++ST_COLLECT(NULL) IS NULL	ST_COLLECT(POINT(1,1)) IS NULL
++1	0
++CREATE TABLE t1 (a int, p point);
++INSERT INTO t1 VALUES (1, NULL), (2, POINT(1,1));
++SELECT a, ST_COLLECT(p) IS NULL FROM t1 GROUP BY a;
++a	ST_COLLECT(p) IS NULL
++1	1
++2	0
++SELECT ST_COLLECT(p) IS NULL FROM t1 WHERE a=1;
++ST_COLLECT(p) IS NULL
++1
++SELECT ST_COLLECT(p) IS NULL FROM t1;
++ST_COLLECT(p) IS NULL
++0
++DROP TABLE t1;
++# End of 12.2 tests
+diff --git a/mysql-test/main/spatial_utility_function_collect.test b/mysql-test/main/spatial_utility_function_collect.test
+index e288a153..8dbedb43 100644
+--- a/mysql-test/main/spatial_utility_function_collect.test
++++ b/mysql-test/main/spatial_utility_function_collect.test
+@@ -220,3 +220,17 @@ DROP TABLE t1;
+ --echo #
+ --error ER_INVALID_GROUP_FUNC_USE
+ SELECT 1 FROM dual WHERE group_concat(1, 1);
++
++--echo #
++--echo # MDEV-38755 ST_COLLECT(1) IS NULL is false
++--echo #
++SELECT ST_COLLECT(1), ST_COLLECT(1) IS NULL, ST_COLLECT(1) IS NOT NULL;
++SELECT ST_COLLECT(NULL) IS NULL, ST_COLLECT(POINT(1,1)) IS NULL;
++CREATE TABLE t1 (a int, p point);
++INSERT INTO t1 VALUES (1, NULL), (2, POINT(1,1));
++SELECT a, ST_COLLECT(p) IS NULL FROM t1 GROUP BY a;
++SELECT ST_COLLECT(p) IS NULL FROM t1 WHERE a=1;
++SELECT ST_COLLECT(p) IS NULL FROM t1;
++DROP TABLE t1;
++
++--echo # End of 12.2 tests
+diff --git a/sql/item_sum.h b/sql/item_sum.h
+index 540d0a37..1001bd78 100644
+--- a/sql/item_sum.h
++++ b/sql/item_sum.h
+@@ -2214,6 +2214,11 @@ class Item_func_collect : public Item_sum_str
+   }
+   const Type_handler *type_handler() const override;
+   String *val_str(String*str) override;
++  /*
++    null_value is only known after val_str() has been called,
++    so evaluate the item to find out if the result is NULL.
++  */
++  bool is_null() override { update_null_value(); return null_value; }
+   LEX_CSTRING func_name_cstring() const override
+   {
+     return { STRING_WITH_LEN("st_collect(") };

@@ -1,0 +1,172 @@
+diff --git a/public/backup/moodle2/backup_stepslib.php b/public/backup/moodle2/backup_stepslib.php
+index aec50f520e9..defb3689b2c 100644
+--- a/public/backup/moodle2/backup_stepslib.php
++++ b/public/backup/moodle2/backup_stepslib.php
+@@ -2757,7 +2757,7 @@ class backup_questions_structure_step extends backup_structure_step {
+             ],
+         );
+ 
+-        $questionverion->set_source_table('question_versions', ['questionbankentryid' => backup::VAR_PARENTID]);
++        $questionverion->set_source_table('question_versions', ['questionbankentryid' => backup::VAR_PARENTID], 'version ASC');
+ 
+         $question->set_source_sql('
+                 SELECT q.*
+diff --git a/public/backup/moodle2/restore_stepslib.php b/public/backup/moodle2/restore_stepslib.php
+index 981e26797fb..d72ef3ea215 100644
+--- a/public/backup/moodle2/restore_stepslib.php
++++ b/public/backup/moodle2/restore_stepslib.php
+@@ -5297,8 +5297,20 @@ class restore_create_categories_and_questions extends restore_structure_step {
+             // Now we know we are inserting a question, we may need to insert the questionbankentry.
+             if (empty($this->latestqbe->newid)) {
+                 $this->latestqbe->oldid = $this->latestqbe->id;
+-
+-                $this->latestqbe->questioncategoryid = $this->get_new_parentid('question_category');
++                $newcategoryid = $this->get_new_parentid('question_category');
++
++                // If other versions of this entry exist on the site already (we are restoring to the same site,
++                // and only some versions have been deleted since the backup was taken), restore into that entry.
++                // The order of the versions within the backup is not guaranteed, so we must not rely on having
++                // processed an existing version first.
++                $existingqbeid = $this->get_existing_question_bank_entry($this->latestqbe->oldid, $newcategoryid);
++                if ($existingqbeid) {
++                    $this->latestqbe->newid = $existingqbeid;
++                    $this->set_mapping('question_bank_entry', $this->latestqbe->oldid, $this->latestqbe->newid);
++                }
++            }
++            if (empty($this->latestqbe->newid)) {
++                $this->latestqbe->questioncategoryid = $newcategoryid;
+                 $userid = $this->get_mappingid('user', $this->latestqbe->ownerid);
+                 if ($userid) {
+                     $this->latestqbe->ownerid = $userid;
+@@ -5418,6 +5430,31 @@ class restore_create_categories_and_questions extends restore_structure_step {
+         // step will be in charge of restoring all the question files.
+     }
+ 
++    /**
++     * Find an existing question bank entry matched to a backed up entry during the restore precheck.
++     *
++     * The precheck records the existing entry whenever one of the backed up versions of an entry is
++     * mapped to an existing question. This lets us restore the missing versions into the original
++     * entry, rather than a new one.
++     *
++     * @param int $oldqbeid The question bank entry id from the backup.
++     * @param int $categoryid The question category the entry is being restored into.
++     * @return int|null The existing question bank entry id, or null if there is none.
++     */
++    protected function get_existing_question_bank_entry(int $oldqbeid, int $categoryid): ?int {
++        global $DB;
++
++        $existingqbeid = $this->get_mappingid('question_bank_entry_matched', $oldqbeid);
++        if (!$existingqbeid) {
++            return null;
++        }
++        // Only use the existing entry if it is in the category we are restoring to.
++        if (!$DB->record_exists('question_bank_entries', ['id' => $existingqbeid, 'questioncategoryid' => $categoryid])) {
++            return null;
++        }
++        return (int) $existingqbeid;
++    }
++
+     protected function process_question_hint($data) {
+         global $DB;
+ 
+diff --git a/public/backup/util/dbops/restore_dbops.class.php b/public/backup/util/dbops/restore_dbops.class.php
+index 9ce3130484f..beadbfc4afb 100644
+--- a/public/backup/util/dbops/restore_dbops.class.php
++++ b/public/backup/util/dbops/restore_dbops.class.php
+@@ -713,7 +713,7 @@ abstract class restore_dbops {
+ 
+                     // Collect all the questions for this category into memory so we only talk to the DB once.
+                     $recordset = $DB->get_recordset_sql(
+-                        "SELECT q.*
++                        "SELECT q.*, qv.questionbankentryid AS restorematchqbeid
+                            FROM {question} q
+                            JOIN {question_versions} qv ON qv.questionid = q.id
+                            JOIN {question_bank_entries} qbe ON qbe.id = qv.questionbankentryid
+@@ -724,7 +724,11 @@ abstract class restore_dbops {
+ 
+                     // Compute a hash of question and answer fields to differentiate between identical stamp-version questions.
+                     $questioncache = [];
++                    // Existing question bank entry id for each existing question id.
++                    $questionentries = [];
+                     foreach ($recordset as $question) {
++                        $questionentries[$question->id] = $question->restorematchqbeid;
++                        unset($question->restorematchqbeid);
+                         $question->export_process = true; // Include all question options required for export.
+                         get_question_options($question);
+                         unset($question->export_process);
+@@ -781,6 +785,17 @@ abstract class restore_dbops {
+                             // 4c) Match, mark q to be mapped.
+                         } else {
+                             self::set_backup_ids_record($restoreid, 'question', $question->id, $matchqid);
++                            // Remember the existing question bank entry that this backed up entry matched, so that any
++                            // versions of it that need to be created are restored into the same entry, regardless of the
++                            // order in which the versions appear in the backup.
++                            if (!empty($question->questionbankentryid) && !empty($questionentries[$matchqid])) {
++                                self::set_backup_ids_record(
++                                    $restoreid,
++                                    'question_bank_entry_matched',
++                                    $question->questionbankentryid,
++                                    $questionentries[$matchqid],
++                                );
++                            }
+                         }
+                     }
+                 }
+diff --git a/public/backup/util/helper/restore_questions_parser_processor.class.php b/public/backup/util/helper/restore_questions_parser_processor.class.php
+index 6e634c1bda4..deb98b73294 100644
+--- a/public/backup/util/helper/restore_questions_parser_processor.class.php
++++ b/public/backup/util/helper/restore_questions_parser_processor.class.php
+@@ -38,6 +38,9 @@ class restore_questions_parser_processor extends grouped_parser_processor {
+     /** @var string XML path in the questions.xml backup file to question categories. */
+     protected const CATEGORY_PATH = '/question_categories/question_category';
+ 
++    /** @var string XML path in the questions.xml to question elements within question_category (Moodle 4.0+). */
++    protected const QUESTION_BANK_ENTRY_SUBPATH = '/question_bank_entries/question_bank_entry';
++
+     /** @var string XML path in the questions.xml to question elements within question_category (Moodle 4.0+). */
+     protected const QUESTION_SUBPATH =
+         '/question_bank_entries/question_bank_entry/question_version/question_versions/questions/question';
+@@ -54,6 +57,9 @@ class restore_questions_parser_processor extends grouped_parser_processor {
+     /** @var int during the restore, this tracks the last category we saw. Any questions we see will be in here. */
+     protected int $lastcatid;
+ 
++    /** @var int|null during the restore, this tracks the last question bank entry we saw (Moodle 4.0+ backups). */
++    protected ?int $lastqbeid = null;
++
+     public function __construct($restoreid) {
+         global $CFG;
+         $this->restoreid = $restoreid;
+@@ -61,6 +67,7 @@ class restore_questions_parser_processor extends grouped_parser_processor {
+         parent::__construct();
+         // Set the paths we are interested on
+         $this->add_path(self::CATEGORY_PATH);
++        $this->add_path(self::CATEGORY_PATH . self::QUESTION_BANK_ENTRY_SUBPATH);
+         $this->add_path(self::CATEGORY_PATH . self::QUESTION_SUBPATH, true);
+         $this->add_path(self::CATEGORY_PATH . self::LEGACY_QUESTION_SUBPATH, true);
+ 
+@@ -103,6 +110,13 @@ class restore_questions_parser_processor extends grouped_parser_processor {
+             $itemid   = $info->id;
+             $parentitemid = $info->contextid;
+             $this->lastcatid = $itemid;
++            $this->lastqbeid = null;
++
++        // Track the question bank entry, so we know which entry each question version belongs to.
++        } else if ($data['path'] == self::CATEGORY_PATH . self::QUESTION_BANK_ENTRY_SUBPATH) {
++            $this->lastqbeid = isset($data['tags']['id']) ? (int) $data['tags']['id'] : null;
++            // Nothing to store for the entry itself.
++            return;
+ 
+         // Prepare question record
+         } else if ($data['path'] == self::CATEGORY_PATH . self::QUESTION_SUBPATH ||
+@@ -112,6 +126,10 @@ class restore_questions_parser_processor extends grouped_parser_processor {
+             $itemname = 'question';
+             $itemid   = $info->id;
+             $parentitemid = $this->lastcatid;
++            if ($data['path'] == self::CATEGORY_PATH . self::QUESTION_SUBPATH && $this->lastqbeid !== null) {
++                // Record the backed up question bank entry this question version belongs to.
++                $info->questionbankentryid = $this->lastqbeid;
++            }
+             $restore = $this->get_qtype_restore($data['tags']['qtype']);
+             if ($restore) {
+                 $questiondata = $restore->convert_backup_to_questiondata($data['tags']);

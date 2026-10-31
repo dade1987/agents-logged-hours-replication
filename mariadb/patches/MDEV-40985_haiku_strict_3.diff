@@ -1,0 +1,24 @@
+diff --git a/storage/innobase/handler/handler0alter.cc b/storage/innobase/handler/handler0alter.cc
+index 99413f79..043f4a35 100644
+--- a/storage/innobase/handler/handler0alter.cc
++++ b/storage/innobase/handler/handler0alter.cc
+@@ -4322,8 +4322,18 @@ ha_innobase_inplace_ctx::create_key_defs(
+ 		index->fields[0].descending = false;
+ 		index->fields[0].is_v_col = false;
+ 		if (nfields == 2) {
++			/* vers.end_fieldno is a MySQL field index,
++			which counts virtual columns; the InnoDB column
++			number must exclude the virtual columns before it. */
++			ulint	num_v_before_end = 0;
++			for (uint i = 0;
++			     i < altered_table->s->vers.end_fieldno; i++) {
++				num_v_before_end
++					+= !altered_table->field[i]->stored_in_db();
++			}
+ 			index->fields[1].col_no
+-				= altered_table->s->vers.end_fieldno;
++				= altered_table->s->vers.end_fieldno
++				- num_v_before_end;
+ 			index->fields[1].prefix_len = 0;
+ 			index->fields[1].descending = false;
+ 			index->fields[1].is_v_col = false;

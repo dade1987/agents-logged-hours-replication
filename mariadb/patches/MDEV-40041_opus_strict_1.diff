@@ -1,0 +1,104 @@
+diff --git a/mysql-test/suite/vcol/r/vcol_misc.result b/mysql-test/suite/vcol/r/vcol_misc.result
+index 881bd79b..7b564bf1 100644
+--- a/mysql-test/suite/vcol/r/vcol_misc.result
++++ b/mysql-test/suite/vcol/r/vcol_misc.result
+@@ -637,3 +637,40 @@ c
+ 00:00:00
+ DROP TABLE t;
+ # End of 10.11 tests
++#
++# MDEV-40041 Assertion `fixed()' failed in
++# Item_func_connection_id::val_int on INSERT w/ TRIGGER
++#
++SET @save_sql_mode= @@sql_mode;
++SET sql_mode='';
++CREATE TABLE t (c INT);
++LOCK TABLE t WRITE;
++CREATE OR REPLACE TABLE t (a INT AS (CONNECTION_ID()));
++CREATE TRIGGER a BEFORE INSERT ON t FOR EACH ROW SET @a:=1;
++INSERT INTO t VALUES ('');
++INSERT INTO t VALUES ();
++SELECT COUNT(*), SUM(a = CONNECTION_ID()) FROM t;
++COUNT(*)	SUM(a = CONNECTION_ID())
++2	2
++UNLOCK TABLES;
++SELECT @a;
++@a
++1
++DROP TABLE t;
++CREATE TABLE t1 (a INT, b INT AS (a + CONNECTION_ID() - CONNECTION_ID()));
++CREATE TABLE t2 (x INT);
++CREATE TRIGGER tr BEFORE INSERT ON t1 FOR EACH ROW INSERT INTO t2 VALUES (NEW.a);
++LOCK TABLE t1 WRITE, t2 WRITE;
++INSERT INTO t1 (a) VALUES (1),(2);
++UPDATE t1 SET a= a + 10;
++SELECT * FROM t1;
++a	b
++11	11
++12	12
++SELECT * FROM t2;
++x
++1
++2
++UNLOCK TABLES;
++DROP TABLE t1, t2;
++SET sql_mode= @save_sql_mode;
+diff --git a/mysql-test/suite/vcol/t/vcol_misc.test b/mysql-test/suite/vcol/t/vcol_misc.test
+index a6c8b57c..1cea4fe7 100644
+--- a/mysql-test/suite/vcol/t/vcol_misc.test
++++ b/mysql-test/suite/vcol/t/vcol_misc.test
+@@ -613,3 +613,35 @@ SELECT c FROM t WHERE c BETWEEN '00:00:00' AND '00:00:00' ORDER BY d;
+ DROP TABLE t;
+ 
+ --echo # End of 10.11 tests
++
++--echo #
++--echo # MDEV-40041 Assertion `fixed()' failed in
++--echo # Item_func_connection_id::val_int on INSERT w/ TRIGGER
++--echo #
++
++SET @save_sql_mode= @@sql_mode;
++SET sql_mode='';
++CREATE TABLE t (c INT);
++LOCK TABLE t WRITE;
++CREATE OR REPLACE TABLE t (a INT AS (CONNECTION_ID()));
++CREATE TRIGGER a BEFORE INSERT ON t FOR EACH ROW SET @a:=1;
++--disable_warnings
++INSERT INTO t VALUES ('');
++--enable_warnings
++INSERT INTO t VALUES ();
++SELECT COUNT(*), SUM(a = CONNECTION_ID()) FROM t;
++UNLOCK TABLES;
++SELECT @a;
++DROP TABLE t;
++
++CREATE TABLE t1 (a INT, b INT AS (a + CONNECTION_ID() - CONNECTION_ID()));
++CREATE TABLE t2 (x INT);
++CREATE TRIGGER tr BEFORE INSERT ON t1 FOR EACH ROW INSERT INTO t2 VALUES (NEW.a);
++LOCK TABLE t1 WRITE, t2 WRITE;
++INSERT INTO t1 (a) VALUES (1),(2);
++UPDATE t1 SET a= a + 10;
++SELECT * FROM t1;
++SELECT * FROM t2;
++UNLOCK TABLES;
++DROP TABLE t1, t2;
++SET sql_mode= @save_sql_mode;
+diff --git a/sql/sql_base.cc b/sql/sql_base.cc
+index eabad770..4aa586dc 100644
+--- a/sql/sql_base.cc
++++ b/sql/sql_base.cc
+@@ -876,8 +876,13 @@ int close_thread_tables(THD *thd) noexcept
+       /*
+         For simple locking we cleanup it here because we don't close thread
+         tables. For prelocking we close it when we do close thread tables.
++        Don't do it at the end of a sub-statement (e.g. a statement inside
++        a trigger or a stored function executed under LOCK TABLES): the
++        tables may still be in use by the calling statement, which will
++        evaluate virtual column expressions after the sub-statement ends.
++        The cleanup will be done at the end of the top-level statement.
+       */
+-      if (thd->locked_tables_mode != LTM_PRELOCKED)
++      if (thd->locked_tables_mode != LTM_PRELOCKED && !thd->in_sub_stmt)
+         table->vcol_cleanup_expr(thd);
+     }
+ 

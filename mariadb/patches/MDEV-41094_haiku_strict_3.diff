@@ -1,0 +1,56 @@
+diff --git a/mysql-test/main/func_kdf.result b/mysql-test/main/func_kdf.result
+index e334125c..249ed3fd 100644
+--- a/mysql-test/main/func_kdf.result
++++ b/mysql-test/main/func_kdf.result
+@@ -181,5 +181,18 @@ SELECT KDF('secret','salt') IS NOT NULL;
+ KDF('secret','salt') IS NOT NULL
+ 1
+ #
++# MDEV-41094 KDF() silently reduces large PBKDF2 iteration counts
++#
++SELECT KDF('foo','bar',2147483648,'pbkdf2_hmac',256);
++KDF('foo','bar',2147483648,'pbkdf2_hmac',256)
++NULL
++Warnings:
++Warning	3047	Invalid argument error: '2147483648' in function kdf.
++SELECT KDF('foo','bar',4294968296,'pbkdf2_hmac',256);
++KDF('foo','bar',4294968296,'pbkdf2_hmac',256)
++NULL
++Warnings:
++Warning	3047	Invalid argument error: '4294968296' in function kdf.
++#
+ # End of 11.4 tests
+ #
+diff --git a/mysql-test/main/func_kdf.test b/mysql-test/main/func_kdf.test
+index 279323ed..885ed96c 100644
+--- a/mysql-test/main/func_kdf.test
++++ b/mysql-test/main/func_kdf.test
+@@ -72,6 +72,14 @@ SELECT KDF('secret','salt',1000,999);
+ SELECT KDF('secret','salt',1000,'pbkdf2_hmac') IS NOT NULL;
+ SELECT KDF('secret','salt') IS NOT NULL;
+ 
++--echo #
++--echo # MDEV-41094 KDF() silently reduces large PBKDF2 iteration counts
++--echo #
++# Iteration counts above INT_MAX must be rejected, not truncated to a
++# 32-bit alias (2^32 + n would otherwise derive the same key as n).
++SELECT KDF('foo','bar',2147483648,'pbkdf2_hmac',256);
++SELECT KDF('foo','bar',4294968296,'pbkdf2_hmac',256);
++
+ --echo #
+ --echo # End of 11.4 tests
+ --echo #
+diff --git a/sql/item_strfunc.cc b/sql/item_strfunc.cc
+index 34e47988..7b342c63 100644
+--- a/sql/item_strfunc.cc
++++ b/sql/item_strfunc.cc
+@@ -572,7 +572,8 @@ String *Item_func_kdf::val_str(String *buf)
+   else
+   {
+     longlong iter= arg_count > 2 ? args[2]->val_int() : 1000;
+-    if (iter <= 0)
++    /* OpenSSL takes the iteration count as a (signed) int */
++    if (iter <= 0 || iter > INT_MAX)
+     {
+       if (!args[2]->null_value)
+         invalid_argument_error(func_name(),

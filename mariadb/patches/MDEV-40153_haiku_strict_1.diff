@@ -1,0 +1,20 @@
+diff --git a/sql/sql_type_row.cc b/sql/sql_type_row.cc
+index 97d48ed3..01f9ed58 100644
+--- a/sql/sql_type_row.cc
++++ b/sql/sql_type_row.cc
+@@ -252,7 +252,14 @@ bool Type_handler_row::
+   {
+     DBUG_ASSERT(rec->field);
+     DBUG_ASSERT(rec->field->elements);
+-    DBUG_ASSERT(rec->field->head()->charset == nullptr); // Not prepared
++    /*
++      Note, rec->field itself is never prepared in place: it is always
++      deep-copied below before preparing. We cannot assert on
++      rec->field->head()->charset here, because some field types
++      (e.g. BLOB, BINARY, VARBINARY) get their charset already at parse
++      time, before sp_prepare_create_field() is called, so the charset
++      is not a reliable indicator of whether a field has been prepared.
++    */
+     Row_definition_list *row= rec->field->deep_copy(thd);
+     if (!row || thd->lex->sphead->row_fill_field_definitions(thd, row))
+       return true; // Error

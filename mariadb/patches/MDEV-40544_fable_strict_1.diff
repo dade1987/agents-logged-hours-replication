@@ -1,0 +1,85 @@
+diff --git a/mysql-test/suite/binlog/r/binlog_mysqlbinlog_force_read_checksum.result b/mysql-test/suite/binlog/r/binlog_mysqlbinlog_force_read_checksum.result
+new file mode 100644
+index 00000000..2ea68022
+--- /dev/null
++++ b/mysql-test/suite/binlog/r/binlog_mysqlbinlog_force_read_checksum.result
+@@ -0,0 +1,5 @@
++RESET MASTER;
++FLUSH BINARY LOGS;
++#MYSQL_BINLOG --verify-binlog-checksum --force-read --debug=d,simulate_checksum_test_failure --result-file=SEARCH_FILE #MYSQLD_DATADIR/master-bin.000001 2>&1
++FOUND 1 /# Unknown event.*/ in binlog_mysqlbinlog_force_read_checksum.sql
++NOT FOUND /crc check failed/ in binlog_mysqlbinlog_force_read_checksum.sql
+diff --git a/mysql-test/suite/binlog/t/binlog_mysqlbinlog_force_read_checksum.test b/mysql-test/suite/binlog/t/binlog_mysqlbinlog_force_read_checksum.test
+new file mode 100644
+index 00000000..a65050a6
+--- /dev/null
++++ b/mysql-test/suite/binlog/t/binlog_mysqlbinlog_force_read_checksum.test
+@@ -0,0 +1,28 @@
++# MDEV-40544: Assertion fail / Memory leak in `mariadb-binlog --force-read`
++#
++# A checksum failure under --force-read must be output as an Unknown event
++# only, without an accompanying error. Reporting both an error and an event
++# triggered an assertion in Log_event::read_log_event(IO_CACHE*, ...) on
++# debug builds, and leaked the Unknown event on release builds.
++
++--source include/have_debug.inc
++--source include/have_binlog_format_mixed.inc # format-agnostic
++
++RESET MASTER;
++FLUSH BINARY LOGS;
++
++--let $MYSQLD_DATADIR= `SELECT @@datadir`
++--let SEARCH_FILE= $MYSQLTEST_VARDIR/tmp/binlog_mysqlbinlog_force_read_checksum.sql
++
++--echo #MYSQL_BINLOG --verify-binlog-checksum --force-read --debug=d,simulate_checksum_test_failure --result-file=SEARCH_FILE #MYSQLD_DATADIR/master-bin.000001 2>&1
++--exec $MYSQL_BINLOG --verify-binlog-checksum --force-read --debug=d,simulate_checksum_test_failure --result-file=$SEARCH_FILE $MYSQLD_DATADIR/master-bin.000001 2>&1
++
++--let SEARCH_PATTERN= # Unknown event.*
++--let SEARCH_ABORT= NOT FOUND
++--source include/search_pattern_in_file.inc
++
++--let SEARCH_PATTERN= crc check failed
++--let SEARCH_ABORT= FOUND
++--source include/search_pattern_in_file.inc
++
++--remove_file $SEARCH_FILE
+diff --git a/sql/log_event.cc b/sql/log_event.cc
+index 5039c21c..0836cb99 100644
+--- a/sql/log_event.cc
++++ b/sql/log_event.cc
+@@ -1110,15 +1110,19 @@ Log_event* Log_event::read_log_event(const uchar *buf, uint event_len,
+   if (crc_check && event_checksum_test(const_cast<uchar*>(buf), event_len, alg))
+   {
+ #ifdef MYSQL_CLIENT
+-    *error= "Event crc check failed! Most likely there is event corruption.";
+     if (force_opt)
+     {
++      /*
++        --force-read: output the invalid event as an Unknown event instead of
++        an error. The caller expects that an error is set only when no event
++        is returned, so do not set *error here.
++      */
+       event_len-= BINLOG_CHECKSUM_LEN;
+       ev= new Unknown_log_event(buf, fdle);
+       goto exit;
+     }
+-    else
+-      DBUG_RETURN(NULL);
++    *error= "Event crc check failed! Most likely there is event corruption.";
++    DBUG_RETURN(NULL);
+ #else
+     *error= ER_THD_OR_DEFAULT(current_thd, ER_BINLOG_READ_EVENT_CHECKSUM_FAILURE);
+     if (print_errors)
+@@ -1358,6 +1362,12 @@ Log_event* Log_event::read_log_event(const uchar *buf, uint event_len,
+         *error= "Found invalid event in binary log";
+       DBUG_RETURN(0);
+     }
++    /*
++      --force-read: substitute an Unknown event for the invalid one. An error
++      message may have been set above (e.g. for the refused MySQL 8.0 events);
++      clear it, as an error must not be reported together with an event.
++    */
++    *error= 0;
+     ev= new Unknown_log_event(buf, fdle);
+ #else
+     if (!*error)

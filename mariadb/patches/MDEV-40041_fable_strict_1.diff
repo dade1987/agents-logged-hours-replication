@@ -1,0 +1,85 @@
+diff --git a/mysql-test/suite/vcol/r/vcol_misc.result b/mysql-test/suite/vcol/r/vcol_misc.result
+index 881bd79b..a0392cdc 100644
+--- a/mysql-test/suite/vcol/r/vcol_misc.result
++++ b/mysql-test/suite/vcol/r/vcol_misc.result
+@@ -637,3 +637,28 @@ c
+ 00:00:00
+ DROP TABLE t;
+ # End of 10.11 tests
++#
++# MDEV-40041 Assertion `fixed()' failed in Item_func_connection_id::val_int
++#            on INSERT w/ TRIGGER
++#
++CREATE TABLE t (c INT);
++LOCK TABLE t WRITE;
++CREATE OR REPLACE TABLE t (a INT AS (CONNECTION_ID()));
++CREATE TRIGGER a BEFORE INSERT ON t FOR EACH ROW SET @a:=1;
++INSERT INTO t VALUES (DEFAULT);
++SELECT a = CONNECTION_ID() FROM t;
++a = CONNECTION_ID()
++1
++UNLOCK TABLES;
++DROP TABLE t;
++CREATE TABLE t (b INT, a INT AS (CONNECTION_ID()));
++CREATE TRIGGER a BEFORE INSERT ON t FOR EACH ROW SET NEW.b= 2;
++LOCK TABLE t WRITE;
++INSERT INTO t (b) VALUES (1);
++INSERT INTO t (b) VALUES (1);
++SELECT b, a = CONNECTION_ID() FROM t;
++b	a = CONNECTION_ID()
++2	1
++2	1
++UNLOCK TABLES;
++DROP TABLE t;
+diff --git a/mysql-test/suite/vcol/t/vcol_misc.test b/mysql-test/suite/vcol/t/vcol_misc.test
+index a6c8b57c..378622c5 100644
+--- a/mysql-test/suite/vcol/t/vcol_misc.test
++++ b/mysql-test/suite/vcol/t/vcol_misc.test
+@@ -613,3 +613,25 @@ SELECT c FROM t WHERE c BETWEEN '00:00:00' AND '00:00:00' ORDER BY d;
+ DROP TABLE t;
+ 
+ --echo # End of 10.11 tests
++
++--echo #
++--echo # MDEV-40041 Assertion `fixed()' failed in Item_func_connection_id::val_int
++--echo #            on INSERT w/ TRIGGER
++--echo #
++CREATE TABLE t (c INT);
++LOCK TABLE t WRITE;
++CREATE OR REPLACE TABLE t (a INT AS (CONNECTION_ID()));
++CREATE TRIGGER a BEFORE INSERT ON t FOR EACH ROW SET @a:=1;
++INSERT INTO t VALUES (DEFAULT);
++SELECT a = CONNECTION_ID() FROM t;
++UNLOCK TABLES;
++DROP TABLE t;
++
++CREATE TABLE t (b INT, a INT AS (CONNECTION_ID()));
++CREATE TRIGGER a BEFORE INSERT ON t FOR EACH ROW SET NEW.b= 2;
++LOCK TABLE t WRITE;
++INSERT INTO t (b) VALUES (1);
++INSERT INTO t (b) VALUES (1);
++SELECT b, a = CONNECTION_ID() FROM t;
++UNLOCK TABLES;
++DROP TABLE t;
+diff --git a/sql/sql_base.cc b/sql/sql_base.cc
+index eabad770..12e11c02 100644
+--- a/sql/sql_base.cc
++++ b/sql/sql_base.cc
+@@ -876,8 +876,16 @@ int close_thread_tables(THD *thd) noexcept
+       /*
+         For simple locking we cleanup it here because we don't close thread
+         tables. For prelocking we close it when we do close thread tables.
++
++        Don't do the cleanup from inside a sub-statement (a trigger or a
++        stored function body executed under LOCK TABLES, i.e. in
++        LTM_PRELOCKED_UNDER_LOCK_TABLES mode): the vcol expressions were
++        fixed by the top-level statement, which may still need them after
++        the sub-statement returns (e.g. to re-calculate virtual columns
++        after BEFORE triggers). The cleanup will be done when the top-level
++        statement closes its tables.
+       */
+-      if (thd->locked_tables_mode != LTM_PRELOCKED)
++      if (thd->locked_tables_mode != LTM_PRELOCKED && !thd->in_sub_stmt)
+         table->vcol_cleanup_expr(thd);
+     }
+ 

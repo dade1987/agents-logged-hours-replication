@@ -1,0 +1,503 @@
+diff --git a/public/lang/en/question.php b/public/lang/en/question.php
+index ea4adaa9c66..a6090df8866 100644
+--- a/public/lang/en/question.php
++++ b/public/lang/en/question.php
+@@ -40,6 +40,7 @@ $string['cannotcreate'] = 'Could not create new entry in question_attempts table
+ $string['cannotcreatepath'] = 'Cannot create path: {$a}';
+ $string['cannotdeletebehaviourinuse'] = 'You cannot delete the behaviour \'{$a}\'. It is used by question attempts.';
+ $string['cannotdeletecate'] = 'You can\'t delete that category it is the default category for this context.';
++$string['cannotdeletecategoryquestionsinuse'] = 'This category contains questions which are in use, so they can not be deleted. Move them to another category before deleting this category.';
+ $string['cannotdeleteneededbehaviour'] = 'Cannot delete the question behaviour \'{$a}\'. There are other behaviours installed that rely on it.';
+ $string['cannotdeleteqtypeinuse'] = 'You cannot delete the question type \'{$a}\'. There are questions of this type in the question bank.';
+ $string['cannotdeleteqtypeneeded'] = 'You cannot delete the question type \'{$a}\'. There are other question types installed that rely on it.';
+@@ -70,7 +71,12 @@ $string['categorycurrent'] = 'Current category';
+ $string['categorycurrentuse'] = 'Use this category';
+ $string['categorydoesnotexist'] = 'This category does not exist';
+ $string['categoryinfo'] = 'Category info';
+-$string['categorymove'] = 'The category \'{$a->name}\' contains {$a->count} questions (some of which may be hidden questions or random questions that are still in use in a quiz). Please choose another category to move them to.';
++$string['categorymove'] = 'The category \'{$a->name}\' contains {$a->count} questions (some of which may be hidden questions or random questions that are still in use in a quiz). Please choose whether to move them to another category, or delete them.';
++$string['categorymovedeletequestions'] = 'Delete the questions';
++$string['categorymovedeletequestions_help'] = 'If this option is selected, all the questions in this category which are not in use are permanently deleted along with the category. Questions that are in use cannot be deleted. They will be moved to the selected category instead.';
++$string['categorymovequestions'] = 'Move the questions to another category';
++$string['categorymovequestionsinuse'] = '{$a} of these questions are in use (for example, in a quiz), so cannot be deleted. They will be moved to the category selected below.';
++$string['categorymovequestionsoption'] = 'Questions in this category';
+ $string['categorymoveto'] = 'Save in category';
+ $string['categorynamecantbeblank'] = 'The category name cannot be blank.';
+ $string['categorynamewithcount'] = '{$a->name} ({$a->questioncount})';
+diff --git a/public/question/UPGRADING.md b/public/question/UPGRADING.md
+index d2ce2c56bdc..a8084fbd1b0 100644
+--- a/public/question/UPGRADING.md
++++ b/public/question/UPGRADING.md
+@@ -14,6 +14,10 @@
+ 
+   For more information see [MDL-87264](https://tracker.moodle.org/browse/MDL-87264)
+ 
++- `\core_question\category_manager::move_questions()` and `move_questions_and_delete_category()` now accept an optional array of question ids. If given, only those questions are moved to the new category. `move_questions_and_delete_category()` deletes any remaining questions that are not in use along with the category (questions that are in use are always moved). A new method `get_in_use_question_ids_in_category()` returns the ids of the questions in a category that are in use, and `delete_category()` now deletes any unused questions left in the category, throwing an exception if any are still in use. The category deletion UI now offers the option to delete the questions in the category instead of moving them.
++
++  For more information see [MDL-61427](https://tracker.moodle.org/browse/MDL-61427)
++
+ ### Changed
+ 
+ - The UI for switching question banks is now encapsulated in the `core_question/bank_switcher` Javascript module. This takes an existing modal and replaces the content with the switcher. It will then emit a custom `bankSwitched` event on the modal's DOM element when a new bank is selected.
+diff --git a/public/question/bank/managecategories/category.php b/public/question/bank/managecategories/category.php
+index 03233628c5c..d520a7f5a89 100644
+--- a/public/question/bank/managecategories/category.php
++++ b/public/question/bank/managecategories/category.php
+@@ -60,12 +60,16 @@ if ($todelete) {
+     helper::question_remove_stale_questions_from_category($todelete);
+ 
+     $questionstomove = count($manager->get_real_question_ids_in_category($todelete));
++    $questionsinuse = $manager->get_in_use_question_ids_in_category($todelete);
+ 
+     // Second pass, if we still have questions to move, setup the form.
+     if ($questionstomove) {
+         $categorycontext = context::instance_by_id($category->contextid);
+-        $moveform = new question_move_form($thispageurl,
+-            ['contexts' => [$categorycontext], 'currentcat' => "$todelete"]);
++        $moveform = new question_move_form($thispageurl, [
++            'contexts' => [$categorycontext],
++            'currentcat' => "$todelete",
++            'questionsinuse' => count($questionsinuse),
++        ]);
+         if ($moveform->is_cancelled()) {
+             $thispageurl->remove_all_params();
+             if (!is_null($cmid)) {
+@@ -75,8 +79,19 @@ if ($todelete) {
+             }
+             redirect($thispageurl);
+         } else if ($formdata = $moveform->get_data()) {
+-            list($tocategoryid, $tocontextid) = explode(',', $formdata->category);
+-            $manager->move_questions_and_delete_category($formdata->delete, $tocategoryid);
++            if (($formdata->questionsaction ?? question_move_form::ACTION_MOVE) === question_move_form::ACTION_DELETE) {
++                if (empty($questionsinuse)) {
++                    // Nothing is in use, so all the questions can be deleted along with the category.
++                    $manager->delete_category($formdata->delete);
++                } else {
++                    // Questions in use must be moved to another category, the rest are deleted.
++                    [$tocategoryid, $tocontextid] = explode(',', $formdata->category);
++                    $manager->move_questions_and_delete_category($formdata->delete, $tocategoryid, $questionsinuse);
++                }
++            } else {
++                [$tocategoryid, $tocontextid] = explode(',', $formdata->category);
++                $manager->move_questions_and_delete_category($formdata->delete, $tocategoryid);
++            }
+             $thispageurl->remove_params('cat', 'category');
+             redirect($thispageurl);
+         }
+@@ -106,7 +121,11 @@ if ($questionstomove) {
+     $vars = new stdClass();
+     $vars->name = $category->name;
+     $vars->count = $questionstomove;
+-    echo $OUTPUT->box(get_string('categorymove', 'question', $vars), 'generalbox boxaligncenter');
++    $message = get_string('categorymove', 'question', $vars);
++    if (!empty($questionsinuse)) {
++        $message .= ' ' . get_string('categorymovequestionsinuse', 'question', count($questionsinuse));
++    }
++    echo $OUTPUT->box($message, 'generalbox boxaligncenter');
+     $moveform->display();
+ } else {
+     // Display the user interface.
+diff --git a/public/question/bank/managecategories/classes/form/question_move_form.php b/public/question/bank/managecategories/classes/form/question_move_form.php
+index 9d1ffc29f88..eb6b3205d38 100644
+--- a/public/question/bank/managecategories/classes/form/question_move_form.php
++++ b/public/question/bank/managecategories/classes/form/question_move_form.php
+@@ -31,6 +31,11 @@ require_once($CFG->libdir . '/formslib.php');
+  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+  */
+ class question_move_form extends moodleform {
++    /** @var string Move all the questions to another category. */
++    public const ACTION_MOVE = 'move';
++
++    /** @var string Delete the questions that are not in use, and move the rest to another category. */
++    public const ACTION_DELETE = 'delete';
+ 
+     /**
+      * Build the form definition.
+@@ -43,8 +48,22 @@ class question_move_form extends moodleform {
+ 
+         $currentcat = $this->_customdata['currentcat'];
+         $contexts = $this->_customdata['contexts'];
++        $questionsinuse = $this->_customdata['questionsinuse'] ?? 0;
++
++        $options = [
++            self::ACTION_MOVE => get_string('categorymovequestions', 'question'),
++            self::ACTION_DELETE => get_string('categorymovedeletequestions', 'question'),
++        ];
++        $mform->addElement('select', 'questionsaction', get_string('categorymovequestionsoption', 'question'), $options);
++        $mform->setType('questionsaction', PARAM_ALPHA);
++        $mform->setDefault('questionsaction', self::ACTION_MOVE);
++        $mform->addHelpButton('questionsaction', 'categorymovedeletequestions', 'question');
+ 
+         $mform->addElement('questioncategory', 'category', get_string('category', 'question'), compact('contexts', 'currentcat'));
++        if (!$questionsinuse) {
++            // If no questions are in use, no category is needed when the questions are deleted.
++            $mform->hideIf('category', 'questionsaction', 'eq', self::ACTION_DELETE);
++        }
+ 
+         $this->add_action_buttons(true, get_string('categorymoveto', 'question'));
+ 
+diff --git a/public/question/bank/managecategories/tests/behat/question_categories.feature b/public/question/bank/managecategories/tests/behat/question_categories.feature
+index cecad231d86..bb15da9a0fd 100644
+--- a/public/question/bank/managecategories/tests/behat/question_categories.feature
++++ b/public/question/bank/managecategories/tests/behat/question_categories.feature
+@@ -85,6 +85,46 @@ Feature: A teacher can put questions in categories in the question bank
+     And I press "Add category"
+     And I should see "Default for Qbank 1 (1)"
+ 
++  Scenario: A non-empty question category can be deleted along with its questions
++    When I am on the "Qbank 1" "core_question > question categories" page
++    And I open the action menu in "Used category" "list_item"
++    And I choose "Delete" in the open action menu
++    And I click on "Delete" "button" in the "Delete" "dialogue"
++    And I should see "The category 'Used category' contains 1 questions"
++    And I set the field "Questions in this category" to "Delete the questions"
++    And I press "Save in category"
++    Then I should not see "Used category"
++    And I press "Add category"
++    And I should see "Default for Qbank 1 (0)"
++    And I am on the "Qbank 1" "core_question > question bank" page
++    And I should not see "Test question to be moved"
++
++  Scenario: Questions in use are moved to another category when a category is deleted along with its questions
++    Given the following "activities" exist:
++      | activity | name   | course | idnumber |
++      | quiz     | Quiz 1 | C1     | quiz1    |
++    And quiz "Quiz 1" contains the following questions:
++      | question                  | page |
++      | Test question to be moved | 1    |
++    And the following "questions" exist:
++      | questioncategory | qtype | name              | questiontext                  |
++      | Used category    | essay | Unused question   | Write about whatever you want |
++    When I am on the "Qbank 1" "core_question > question categories" page
++    And I open the action menu in "Used category" "list_item"
++    And I choose "Delete" in the open action menu
++    And I click on "Delete" "button" in the "Delete" "dialogue"
++    And I should see "The category 'Used category' contains 2 questions"
++    And I should see "1 of these questions are in use"
++    And I set the field "Questions in this category" to "Delete the questions"
++    And I select "Default for Qbank 1" from the "Category" singleselect
++    And I press "Save in category"
++    Then I should not see "Used category"
++    And I press "Add category"
++    And I should see "Default for Qbank 1 (1)"
++    And I am on the "Qbank 1" "core_question > question bank" page
++    And I should see "Test question to be moved"
++    And I should not see "Unused question"
++
+   @_file_upload
+   Scenario: Multi answer questions with their child questions can be moved to another category when the current category is deleted
+     When I am on the "Qbank 1" "core_question > question import" page
+diff --git a/public/question/classes/category_manager.php b/public/question/classes/category_manager.php
+index 3dbb4696085..b3764caca19 100644
+--- a/public/question/classes/category_manager.php
++++ b/public/question/classes/category_manager.php
+@@ -47,6 +47,12 @@ class category_manager {
+         $category = $DB->get_record('question_categories', ['id' => $categoryid]);
+ 
+         $transaction = $DB->start_delegated_transaction();
++
++        // Delete any questions still left in the category. Questions that are in use cannot be deleted
++        // (they would only be hidden, and left orphaned once the category is gone), so they must have been
++        // moved elsewhere before the category is deleted.
++        $this->delete_questions_in_category($categoryid);
++
+         // Send the children categories to live with their grandparent.
+         $DB->set_field('question_categories', 'parent', $category->parent, ['parent' => $category->id]);
+ 
+@@ -63,18 +69,59 @@ class category_manager {
+     /**
+      * Move questions and then delete the category.
+      *
++     * By default, all questions in the category are moved to the new category. If $questionids is given, only those
++     * questions (plus any other questions that are in use, since those can never be deleted) are moved to the new
++     * category, and all the remaining questions in the category are deleted along with the category.
++     *
+      * @param int $oldcat id of the old category.
+      * @param int $newcat id of the new category.
++     * @param int[] $questionids ids of the questions to move. If empty, all questions in the category are moved.
+      */
+-    public function move_questions_and_delete_category(int $oldcat, int $newcat): void {
++    public function move_questions_and_delete_category(int $oldcat, int $newcat, array $questionids = []): void {
+         global $DB;
+         $transaction = $DB->start_delegated_transaction();
+         $this->require_can_delete_category($oldcat);
+-        $this->move_questions($oldcat, $newcat);
++        if (!empty($questionids)) {
++            // Questions that are in use can not be deleted, so make sure they are always moved.
++            $questionids = array_values(array_unique(array_merge(
++                array_map('intval', $questionids),
++                $this->get_in_use_question_ids_in_category($oldcat),
++            )));
++        }
++        $this->move_questions($oldcat, $newcat, $questionids);
+         $this->delete_category($oldcat);
+         $transaction->allow_commit();
+     }
+ 
++    /**
++     * Delete all the questions remaining in a category.
++     *
++     * This is used when deleting a category. Questions which are in use (e.g. in a quiz) can not be deleted,
++     * so if any of the questions in the category are in use an exception is thrown. Such questions must be moved to
++     * another category before this is called.
++     *
++     * @param int $categoryid id of the category.
++     * @throws moodle_exception if any of the questions in the category are in use.
++     */
++    public function delete_questions_in_category(int $categoryid): void {
++        global $CFG, $DB;
++        require_once($CFG->libdir . '/questionlib.php');
++
++        $questionids = $this->get_real_question_ids_in_category($categoryid);
++        if (empty($questionids)) {
++            return;
++        }
++        if (!empty($this->get_in_use_question_ids_in_category($categoryid))) {
++            throw new moodle_exception('cannotdeletecategoryquestionsinuse', 'question');
++        }
++        $transaction = $DB->start_delegated_transaction();
++        foreach ($questionids as $questionid) {
++            question_require_capability_on($questionid, 'edit');
++            question_delete_question($questionid);
++        }
++        $transaction->allow_commit();
++    }
++
+     /**
+      * Checks whether the category is a "Top" category (with no parent).
+      *
+@@ -128,13 +175,50 @@ class category_manager {
+      *
+      * @param int $oldcat id of the old category.
+      * @param int $newcat id of the new category.
++     * @param int[] $questionids ids of the questions to move. If empty, all questions in the category are moved.
+      * @throws \dml_exception
+      */
+-    public function move_questions(int $oldcat, int $newcat): void {
+-        $questionids = $this->get_real_question_ids_in_category($oldcat);
++    public function move_questions(int $oldcat, int $newcat, array $questionids = []): void {
++        global $CFG;
++        require_once($CFG->libdir . '/questionlib.php');
++
++        $allquestionids = $this->get_real_question_ids_in_category($oldcat);
++        if (empty($questionids)) {
++            $questionids = $allquestionids;
++        } else {
++            // Only move questions that actually belong to the old category.
++            $questionids = array_values(array_intersect(array_map('intval', $questionids), $allquestionids));
++        }
++        if (empty($questionids)) {
++            return;
++        }
+         question_move_questions_to_category($questionids, $newcat);
+     }
+ 
++    /**
++     * Returns the ids of the questions in the given category which are currently in use.
++     *
++     * A question is in use if it has been attempted, or is referenced by an activity (e.g. a quiz), so it can not be
++     * deleted. As with get_real_question_ids_in_category(), only real questions are returned, not subquestions.
++     *
++     * @param int $categoryid id of the category.
++     * @return int[] array of question ids.
++     */
++    public function get_in_use_question_ids_in_category(int $categoryid): array {
++        global $CFG;
++        require_once($CFG->libdir . '/questionlib.php');
++
++        $questionids = $this->get_real_question_ids_in_category($categoryid);
++        if (empty($questionids)) {
++            return [];
++        }
++        // Quick check first, to avoid checking each question individually if none of them are in use.
++        if (!questions_in_use($questionids)) {
++            return [];
++        }
++        return array_values(array_filter($questionids, fn($questionid) => questions_in_use([$questionid])));
++    }
++
+     /**
+      * Check the user can manage categories in the given context.
+      *
+diff --git a/public/question/tests/category_manager_test.php b/public/question/tests/category_manager_test.php
+index 3fb830c9ae2..6ad73064d83 100644
+--- a/public/question/tests/category_manager_test.php
++++ b/public/question/tests/category_manager_test.php
+@@ -501,6 +501,177 @@ final class category_manager_test extends \advanced_testcase {
+         $this->assertEquals(3, $DB->count_records('question_bank_entries') - $countqbe);
+     }
+ 
++    /**
++     * Set up a quiz with two question categories, and some questions, one of which is used in the quiz.
++     *
++     * @return array [category 1, category 2, question used in quiz, unused question 1, unused question 2]
++     */
++    private function create_categories_with_questions_in_use(): array {
++        global $CFG;
++        require_once($CFG->dirroot . '/mod/quiz/locallib.php');
++        $generator = $this->getDataGenerator();
++        $course = $generator->create_course();
++        $quiz = $generator->create_module('quiz', ['course' => $course->id]);
++        $context = context_module::instance($quiz->cmid);
++        $questiongenerator = $generator->get_plugin_generator('core_question');
++        $defaultcat = question_get_default_category($context->id, true);
++        $cat1 = $questiongenerator->create_question_category(['contextid' => $context->id, 'parent' => $defaultcat->id]);
++        $cat2 = $questiongenerator->create_question_category(['contextid' => $context->id, 'parent' => $defaultcat->id]);
++        $usedquestion = $questiongenerator->create_question('shortanswer', null, ['category' => $cat1->id]);
++        $unusedquestion1 = $questiongenerator->create_question('shortanswer', null, ['category' => $cat1->id]);
++        $unusedquestion2 = $questiongenerator->create_question('multianswer', null, ['category' => $cat1->id]);
++        quiz_add_quiz_question($usedquestion->id, $quiz);
++        return [$cat1, $cat2, $usedquestion, $unusedquestion1, $unusedquestion2];
++    }
++
++    /**
++     * Test get_in_use_question_ids_in_category() only returns the questions that are in use.
++     */
++    public function test_get_in_use_question_ids_in_category(): void {
++        $this->setAdminUser();
++        $this->resetAfterTest();
++        [$cat1, $cat2, $usedquestion] = $this->create_categories_with_questions_in_use();
++
++        $manager = new category_manager();
++        $this->assertEquals([$usedquestion->id], $manager->get_in_use_question_ids_in_category($cat1->id));
++        $this->assertEquals([], $manager->get_in_use_question_ids_in_category($cat2->id));
++    }
++
++    /**
++     * Test move_questions() moves all questions by default, or only the specified questions.
++     */
++    public function test_move_questions(): void {
++        $this->setAdminUser();
++        $this->resetAfterTest();
++        [$cat1, $cat2, $usedquestion, $unusedquestion1, $unusedquestion2] = $this->create_categories_with_questions_in_use();
++
++        $manager = new category_manager();
++        // Move just one question.
++        $manager->move_questions($cat1->id, $cat2->id, [$unusedquestion1->id]);
++        $this->assertEqualsCanonicalizing(
++            [$usedquestion->id, $unusedquestion2->id],
++            $manager->get_real_question_ids_in_category($cat1->id),
++        );
++        $this->assertEquals([$unusedquestion1->id], $manager->get_real_question_ids_in_category($cat2->id));
++
++        // Move all the remaining questions.
++        $manager->move_questions($cat1->id, $cat2->id);
++        $this->assertEquals([], $manager->get_real_question_ids_in_category($cat1->id));
++        $this->assertEqualsCanonicalizing(
++            [$usedquestion->id, $unusedquestion1->id, $unusedquestion2->id],
++            $manager->get_real_question_ids_in_category($cat2->id),
++        );
++    }
++
++    /**
++     * Test move_questions_and_delete_category() moves all questions by default.
++     */
++    public function test_move_questions_and_delete_category_move_all(): void {
++        global $DB;
++        $this->setAdminUser();
++        $this->resetAfterTest();
++        [$cat1, $cat2, $usedquestion, $unusedquestion1, $unusedquestion2] = $this->create_categories_with_questions_in_use();
++
++        $manager = new category_manager();
++        $manager->move_questions_and_delete_category($cat1->id, $cat2->id);
++
++        $this->assertFalse($DB->record_exists('question_categories', ['id' => $cat1->id]));
++        $this->assertEqualsCanonicalizing(
++            [$usedquestion->id, $unusedquestion1->id, $unusedquestion2->id],
++            $manager->get_real_question_ids_in_category($cat2->id),
++        );
++    }
++
++    /**
++     * Test move_questions_and_delete_category() with a list of questions moves those (and any in use), and deletes the rest.
++     */
++    public function test_move_questions_and_delete_category_delete_unused(): void {
++        global $DB;
++        $this->setAdminUser();
++        $this->resetAfterTest();
++        [$cat1, $cat2, $usedquestion, $unusedquestion1, $unusedquestion2] = $this->create_categories_with_questions_in_use();
++        $childquestions = $DB->get_fieldset_select('question', 'id', 'parent = ?', [$unusedquestion2->id]);
++        $this->assertCount(2, $childquestions);
++
++        $manager = new category_manager();
++        // Move the used question and one unused question. The other unused question (and its children) is deleted.
++        $manager->move_questions_and_delete_category($cat1->id, $cat2->id, [$usedquestion->id, $unusedquestion1->id]);
++
++        $this->assertFalse($DB->record_exists('question_categories', ['id' => $cat1->id]));
++        $this->assertEqualsCanonicalizing(
++            [$usedquestion->id, $unusedquestion1->id],
++            $manager->get_real_question_ids_in_category($cat2->id),
++        );
++        $this->assertFalse($DB->record_exists('question', ['id' => $unusedquestion2->id]));
++        foreach ($childquestions as $childquestion) {
++            $this->assertFalse($DB->record_exists('question', ['id' => $childquestion]));
++        }
++    }
++
++    /**
++     * Test move_questions_and_delete_category() never deletes questions that are in use.
++     */
++    public function test_move_questions_and_delete_category_in_use_always_moved(): void {
++        global $DB;
++        $this->setAdminUser();
++        $this->resetAfterTest();
++        [$cat1, $cat2, $usedquestion, $unusedquestion1, $unusedquestion2] = $this->create_categories_with_questions_in_use();
++
++        $manager = new category_manager();
++        // Only ask to move an unused question. The used question must still be moved rather than deleted.
++        $manager->move_questions_and_delete_category($cat1->id, $cat2->id, [$unusedquestion1->id]);
++
++        $this->assertFalse($DB->record_exists('question_categories', ['id' => $cat1->id]));
++        $this->assertEqualsCanonicalizing(
++            [$usedquestion->id, $unusedquestion1->id],
++            $manager->get_real_question_ids_in_category($cat2->id),
++        );
++        $this->assertFalse($DB->record_exists('question', ['id' => $unusedquestion2->id]));
++    }
++
++    /**
++     * Test delete_category() deletes any unused questions remaining in the category.
++     */
++    public function test_delete_category_with_unused_questions(): void {
++        global $DB;
++        $this->setAdminUser();
++        $this->resetAfterTest();
++        [$cat1, $cat2, $usedquestion, $unusedquestion1, $unusedquestion2] = $this->create_categories_with_questions_in_use();
++
++        $manager = new category_manager();
++        $manager->delete_category($cat2->id);
++        $this->assertFalse($DB->record_exists('question_categories', ['id' => $cat2->id]));
++
++        // Move the used question away, then the category can be deleted along with the unused questions.
++        $manager->move_questions($cat1->id, $cat1->parent, [$usedquestion->id]);
++        $manager->delete_category($cat1->id);
++        $this->assertFalse($DB->record_exists('question_categories', ['id' => $cat1->id]));
++        $this->assertTrue($DB->record_exists('question', ['id' => $usedquestion->id]));
++        $this->assertFalse($DB->record_exists('question', ['id' => $unusedquestion1->id]));
++        $this->assertFalse($DB->record_exists('question', ['id' => $unusedquestion2->id]));
++    }
++
++    /**
++     * Test delete_category() refuses to delete a category containing questions in use.
++     */
++    public function test_delete_category_with_questions_in_use(): void {
++        global $DB;
++        $this->setAdminUser();
++        $this->resetAfterTest();
++        [$cat1, $cat2, $usedquestion, $unusedquestion1] = $this->create_categories_with_questions_in_use();
++
++        $manager = new category_manager();
++        try {
++            $manager->delete_category($cat1->id);
++            $this->fail('Exception expected');
++        } catch (\moodle_exception $e) {
++            $this->assertEquals(get_string('cannotdeletecategoryquestionsinuse', 'question'), $e->getMessage());
++        }
++        $this->assertTrue($DB->record_exists('question_categories', ['id' => $cat1->id]));
++        $this->assertTrue($DB->record_exists('question', ['id' => $usedquestion->id]));
++        $this->assertTrue($DB->record_exists('question', ['id' => $unusedquestion1->id]));
++    }
++
+     /**
+      * Test delete top category in function question_can_delete_cat.
+      */

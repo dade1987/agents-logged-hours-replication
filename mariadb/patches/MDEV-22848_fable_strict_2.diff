@@ -1,0 +1,184 @@
+diff --git a/mysql-test/suite/binlog/r/binlog_gtid_slave_pos_autocommit_off.result b/mysql-test/suite/binlog/r/binlog_gtid_slave_pos_autocommit_off.result
+new file mode 100644
+index 00000000..8165e905
+--- /dev/null
++++ b/mysql-test/suite/binlog/r/binlog_gtid_slave_pos_autocommit_off.result
+@@ -0,0 +1,38 @@
++SET @old_gtid_slave_pos= @@GLOBAL.gtid_slave_pos;
++ALTER TABLE mysql.gtid_slave_pos ENGINE=InnoDB;
++RESET MASTER;
++SET autocommit=0;
++CREATE TABLE t1 (c INT) ENGINE=MyISAM;
++SET GLOBAL gtid_slave_pos="0-1-100";
++INSERT INTO t1 VALUES (0);
++DROP TABLE not_there;
++ERROR 42S02: Unknown table 'test.not_there'
++INSERT INTO t1 VALUES (1);
++SAVEPOINT sp1;
++INSERT INTO t1 VALUES (2);
++COMMIT;
++SELECT * FROM t1 ORDER BY c;
++c
++0
++1
++2
++SELECT @@GLOBAL.gtid_slave_pos;
++@@GLOBAL.gtid_slave_pos
++0-1-100
++CREATE TABLE t2 (c INT) ENGINE=InnoDB;
++INSERT INTO t2 VALUES (1);
++SET GLOBAL gtid_slave_pos="0-1-200";
++ERROR 25000: You are not allowed to execute this command in a transaction
++SAVEPOINT sp2;
++INSERT INTO t2 VALUES (2);
++COMMIT;
++SELECT * FROM t2 ORDER BY c;
++c
++1
++2
++SELECT @@GLOBAL.gtid_slave_pos;
++@@GLOBAL.gtid_slave_pos
++0-1-100
++DROP TABLE t1, t2;
++SET autocommit=1;
++RESET MASTER;
+diff --git a/mysql-test/suite/binlog/t/binlog_gtid_slave_pos_autocommit_off.test b/mysql-test/suite/binlog/t/binlog_gtid_slave_pos_autocommit_off.test
+new file mode 100644
+index 00000000..af2e7a5c
+--- /dev/null
++++ b/mysql-test/suite/binlog/t/binlog_gtid_slave_pos_autocommit_off.test
+@@ -0,0 +1,60 @@
++#
++# MDEV-22848 Assertion `trx_is_registered_for_2pc(trx)' failed in
++#            innobase_xa_prepare on DROP and in innobase_savepoint on
++#            SAVEPOINT
++#
++# SET GLOBAL gtid_slave_pos with autocommit=0 used to open and lock the
++# mysql.gtid_slave_pos table with the multi-statement transaction flags still
++# set, so that the storage engine registered itself in the enclosing
++# transaction. The GTID position was then committed as a separate (autocommit)
++# transaction, leaving the storage engine registered in the enclosing
++# transaction, but with its own transaction already committed and
++# deregistered. A later 2PC commit (DROP TABLE with a binlogged non-transactional
++# update pending) or SAVEPOINT then hit assertions in InnoDB.
++#
++
++--source include/have_innodb.inc
++--source include/have_log_bin.inc
++--source include/have_binlog_format_mixed.inc
++
++--let old_slave_pos_engine= query_get_value(SHOW TABLE STATUS FROM mysql LIKE 'gtid_slave_pos', Engine, 1)
++SET @old_gtid_slave_pos= @@GLOBAL.gtid_slave_pos;
++
++# The bug needs a transactional engine supporting 2PC for the table.
++ALTER TABLE mysql.gtid_slave_pos ENGINE=InnoDB;
++RESET MASTER;
++
++SET autocommit=0;
++CREATE TABLE t1 (c INT) ENGINE=MyISAM;
++SET GLOBAL gtid_slave_pos="0-1-100";
++INSERT INTO t1 VALUES (0);
++--error ER_BAD_TABLE_ERROR
++DROP TABLE not_there;
++INSERT INTO t1 VALUES (1);
++SAVEPOINT sp1;
++INSERT INTO t1 VALUES (2);
++COMMIT;
++SELECT * FROM t1 ORDER BY c;
++SELECT @@GLOBAL.gtid_slave_pos;
++
++# Same, with the position update inside a transaction that has already
++# used a transactional table, is rejected and must not break the transaction.
++CREATE TABLE t2 (c INT) ENGINE=InnoDB;
++INSERT INTO t2 VALUES (1);
++--error ER_CANT_DO_THIS_DURING_AN_TRANSACTION
++SET GLOBAL gtid_slave_pos="0-1-200";
++SAVEPOINT sp2;
++INSERT INTO t2 VALUES (2);
++COMMIT;
++SELECT * FROM t2 ORDER BY c;
++SELECT @@GLOBAL.gtid_slave_pos;
++
++DROP TABLE t1, t2;
++SET autocommit=1;
++
++# Cleanup
++RESET MASTER;
++--disable_query_log
++SET GLOBAL gtid_slave_pos= @old_gtid_slave_pos;
++--eval ALTER TABLE mysql.gtid_slave_pos ENGINE=$old_slave_pos_engine
++--enable_query_log
+diff --git a/sql/rpl_gtid.cc b/sql/rpl_gtid.cc
+index 9004aea2..6cb9297d 100644
+--- a/sql/rpl_gtid.cc
++++ b/sql/rpl_gtid.cc
+@@ -437,7 +437,17 @@ rpl_slave_state::truncate_state_table(THD *thd)
+ {
+   TABLE_LIST tlist;
+   int err= 0;
++  ulonglong thd_saved_option= thd->variables.option_bits;
+ 
++  /*
++    Truncate the table in a separate, autocommitted transaction. The
++    multi-statement transaction flags must be cleared before opening the
++    table, so that the storage engine does not register itself in the
++    enclosing transaction (see also record_gtid() and MDEV-22848).
++  */
++  thd->variables.option_bits&=
++    ~(ulonglong)(OPTION_NOT_AUTOCOMMIT |OPTION_BEGIN |OPTION_BIN_LOG |
++                 OPTION_GTID_BEGIN);
+   tlist.init_one_table(&MYSQL_SCHEMA_NAME, &rpl_gtid_slave_state_table_name,
+                        NULL, TL_WRITE);
+   tlist.mdl_request.set_type(MDL_EXCLUSIVE);
+@@ -462,6 +472,7 @@ rpl_slave_state::truncate_state_table(THD *thd)
+     }
+     thd->release_transactional_locks();
+   }
++  thd->variables.option_bits= thd_saved_option;
+   return err;
+ }
+ 
+@@ -700,6 +711,26 @@ rpl_slave_state::record_gtid(THD *thd, const rpl_gtid *gtid, uint64 sub_id,
+   suspended_wfc= thd->suspend_subsequent_commits();
+   thd->lex->reset_n_backup_query_tables_list(&lex_backup);
+   tlist.init_one_table(&MYSQL_SCHEMA_NAME, &gtid_pos_table_name, NULL, TL_WRITE);
++
++  if (!in_transaction)
++  {
++    /*
++      The GTID position is to be written in a separate, autocommitted
++      transaction. The multi-statement transaction flags must be cleared
++      *before* the table is opened and locked (MDEV-22848). Otherwise the
++      storage engine (e.g. InnoDB in ha_innobase::external_lock()) would see
++      OPTION_NOT_AUTOCOMMIT/OPTION_BEGIN and register itself in
++      thd->transaction->all as well. The statement commit below would then
++      commit and deregister the engine transaction, while the engine stayed
++      registered in the enclosing transaction, leading to assertion failures
++      in later XA prepare or SAVEPOINT (eg. with autocommit=0 and
++      SET GLOBAL gtid_slave_pos=...).
++    */
++    DBUG_PRINT("info", ("resetting OPTION_BEGIN"));
++    thd->variables.option_bits&=
++      ~(ulonglong)(OPTION_NOT_AUTOCOMMIT |OPTION_BEGIN |OPTION_GTID_BEGIN);
++  }
++
+   if ((err= open_and_lock_tables(thd, &tlist, FALSE, 0)))
+     goto end;
+   table_opened= true;
+@@ -714,15 +745,7 @@ rpl_slave_state::record_gtid(THD *thd, const rpl_gtid *gtid, uint64 sub_id,
+   thd->wsrep_ignore_table= true; // Do not replicate mysql.gtid_slave_pos table
+ #endif
+ 
+-  if (!in_transaction)
+-  {
+-    DBUG_PRINT("info", ("resetting OPTION_BEGIN"));
+-    thd->variables.option_bits&=
+-      ~(ulonglong)(OPTION_NOT_AUTOCOMMIT |OPTION_BEGIN |OPTION_BIN_LOG |
+-                   OPTION_GTID_BEGIN);
+-  }
+-  else
+-    thd->variables.option_bits&= ~(ulonglong)OPTION_BIN_LOG;
++  thd->variables.option_bits&= ~(ulonglong)OPTION_BIN_LOG;
+ 
+   bitmap_set_all(table->write_set);
+   table->rpl_write_set= table->write_set;

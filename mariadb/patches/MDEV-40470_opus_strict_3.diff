@@ -1,0 +1,110 @@
+diff --git a/mysql-test/main/grant5.result b/mysql-test/main/grant5.result
+index 5aeedb89..8ff4f650 100644
+--- a/mysql-test/main/grant5.result
++++ b/mysql-test/main/grant5.result
+@@ -472,3 +472,26 @@ DROP USER foo@localhost;
+ CREATE USER foo@localhost IDENTIFIED VIA not_installed_plugin;
+ ERROR HY000: Plugin 'not_installed_plugin' is not loaded
+ # End of 10.5 tests
++#
++# MDEV-40470 GRANT PROXY with empty password incorrectly checks
++#            grantor's privileges
++#
++CREATE USER u1@localhost;
++CREATE USER u2@localhost IDENTIFIED BY 'oldpassword';
++GRANT ALL PRIVILEGES ON *.* TO u2@localhost WITH GRANT OPTION;
++connect u,localhost,u1;
++GRANT PROXY ON u1@localhost TO u2@localhost IDENTIFIED VIA
++'' OR mysql_native_password USING PASSWORD('newpassword');
++ERROR 42000: Access denied for user 'u1'@'localhost' to database 'mysql'
++GRANT PROXY ON u1@localhost TO u2@localhost IDENTIFIED BY '';
++ERROR 42000: Access denied for user 'u1'@'localhost' to database 'mysql'
++GRANT PROXY ON u1@localhost TO u2@localhost IDENTIFIED VIA '';
++ERROR 42000: Access denied for user 'u1'@'localhost' to database 'mysql'
++disconnect u;
++connection default;
++SELECT user AS User, authentication_string = PASSWORD('oldpassword') AS same
++FROM mysql.user WHERE user='u2';
++User	same
++u2	1
++DROP USER u1@localhost;
++DROP USER u2@localhost;
+diff --git a/mysql-test/main/grant5.test b/mysql-test/main/grant5.test
+index a33cecbf..367f0be5 100644
+--- a/mysql-test/main/grant5.test
++++ b/mysql-test/main/grant5.test
+@@ -436,3 +436,29 @@ DROP USER foo@localhost;
+ CREATE USER foo@localhost IDENTIFIED VIA not_installed_plugin;
+ 
+ --echo # End of 10.5 tests
++
++--echo #
++--echo # MDEV-40470 GRANT PROXY with empty password incorrectly checks
++--echo #            grantor's privileges
++--echo #
++
++CREATE USER u1@localhost;
++CREATE USER u2@localhost IDENTIFIED BY 'oldpassword';
++GRANT ALL PRIVILEGES ON *.* TO u2@localhost WITH GRANT OPTION;
++
++connect u,localhost,u1;
++--error ER_DBACCESS_DENIED_ERROR
++GRANT PROXY ON u1@localhost TO u2@localhost IDENTIFIED VIA
++  '' OR mysql_native_password USING PASSWORD('newpassword');
++--error ER_DBACCESS_DENIED_ERROR
++GRANT PROXY ON u1@localhost TO u2@localhost IDENTIFIED BY '';
++--error ER_DBACCESS_DENIED_ERROR
++GRANT PROXY ON u1@localhost TO u2@localhost IDENTIFIED VIA '';
++disconnect u;
++
++connection default;
++SELECT user AS User, authentication_string = PASSWORD('oldpassword') AS same
++  FROM mysql.user WHERE user='u2';
++
++DROP USER u1@localhost;
++DROP USER u2@localhost;
+diff --git a/sql/sql_acl.cc b/sql/sql_acl.cc
+index d4a7606d..4b0996b1 100644
+--- a/sql/sql_acl.cc
++++ b/sql/sql_acl.cc
+@@ -7131,8 +7131,17 @@ static bool copy_and_check_auth(LEX_USER *to, LEX_USER *from, THD *thd)
+ {
+   to->auth= from->auth;
+ 
+-  // if changing auth for an existing user
+-  if (has_auth(to, thd->lex) && find_user_exact(to->host.str, to->user.str))
++  /*
++    If changing auth for an existing user.
++
++    Note, that any IDENTIFIED clause (to->auth != NULL) changes the
++    authentication of the user in replace_user_table(), even if it
++    specifies an empty password or an empty plugin name, like in
++    IDENTIFIED BY '' or IDENTIFIED VIA '' OR ...
++    So the privilege check must be done for any specified auth.
++  */
++  if ((to->auth || has_auth(to, thd->lex)) &&
++      find_user_exact(to->host.str, to->user.str))
+   {
+     mysql_mutex_unlock(&acl_cache->lock);
+     bool res= check_alter_user(thd, to->host.str, to->user.str);
+diff --git a/sql/structs.h b/sql/structs.h
+index aed4dacb..b627d489 100644
+--- a/sql/structs.h
++++ b/sql/structs.h
+@@ -256,7 +256,15 @@ struct LEX_USER: public AUTHID
+   USER_AUTH *auth;
+   bool has_auth()
+   {
+-    return auth && (auth->plugin.length || auth->auth_str.length || auth->pwtext.length);
++    /*
++      Check the whole chain of authentication methods
++      (IDENTIFIED VIA a OR b OR ...), not only the first one,
++      which could be empty, e.g. IDENTIFIED VIA '' OR ...
++    */
++    for (USER_AUTH *a= auth; a; a= a->next)
++      if (a->plugin.length || a->auth_str.length || a->pwtext.length)
++        return true;
++    return false;
+   }
+ };
+ 

@@ -1,0 +1,24 @@
+diff --git a/sql/sql_parse.cc b/sql/sql_parse.cc
+index 9b1337ff..3b569455 100644
+--- a/sql/sql_parse.cc
++++ b/sql/sql_parse.cc
+@@ -6783,6 +6783,19 @@ drop_routine(THD *thd, LEX *lex)
+     /* If this happens, an error should have been reported. */
+     return 1;
+   }
++
++  /* DROP PACKAGE also drops the package body, so revoke its grants too */
++  if (sp_result != SP_KEY_NOT_FOUND &&
++      lex->sql_command == SQLCOM_DROP_PACKAGE &&
++      sp_automatic_privileges && !opt_noacl &&
++      sp_revoke_privileges(thd, lex->spname->m_db.str, lex->spname->m_name.str,
++                           &sp_handler_package_body))
++  {
++    push_warning(thd, Sql_condition::WARN_LEVEL_WARN,
++                 ER_PROC_AUTO_REVOKE_FAIL,
++                 ER_THD(thd, ER_PROC_AUTO_REVOKE_FAIL));
++    return 1;
++  }
+ #endif /* NO_EMBEDDED_ACCESS_CHECKS */
+ 
+   switch (sp_result) {

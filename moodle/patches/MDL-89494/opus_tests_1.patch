@@ -1,0 +1,209 @@
+diff --git a/public/admin/tool/customlang/locallib.php b/public/admin/tool/customlang/locallib.php
+index c76ff7829fb..9900c830548 100644
+--- a/public/admin/tool/customlang/locallib.php
++++ b/public/admin/tool/customlang/locallib.php
+@@ -34,7 +34,8 @@ class tool_customlang_utils {
+ 
+     /**
+      * Rough number of strings that are being processed during a full checkout.
+-     * This is used to estimate the progress of the checkout.
++     *
++     * No longer used, the checkout progress is now calculated from the real number of components and strings.
+      */
+     const ROUGH_NUMBER_OF_STRINGS = 33000;
+ 
+@@ -126,13 +127,19 @@ class tool_customlang_utils {
+         }
+         unset($current);
+ 
+-        // initialize the progress counter - stores the number of processed strings
+-        $done = 0;
+         $strinprogress = get_string('checkoutinprogress', 'tool_customlang');
+ 
+         // reload components and fetch their strings
+         $stringman  = get_string_manager();
+         $components = $DB->get_records('tool_customlang_components');
++
++        // Initialize the progress counters. The progress is calculated from the real number of components
++        // to be processed (and the strings within the component being processed), so that 100% is only
++        // reported once the whole checkout has really finished.
++        $totalcomponents = count($components);
++        $donecomponents = 0;
++        $lastpercent = -1;
++
+         foreach ($components as $component) {
+             $sql = "SELECT stringid, id, lang, componentid, original, master, local, timemodified, timecustomized, outdated, modified
+                       FROM {tool_customlang} s
+@@ -147,15 +154,22 @@ class tool_customlang_utils {
+             }
+             $local = $stringman->load_component_strings($component->name, $lang, true, false);
+ 
++            $totalstrings = count($english);
++            $donestrings = 0;
++
+             foreach ($english as $stringid => $stringoriginal) {
+                 $stringmaster = isset($master[$stringid]) ? $master[$stringid] : null;
+                 $stringlocal = isset($local[$stringid]) ? $local[$stringid] : null;
+                 $now = time();
+ 
+                 if (!is_null($progressbar)) {
+-                    $done++;
+-                    $donepercent = floor(min($done, self::ROUGH_NUMBER_OF_STRINGS) / self::ROUGH_NUMBER_OF_STRINGS * 100);
+-                    $progressbar->update_full($donepercent, $strinprogress);
++                    $donestrings++;
++                    $donepercent = self::get_checkout_progress($donecomponents, $totalcomponents,
++                        $donestrings, $totalstrings);
++                    if ($donepercent != $lastpercent) {
++                        $progressbar->update_full($donepercent, $strinprogress);
++                        $lastpercent = $donepercent;
++                    }
+                 }
+ 
+                 if (isset($current[$stringid])) {
+@@ -208,6 +222,15 @@ class tool_customlang_utils {
+                     $DB->insert_record('tool_customlang', $record);
+                 }
+             }
++
++            $donecomponents++;
++            if (!is_null($progressbar)) {
++                $donepercent = self::get_checkout_progress($donecomponents, $totalcomponents);
++                if ($donepercent != $lastpercent) {
++                    $progressbar->update_full($donepercent, $strinprogress);
++                    $lastpercent = $donepercent;
++                }
++            }
+         }
+ 
+         if (!is_null($progressbar)) {
+@@ -215,6 +238,36 @@ class tool_customlang_utils {
+         }
+     }
+ 
++    /**
++     * Calculates the percentage of the checkout progress.
++     *
++     * The result is based on the number of already processed components and, optionally, on the
++     * processed strings of the component currently being processed. It never reaches 100 so that
++     * the full completion is only reported once the checkout has really finished.
++     *
++     * @param int $donecomponents number of components completely processed
++     * @param int $totalcomponents total number of components to process
++     * @param int $donestrings number of processed strings in the component currently being processed
++     * @param int $totalstrings total number of strings in the component currently being processed
++     * @return float percentage between 0 and 99
++     */
++    public static function get_checkout_progress(int $donecomponents, int $totalcomponents,
++            int $donestrings = 0, int $totalstrings = 0): float {
++
++        if ($totalcomponents <= 0) {
++            return 0;
++        }
++
++        $done = $donecomponents;
++        if ($totalstrings > 0) {
++            $done += min($donestrings, $totalstrings) / $totalstrings;
++        }
++
++        $percent = floor(min($done, $totalcomponents) / $totalcomponents * 100);
++
++        return min($percent, 99);
++    }
++
+     /**
+      * Exports the translator database into disk files
+      *
+diff --git a/public/admin/tool/customlang/tests/locallib_test.php b/public/admin/tool/customlang/tests/locallib_test.php
+new file mode 100644
+index 00000000000..bb5269fdc2e
+--- /dev/null
++++ b/public/admin/tool/customlang/tests/locallib_test.php
+@@ -0,0 +1,88 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace tool_customlang;
++
++use tool_customlang_utils;
++
++defined('MOODLE_INTERNAL') || die();
++
++global $CFG;
++require_once($CFG->dirroot . '/' . $CFG->admin . '/tool/customlang/locallib.php');
++
++/**
++ * Tests for the tool_customlang_utils class.
++ *
++ * @package    tool_customlang
++ * @category   test
++ * @copyright  2026 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++#[\PHPUnit\Framework\Attributes\CoversClass(tool_customlang_utils::class)]
++final class locallib_test extends \advanced_testcase {
++
++    /**
++     * Test the calculation of the checkout progress.
++     */
++    public function test_get_checkout_progress(): void {
++        $this->assertEquals(0, tool_customlang_utils::get_checkout_progress(0, 0));
++        $this->assertEquals(0, tool_customlang_utils::get_checkout_progress(0, 10));
++        $this->assertEquals(5, tool_customlang_utils::get_checkout_progress(0, 10, 1, 2));
++        $this->assertEquals(50, tool_customlang_utils::get_checkout_progress(5, 10));
++        $this->assertEquals(90, tool_customlang_utils::get_checkout_progress(9, 10, 0, 100));
++        // The progress never reaches 100 before the checkout has completely finished.
++        $this->assertEquals(99, tool_customlang_utils::get_checkout_progress(9, 10, 100, 100));
++        $this->assertEquals(99, tool_customlang_utils::get_checkout_progress(10, 10));
++        $this->assertEquals(99, tool_customlang_utils::get_checkout_progress(999, 1000, 999, 1000));
++    }
++
++    /**
++     * Test that the checkout only reports 100% once all the strings have been processed.
++     */
++    public function test_checkout_progress_reaches_100_only_at_the_end(): void {
++        global $DB;
++        $this->resetAfterTest();
++
++        $progressbar = $this->getMockBuilder(\progress_bar::class)
++            ->disableOriginalConstructor()
++            ->onlyMethods(['update_full'])
++            ->getMock();
++
++        $updates = [];
++        $progressbar->method('update_full')->willReturnCallback(
++            function($percent, $msg) use (&$updates, $DB) {
++                $updates[] = [$percent, $DB->count_records('tool_customlang', ['lang' => 'en'])];
++                return true;
++            }
++        );
++
++        tool_customlang_utils::checkout('en', $progressbar);
++
++        $total = $DB->count_records('tool_customlang', ['lang' => 'en']);
++        $this->assertNotEmpty($updates);
++
++        $last = array_pop($updates);
++        $this->assertEquals(100, $last[0]);
++        $this->assertEquals($total, $last[1]);
++
++        $previous = 0;
++        foreach ($updates as [$percent, $count]) {
++            $this->assertLessThan(100, $percent);
++            $this->assertGreaterThanOrEqual($previous, $percent);
++            $previous = $percent;
++        }
++    }
++}

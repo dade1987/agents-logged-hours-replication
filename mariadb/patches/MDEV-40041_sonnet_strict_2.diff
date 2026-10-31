@@ -1,0 +1,56 @@
+diff --git a/mysql-test/main/mdev_40041.result b/mysql-test/main/mdev_40041.result
+new file mode 100644
+index 00000000..2b670a90
+--- /dev/null
++++ b/mysql-test/main/mdev_40041.result
+@@ -0,0 +1,13 @@
++#
++# MDEV-40041 Assertion `fixed()' failed in Item_func_connection_id::val_int on INSERT w/ TRIGGER
++#
++SET sql_mode='';
++CREATE TABLE t (c INT);
++LOCK TABLE t WRITE;
++CREATE OR REPLACE TABLE t (a INT AS (CONNECTION_ID()));
++CREATE TRIGGER a BEFORE INSERT ON t FOR EACH ROW SET @a:=1;
++INSERT INTO t VALUES ('');
++UNLOCK TABLES;
++DROP TABLE t;
++SET sql_mode=DEFAULT;
++# End of 10.6 tests
+diff --git a/mysql-test/main/mdev_40041.test b/mysql-test/main/mdev_40041.test
+new file mode 100644
+index 00000000..6ee481e7
+--- /dev/null
++++ b/mysql-test/main/mdev_40041.test
+@@ -0,0 +1,13 @@
++--echo #
++--echo # MDEV-40041 Assertion `fixed()' failed in Item_func_connection_id::val_int on INSERT w/ TRIGGER
++--echo #
++SET sql_mode='';
++CREATE TABLE t (c INT);
++LOCK TABLE t WRITE;
++CREATE OR REPLACE TABLE t (a INT AS (CONNECTION_ID()));
++CREATE TRIGGER a BEFORE INSERT ON t FOR EACH ROW SET @a:=1;
++INSERT INTO t VALUES ('');
++UNLOCK TABLES;
++DROP TABLE t;
++SET sql_mode=DEFAULT;
++--echo # End of 10.6 tests
+diff --git a/sql/sql_base.cc b/sql/sql_base.cc
+index eabad770..6192c916 100644
+--- a/sql/sql_base.cc
++++ b/sql/sql_base.cc
+@@ -877,7 +877,12 @@ int close_thread_tables(THD *thd) noexcept
+         For simple locking we cleanup it here because we don't close thread
+         tables. For prelocking we close it when we do close thread tables.
+       */
+-      if (thd->locked_tables_mode != LTM_PRELOCKED)
++      /*
++        Do not clean up when closing tables of a sub-statement (a trigger or
++        a stored function): the outer statement still uses the same tables
++        and their virtual column expressions.
++      */
++      if (thd->locked_tables_mode != LTM_PRELOCKED && !thd->in_sub_stmt)
+         table->vcol_cleanup_expr(thd);
+     }
+ 

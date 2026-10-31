@@ -1,0 +1,108 @@
+diff --git a/mysql-test/main/loaddata.result b/mysql-test/main/loaddata.result
+index f2cf21b3..2c9e6a02 100644
+--- a/mysql-test/main/loaddata.result
++++ b/mysql-test/main/loaddata.result
+@@ -722,3 +722,26 @@ ST_AsText(p)	chr
+ POINT(37.646944 -75.761111)	їєі
+ drop table t1, t2;
+ # End of 10.5 tests
++#
++# MDEV-40480 LOAD DATA leaves a stale STORED generated column after a
++#            BEFORE INSERT trigger changes its base column
++#
++CREATE TABLE t1 (
++id INT PRIMARY KEY,
++v INT NOT NULL,
++g INT GENERATED ALWAYS AS (v * 2) STORED,
++vg INT GENERATED ALWAYS AS (v * 3) VIRTUAL,
++note VARCHAR(20)
++);
++CREATE TRIGGER t1_bi BEFORE INSERT ON t1 FOR EACH ROW SET NEW.v = 20;
++LOAD DATA INFILE 'MYSQLTEST_VARDIR/tmp/mdev40480.tsv' INTO TABLE t1
++FIELDS TERMINATED BY '\t' LINES TERMINATED BY '\n' (id, v, note);
++LOAD DATA INFILE 'MYSQLTEST_VARDIR/tmp/mdev40480.tsv' INTO TABLE t1
++FIELDS TERMINATED BY '\t' LINES TERMINATED BY '\n' (id, v, note)
++SET id = 3;
++SELECT id, v, g, vg, g = v * 2 AS invariant_holds, note FROM t1 ORDER BY id;
++id	v	g	vg	invariant_holds	note
++2	20	40	60	1	new
++3	20	40	60	1	new
++DROP TABLE t1;
++# End of 10.11 tests
+diff --git a/mysql-test/main/loaddata.test b/mysql-test/main/loaddata.test
+index 84040be8..ad36ba02 100644
+--- a/mysql-test/main/loaddata.test
++++ b/mysql-test/main/loaddata.test
+@@ -808,3 +808,32 @@ select ST_AsText(p), chr from t2;
+ drop table t1, t2;
+ 
+ --echo # End of 10.5 tests
++
++--echo #
++--echo # MDEV-40480 LOAD DATA leaves a stale STORED generated column after a
++--echo #            BEFORE INSERT trigger changes its base column
++--echo #
++
++CREATE TABLE t1 (
++  id INT PRIMARY KEY,
++  v INT NOT NULL,
++  g INT GENERATED ALWAYS AS (v * 2) STORED,
++  vg INT GENERATED ALWAYS AS (v * 3) VIRTUAL,
++  note VARCHAR(20)
++);
++CREATE TRIGGER t1_bi BEFORE INSERT ON t1 FOR EACH ROW SET NEW.v = 20;
++--write_file $MYSQLTEST_VARDIR/tmp/mdev40480.tsv
++2	12	new
++EOF
++--replace_result $MYSQLTEST_VARDIR MYSQLTEST_VARDIR
++eval LOAD DATA INFILE '$MYSQLTEST_VARDIR/tmp/mdev40480.tsv' INTO TABLE t1
++  FIELDS TERMINATED BY '\t' LINES TERMINATED BY '\n' (id, v, note);
++--replace_result $MYSQLTEST_VARDIR MYSQLTEST_VARDIR
++eval LOAD DATA INFILE '$MYSQLTEST_VARDIR/tmp/mdev40480.tsv' INTO TABLE t1
++  FIELDS TERMINATED BY '\t' LINES TERMINATED BY '\n' (id, v, note)
++  SET id = 3;
++SELECT id, v, g, vg, g = v * 2 AS invariant_holds, note FROM t1 ORDER BY id;
++--remove_file $MYSQLTEST_VARDIR/tmp/mdev40480.tsv
++DROP TABLE t1;
++
++--echo # End of 10.11 tests
+diff --git a/sql/sql_base.cc b/sql/sql_base.cc
+index 544df995..57f9a932 100644
+--- a/sql/sql_base.cc
++++ b/sql/sql_base.cc
+@@ -9371,17 +9371,29 @@ fill_record_n_invoke_before_triggers(THD *thd, TABLE *table,
+     /*
+       Re-calculate virtual fields to cater for cases when base columns are
+       updated by the triggers.
++
++      The list of fields may be empty, e.g. for LOAD DATA without a SET
++      clause: the row was already filled by the caller directly into
++      table->field, so the virtual fields still need to be re-evaluated
++      after BEFORE triggers that may have modified base columns.
+     */
+-    if (table->vfield && fields.elements)
++    if (table->vfield)
+     {
+-      Item *fld= (Item_field*) fields.head();
+-      Item_field *item_field= fld->field_for_view_update();
+-      if (item_field)
++      bool recalc= true;
++      if (fields.elements)
+       {
+-        DBUG_ASSERT(table == item_field->field->table);
++        Item *fld= (Item_field*) fields.head();
++        Item_field *item_field= fld->field_for_view_update();
++        if (item_field)
++        {
++          DBUG_ASSERT(table == item_field->field->table);
++        }
++        else
++          recalc= false;
++      }
++      if (recalc)
+         result|= table->update_virtual_fields(table->file,
+                                               VCOL_UPDATE_FOR_WRITE);
+-      }
+     }
+   }
+   return result;

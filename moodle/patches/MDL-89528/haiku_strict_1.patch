@@ -1,0 +1,31 @@
+diff --git a/public/lib/classes/di.php b/public/lib/classes/di.php
+index 46dd11354eb..868471b0187 100644
+--- a/public/lib/classes/di.php
++++ b/public/lib/classes/di.php
+@@ -89,9 +89,10 @@ class di {
+         // Configure the Container builder.
+         $builder = new \DI\ContainerBuilder();
+ 
+-        // At the moment we are using autowiring, but not automatic attribute injection.
+-        // Automatic attribute injection is a php-di specific feature.
++        // Enable autowiring, and attribute-based injection (such as #[\DI\Attribute\Inject] on properties).
++        // Attribute injection is a php-di specific feature, and is used to support injectOn() for legacy classes.
+         $builder->useAutowiring(true);
++        $builder->useAttributes(true);
+ 
+         if (!$CFG->debugdeveloper) {
+             // Enable compilation of the container and write proxies to disk in production.
+diff --git a/public/lib/php-di/php-di/src/Definition/Source/AttributeBasedAutowiring.php b/public/lib/php-di/php-di/src/Definition/Source/AttributeBasedAutowiring.php
+index 0beb496451f..41ac429ee15 100644
+--- a/public/lib/php-di/php-di/src/Definition/Source/AttributeBasedAutowiring.php
++++ b/public/lib/php-di/php-di/src/Definition/Source/AttributeBasedAutowiring.php
+@@ -41,6 +41,9 @@ class AttributeBasedAutowiring implements DefinitionSource, Autowiring
+ 
+         $definition = $definition ?: new ObjectDefinition($name);
+ 
++        // This source includes the reflection source: constructor injection is guessed from type-hints.
++        $definition = (new ReflectionBasedAutowiring())->autowire($name, $definition);
++
+         $class = new ReflectionClass($className);
+ 
+         $this->readInjectableAttribute($class, $definition);

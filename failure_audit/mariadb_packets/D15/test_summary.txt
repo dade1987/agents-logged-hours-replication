@@ -1,0 +1,52 @@
+Evaluation: the agent's diff (without its own mysql-test changes) was applied on the parent commit, the developers' mysql-test files from the fix were added, the server was built (debug) and the fix's mtr tests were run: ['main.view_grant']
+On the parent commit these tests FAIL; with the human fix they PASS.
+
+AGENT RESULT: FAIL
+main.view_grant                          w1 [ fail ]
+        Test ended at 2026-10-28 23:36:54
+
+CURRENT_TEST: main.view_grant
+mysqltest: At line 2330: query 'create view v as select f()' failed: ER_WRONG_VALUE (1525): Incorrect DEFINER value: 'root
+definer_host=localhost
+suid=1'
+
+The result from queries just before the failure was:
+< snip >
+create user 'root
+definer_host=localhost
+suid=1'@localhost;
+connect u,localhost,'root
+definer_host=localhost
+suid=1';
+select user(), current_user();
+user()	root
+definer_host=localhost
+suid=1@localhost
+current_user()	root
+definer_host=localhost
+suid=1@localhost
+select group_concat(user,'@',host) from mysql.global_priv;
+ERROR 42000: SELECT command denied to user 'root
+definer_host=localhost
+suid=1'@'localhost' for table `mysql`.`global_priv`
+create function f() returns text sql security invoker
+return (select group_concat(user,'@',host) from mysql.global_priv);
+create view v as select f();
+
+More results from queries before failure can be found in /home/mtr/var/t/1/log/view_grant.log
+
+ - saving '/home/mtr/var/t/1/log/main.view_grant/' to '/home/mtr/var/t/log/main.view_grant/'
+--------------------------------------------------------------------------
+The servers were restarted 0 times
+Spent 0.000 of 2 seconds executing testcases
+
+Completed: Failed 1/1 tests, 0.00% were successful.
+
+Failing test(s): main.view_grant
+
+The log files in var/log may give you some hint of what went wrong.
+
+If you want to report this error, MariaDB's bug tracker is found at
+https://jira.mariadb.org
+
+mysql-test-run: *** ERROR: there were failing test cases

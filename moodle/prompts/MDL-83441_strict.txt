@@ -1,0 +1,29 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot run Moodle's test suite. You may run `php -l <file>` and read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-83441: H5P core doesn't find upgrade script
+
+The H5P file_storage class has a function called getUpgradeScript, which fetches the upgrades.js file of a H5P library. The script looks for a file called "upgrade.js", however the file is called "upgrade{*}s{*}.js" (see [https://h5p.org/documentation/developers/content-upgrade).] This results in the upgradeScript property always being null in the ajax.php call (action={*}libraries{*}).
+
+ 
+
+*Reproduction*
+ # go to the content bank
+ # create a new H5P instance, for example "Fill in the Blanks"
+ # open network tab in developer tools
+ # click the second ajax.php call (it looks a little like this: ajax.php?action=libraries&machineName=H5P.Blanks&majorVersion=1&minorVersion=14&language=en)
+ # inspect the response and the upgradeScript property
+
+*What I expected*
+
+The response to contain the upgradedScript property with a link the a JS file called upgrades.js.
+
+*What actually happened*
+
+The upgradedScript property is null

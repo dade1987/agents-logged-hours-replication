@@ -1,0 +1,67 @@
+diff --git a/public/mod/quiz/amd/build/searchwidget/user.min.js b/public/mod/quiz/amd/build/searchwidget/user.min.js
+index 8e7ddee74a1710aa6dce3fef3fbfe96be4047dc6..465a34feee7403b587c5973b3d158426d7ec0be9 100644
+GIT binary patch
+delta 79
+zcmew&vQK0}&BS)Cjoa3<spTc+rWV^4>7`bb6eXr*rskx8MQUo0g^DL{VD}aTOGIbp
+TrKDEG*3@LDR&M6yNM`~7E}<XC
+
+delta 119
+zcmdld@<n7q4VR8ma(+>&esM|B#A<C;op>N)<FfT^DnL3jFWs@ID6!Huu{<%eM8g0q
+zsh6Hw5)76r)||Y6T|_uLwbIs3qZ&wA0dcJ+5KOLS_ZC7jAUZQICAA`U^L6%gCIDqf
+BEA0RP
+
+diff --git a/public/mod/quiz/amd/src/searchwidget/user.js b/public/mod/quiz/amd/src/searchwidget/user.js
+index 563c4f05ba5..eb0d2151078 100644
+--- a/public/mod/quiz/amd/src/searchwidget/user.js
++++ b/public/mod/quiz/amd/src/searchwidget/user.js
+@@ -23,7 +23,6 @@
+ import UserSearch from 'core_user/comboboxsearch/user';
+ import Url from 'core/url';
+ import * as Repository from 'mod_quiz/searchwidget/repository';
+-import {getStrings} from 'core/str';
+ 
+ export default class QuizUserSearch extends UserSearch {
+ 
+@@ -49,12 +48,12 @@ export default class QuizUserSearch extends UserSearch {
+         // Await the user fetch request
+         const r = await Repository.userFetch(params);
+ 
+-        // Await the result of getStrings
+-        const stringArray = await getStrings(r.extrafields.map((key) => ({key})));
++        // The display names are resolved server-side, so custom profile fields (profile_field_*) are handled correctly.
++        const names = r.extrafieldnames ?? r.extrafields;
+ 
+         // Map the extrafields to profilestringmap
+         this.profilestringmap = new Map(
+-            r.extrafields.map((key, index) => ([key, stringArray[index]]))
++            r.extrafields.map((key, index) => ([key, names[index] ?? key]))
+         );
+ 
+         // Return r.users as the final result
+diff --git a/public/mod/quiz/classes/external/get_users_in_report.php b/public/mod/quiz/classes/external/get_users_in_report.php
+index 74bf72596af..fed95b9eccf 100644
+--- a/public/mod/quiz/classes/external/get_users_in_report.php
++++ b/public/mod/quiz/classes/external/get_users_in_report.php
+@@ -152,6 +152,10 @@ class get_users_in_report extends external_api {
+         $allowfields = array_merge(['fullname'], $userfieldsapi->get_required_fields([\core_user\fields::PURPOSE_IDENTITY]));
+         return [
+             'extrafields' => $allowfields,
++            'extrafieldnames' => array_map(
++                fn(string $field): string => \core_user\fields::get_display_name($field),
++                $allowfields,
++            ),
+             'users' => $users,
+             'warnings' => $warnings,
+         ];
+@@ -171,6 +175,11 @@ class get_users_in_report extends external_api {
+ 
+         return new external_single_structure([
+             'extrafields' => new external_multiple_structure(new external_value(PARAM_RAW, 'List of extra fields')),
++            'extrafieldnames' => new external_multiple_structure(
++                new external_value(PARAM_RAW, 'Display name of the extra field, in the same order as extrafields'),
++                'Display names of the extra fields',
++                VALUE_OPTIONAL,
++            ),
+             'users' => new external_multiple_structure(core_user_external::user_description($additionalfields)),
+             'warnings' => new external_warnings(),
+         ]);

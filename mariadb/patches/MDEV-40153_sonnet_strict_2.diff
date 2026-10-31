@@ -1,0 +1,44 @@
+diff --git a/mysql-test/suite/compat/oracle/r/sp-record.result b/mysql-test/suite/compat/oracle/r/sp-record.result
+index 5b66c6fa..a529aa7c 100644
+--- a/mysql-test/suite/compat/oracle/r/sp-record.result
++++ b/mysql-test/suite/compat/oracle/r/sp-record.result
+@@ -895,3 +895,9 @@ NULL;
+ END;
+ $$
+ ERROR HY000: Data type 'rec0_t' doesn't support CHARACTER SET attribute.
++#
++# MDEV-40153 Assertion rec->field->head()->charset == nullptr failed in Type_handler_row::Column_definition_prepare_stage1
++#
++CREATE PACKAGE pk_crash AS TYPE r IS RECORD (b BLOB); FUNCTION f RETURN r; END;
++$$
++DROP PACKAGE pk_crash;
+diff --git a/mysql-test/suite/compat/oracle/t/sp-record.test b/mysql-test/suite/compat/oracle/t/sp-record.test
+index b75a739d..a852d2f3 100644
+--- a/mysql-test/suite/compat/oracle/t/sp-record.test
++++ b/mysql-test/suite/compat/oracle/t/sp-record.test
+@@ -975,3 +975,13 @@ BEGIN
+ END;
+ $$
+ DELIMITER ;$$
++
++--echo #
++--echo # MDEV-40153 Assertion rec->field->head()->charset == nullptr failed in Type_handler_row::Column_definition_prepare_stage1
++--echo #
++
++DELIMITER $$;
++CREATE PACKAGE pk_crash AS TYPE r IS RECORD (b BLOB); FUNCTION f RETURN r; END;
++$$
++DELIMITER ;$$
++DROP PACKAGE pk_crash;
+diff --git a/sql/sql_type_row.cc b/sql/sql_type_row.cc
+index 97d48ed3..f09d0fd3 100644
+--- a/sql/sql_type_row.cc
++++ b/sql/sql_type_row.cc
+@@ -252,7 +252,6 @@ bool Type_handler_row::
+   {
+     DBUG_ASSERT(rec->field);
+     DBUG_ASSERT(rec->field->elements);
+-    DBUG_ASSERT(rec->field->head()->charset == nullptr); // Not prepared
+     Row_definition_list *row= rec->field->deep_copy(thd);
+     if (!row || thd->lex->sphead->row_fill_field_definitions(thd, row))
+       return true; // Error

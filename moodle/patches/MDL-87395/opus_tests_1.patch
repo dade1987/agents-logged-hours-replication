@@ -1,0 +1,115 @@
+diff --git a/public/lib/classes/task/tag_cron_task.php b/public/lib/classes/task/tag_cron_task.php
+index 5be4bb1a473..53386fda746 100644
+--- a/public/lib/classes/task/tag_cron_task.php
++++ b/public/lib/classes/task/tag_cron_task.php
+@@ -30,6 +30,9 @@ use core_tag_collection, core_tag_tag, core_tag_area, stdClass;
+  */
+ class tag_cron_task extends scheduled_task {
+ 
++    /** @var int Maximum number of ids used as parameters in a single query. */
++    const CHUNK_SIZE = 1000;
++
+     /**
+      * Get a descriptive name for this task (shown to admins).
+      *
+@@ -138,9 +141,14 @@ class tag_cron_task extends scheduled_task {
+             // There are no tag correlations.
+             $DB->delete_records('tag_correlation');
+         } else {
+-            list($sql, $params) = $DB->get_in_or_equal($correlations,
+-                    SQL_PARAMS_NAMED, 'param0000', false);
+-            $DB->delete_records_select('tag_correlation', 'id '.$sql, $params);
++            // Work out which existing correlations are obsolete and delete them in chunks, to avoid exceeding
++            // the maximum number of parameters allowed in a single query by the database.
++            $existing = $DB->get_fieldset_select('tag_correlation', 'id', '1 = 1');
++            $todelete = array_values(array_diff($existing, $correlations));
++            foreach (array_chunk($todelete, self::CHUNK_SIZE) as $chunk) {
++                [$sql, $params] = $DB->get_in_or_equal($chunk);
++                $DB->delete_records_select('tag_correlation', 'id ' . $sql, $params);
++            }
+         }
+     }
+ 
+@@ -198,9 +206,10 @@ class tag_cron_task extends scheduled_task {
+         }
+         $tagareas->close();
+ 
+-        // Get instances for each of the ids to be deleted.
+-        if (count($tagarray) > 0) {
+-            list($sqlin, $params) = $DB->get_in_or_equal($tagarray);
++        // Get instances for each of the ids to be deleted. Process them in chunks to avoid exceeding
++        // the maximum number of parameters allowed in a single query by the database.
++        foreach (array_chunk(array_unique($tagarray), self::CHUNK_SIZE) as $chunk) {
++            [$sqlin, $params] = $DB->get_in_or_equal($chunk);
+             $sql = "SELECT ti.*, COALESCE(t.name, 'deleted') AS name, COALESCE(t.rawname, 'deleted') AS rawname
+                       FROM {tag_instance} ti
+                  LEFT JOIN {tag} t ON t.id = ti.tagid
+@@ -256,10 +265,12 @@ class tag_cron_task extends scheduled_task {
+         }
+ 
+         // This is a multi db compatible method of creating the correct sql when using the 'IN' value.
+-        // $insql is the sql statement, $params are the id numbers.
+-        list($insql, $params) = $DB->get_in_or_equal($instanceids);
+-        $sql = 'id ' . $insql;
+-        $DB->delete_records_select('tag_instance', $sql, $params);
++        // $insql is the sql statement, $params are the id numbers. Ids are processed in chunks to avoid
++        // exceeding the maximum number of parameters allowed in a single query by the database.
++        foreach (array_chunk($instanceids, self::CHUNK_SIZE) as $chunk) {
++            [$insql, $params] = $DB->get_in_or_equal($chunk);
++            $DB->delete_records_select('tag_instance', 'id ' . $insql, $params);
++        }
+ 
+         // Now go through and record each tag individually with the event system.
+         foreach ($instances as $instance) {
+diff --git a/public/tag/tests/taglib_test.php b/public/tag/tests/taglib_test.php
+index b53e9d797b9..15e5e18e382 100644
+--- a/public/tag/tests/taglib_test.php
++++ b/public/tag/tests/taglib_test.php
+@@ -235,6 +235,47 @@ final class taglib_test extends \advanced_testcase {
+         $this->assertEquals(0, $instancecount);
+     }
+ 
++    /**
++     * Test cleanup when the number of orphaned tag instances exceeds the chunk size.
++     */
++    public function test_tag_cleanup_many_instances(): void {
++        global $DB;
++        $this->resetAfterTest();
++        $task = new \core\task\tag_cron_task();
++
++        $user = $this->getDataGenerator()->create_user();
++        $course = $this->getDataGenerator()->create_course();
++        $context = \context_course::instance($course->id);
++        $tag = $this->getDataGenerator()->create_tag(['userid' => $user->id]);
++        core_tag_tag::add_item_tag('core', 'course', $course->id, $context, $tag->rawname);
++
++        // Create orphaned tag instances pointing to non-existent courses.
++        $count = \core\task\tag_cron_task::CHUNK_SIZE * 2 + 5;
++        $maxcourseid = $DB->get_field_sql('SELECT MAX(id) FROM {course}');
++        $records = [];
++        for ($i = 1; $i <= $count; $i++) {
++            $records[] = (object) [
++                'tagid' => $tag->id,
++                'component' => 'core',
++                'itemtype' => 'course',
++                'itemid' => $maxcourseid + $i,
++                'contextid' => $context->id,
++                'tiuserid' => 0,
++                'ordering' => 0,
++                'timecreated' => time(),
++                'timemodified' => time(),
++            ];
++        }
++        $DB->insert_records('tag_instance', $records);
++        $this->assertEquals($count + 1, $DB->count_records('tag_instance'));
++
++        $task->cleanup();
++
++        // Only the valid tag instance must remain.
++        $this->assertEquals(1, $DB->count_records('tag_instance'));
++        $this->assertTrue($DB->record_exists('tag_instance', ['itemid' => $course->id, 'itemtype' => 'course']));
++    }
++
+     /**
+      * Test that setting a list of tags for "tag" item type throws exception if userid specified
+      */

@@ -1,0 +1,110 @@
+diff --git a/mysql-test/main/func_json.result b/mysql-test/main/func_json.result
+index 2f791dc4..7cd151a3 100644
+--- a/mysql-test/main/func_json.result
++++ b/mysql-test/main/func_json.result
+@@ -2712,6 +2712,31 @@ SELECT JSON_OVERLAPS(@json1, @json2);
+ JSON_OVERLAPS(@json1, @json2)
+ 0
+ #
++# MDEV-41067: json_overlaps() returns true for nested arrays of different
++# length when comparing an empty nested array
++#
++SELECT JSON_OVERLAPS('[[1]]', '[[]]') AS exp;
++exp
++0
++SELECT JSON_OVERLAPS('[[1]]', '[[],123]') AS exp;
++exp
++0
++SELECT JSON_OVERLAPS('[[1]]', '[[],[1]]') AS exp;
++exp
++1
++SELECT JSON_OVERLAPS('[[1,2]]', '[[1]]') AS exp;
++exp
++0
++SELECT JSON_OVERLAPS('[[1]]', '[[1,2]]') AS exp;
++exp
++0
++SELECT JSON_OVERLAPS('[[]]', '[[]]') AS exp;
++exp
++1
++SELECT JSON_OVERLAPS('[[1]]', '[[1]]') AS exp;
++exp
++1
++#
+ # MDEV-30304: Json Range only affects first row of the result set
+ #
+ CREATE TABLE t1 ( j JSON );
+diff --git a/mysql-test/main/func_json.test b/mysql-test/main/func_json.test
+index c6045cb2..cfd94978 100644
+--- a/mysql-test/main/func_json.test
++++ b/mysql-test/main/func_json.test
+@@ -1907,6 +1907,19 @@ SET @json2 = '{"kk":{"k1":"v1","k2":"v2","k3":"v3"}}';
+ SELECT JSON_OVERLAPS(@json2, @json1);
+ SELECT JSON_OVERLAPS(@json1, @json2);
+ 
++--echo #
++--echo # MDEV-41067: json_overlaps() returns true for nested arrays of different
++--echo # length when comparing an empty nested array
++--echo #
++
++SELECT JSON_OVERLAPS('[[1]]', '[[]]') AS exp;
++SELECT JSON_OVERLAPS('[[1]]', '[[],123]') AS exp;
++SELECT JSON_OVERLAPS('[[1]]', '[[],[1]]') AS exp;
++SELECT JSON_OVERLAPS('[[1,2]]', '[[1]]') AS exp;
++SELECT JSON_OVERLAPS('[[1]]', '[[1,2]]') AS exp;
++SELECT JSON_OVERLAPS('[[]]', '[[]]') AS exp;
++SELECT JSON_OVERLAPS('[[1]]', '[[1]]') AS exp;
++
+ --echo #
+ --echo # MDEV-30304: Json Range only affects first row of the result set
+ --echo #
+diff --git a/sql/item_jsonfunc.cc b/sql/item_jsonfunc.cc
+index 615d0cb4..885584f3 100644
+--- a/sql/item_jsonfunc.cc
++++ b/sql/item_jsonfunc.cc
+@@ -4791,10 +4791,13 @@ static bool json_compare_arr_and_obj(json_engine_t *js, json_engine_t *value)
+ 
+ bool json_compare_arrays_in_order(json_engine_t *js, json_engine_t *value)
+ {
+-  bool res= false;
+-  while (json_scan_next(js) == 0 && json_scan_next(value) == 0 &&
+-         js->state == JST_VALUE && value->state == JST_VALUE)
++  for (;;)
+   {
++    /* Advance both arrays together, so that they stay in step */
++    if (json_scan_next(js) || json_scan_next(value))
++      return FALSE;
++    if (js->state != JST_VALUE || value->state != JST_VALUE)
++      break;
+     if (json_read_value(js) || json_read_value(value))
+       return FALSE;
+     if (js->value_type != value->value_type)
+@@ -4802,16 +4805,23 @@ bool json_compare_arrays_in_order(json_engine_t *js, json_engine_t *value)
+       json_skip_current_level(js, value);
+       return FALSE;
+     }
+-    res= check_overlaps(js, value, true);
+-    if (!res)
++    if (!check_overlaps(js, value, true))
+     {
+       json_skip_current_level(js, value);
+       return FALSE;
+     }
+   }
+-  res= (value->state == JST_ARRAY_END || value->state == JST_OBJ_END ?
+-        TRUE : FALSE);
+-  json_skip_current_level(js, value);
++  /*
++    The arrays are equal only if both of them end at the same position,
++    i.e. have the same number of elements. An array which has already
++    ended has been closed, so it must not be skipped: that would move
++    the engine past the enclosing array.
++  */
++  bool res= (js->state == JST_ARRAY_END && value->state == JST_ARRAY_END);
++  if (js->state != JST_ARRAY_END)
++    json_skip_level(js);
++  if (value->state != JST_ARRAY_END)
++    json_skip_level(value);
+   return res;
+ }
+ 

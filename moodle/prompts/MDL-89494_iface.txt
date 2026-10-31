@@ -1,0 +1,38 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot run Moodle's test suite. You may run `php -l <file>` and read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-89494: Language customization checkout progress reaches 100% before processing is complete, causing missing strings to appear in translation UI until additional wait time.
+
+When loading a language pack for editing, the progress bar can show 100% before checkout has actually finished processing all components/strings.
+If users proceed immediately to the editor, some component strings may appear missing, then appear later after waiting.
+
+Reproduction Steps
+
+# Go to Custom language admin and start checkout for a non-English language (example: fr).
+# Wait until progress bar shows 100%.
+# Immediately open the translation editor and filter for a component from later-processed plugins.
+# Observe that strings may be missing initially.
+# Wait longer and recheck; strings appear without other changes.
+
+Expected Result
+Progress bar should only display 100% when checkout is truly complete and all strings are available in the editor.
+
+Actual Result
+Progress bar reaches 100% early while backend processing continues, which can mislead users into thinking checkout is complete.
+
+Analysis
+
+# Progress is based on a fixed rough estimate in tool/customlang/locallib.php:39.
+# During checkout loop, percent is computed from processed count versus fixed estimate in tool/customlang/locallib.php:161.
+# On larger sites with many plugins/strings, real workload exceeds estimate, so 100% is reached before loop completion.
+# Final completion update happens only at the end in tool/customlang/locallib.php:214.
+
+
+The developers' tests for this issue use these new or changed classes, functions or web services (names and signatures only; you must implement them):
+- public/admin/tool/customlang/locallib.php: public static function calculate_checkout_percent(int $done): int

@@ -1,0 +1,91 @@
+diff --git a/public/enrol/cohort/locallib.php b/public/enrol/cohort/locallib.php
+index 8d9dc1251a0..e4ad5036cd3 100644
+--- a/public/enrol/cohort/locallib.php
++++ b/public/enrol/cohort/locallib.php
+@@ -218,12 +218,19 @@ function enrol_cohort_sync(progress_trace $trace, $courseid = NULL) {
+ 
+ 
+     // Unenrol as necessary.
++    $params = ['courseid' => $courseid];
++    $notsuspended = '';
++    if ($unenrolaction != ENROL_EXT_REMOVED_UNENROL) {
++        // Already suspended enrolments are left untouched, so there is no need to select them at all.
++        $notsuspended = "AND ue.status <> :suspended";
++        $params['suspended'] = ENROL_USER_SUSPENDED;
++    }
+     $sql = "SELECT ue.*, e.courseid
+               FROM {user_enrolments} ue
+               JOIN {enrol} e ON (e.id = ue.enrolid AND e.enrol = 'cohort' $onecourse)
+          LEFT JOIN {cohort_members} cm ON (cm.cohortid = e.customint1 AND cm.userid = ue.userid)
+-             WHERE cm.id IS NULL";
+-    $rs = $DB->get_recordset_sql($sql, array('courseid'=>$courseid));
++             WHERE cm.id IS NULL $notsuspended";
++    $rs = $DB->get_recordset_sql($sql, $params);
+     foreach($rs as $ue) {
+         if (!isset($instances[$ue->enrolid])) {
+             $instances[$ue->enrolid] = $DB->get_record('enrol', array('id'=>$ue->enrolid));
+diff --git a/public/enrol/cohort/tests/sync_test.php b/public/enrol/cohort/tests/sync_test.php
+index 2809deda139..ef58d9880cd 100644
+--- a/public/enrol/cohort/tests/sync_test.php
++++ b/public/enrol/cohort/tests/sync_test.php
+@@ -746,4 +746,60 @@ final class sync_test extends \advanced_testcase {
+         $this->assertTrue(groups_is_member($group1->id, $user4->id));
+         $this->assertTrue(groups_is_member($group2->id, $user4->id));
+     }
++
++    /**
++     * Already suspended enrolments must not be selected and processed again on subsequent syncs.
++     *
++     * @covers ::enrol_cohort_sync
++     */
++    public function test_sync_skips_already_suspended_enrolments(): void {
++        global $DB;
++        $this->resetAfterTest();
++
++        $cohortplugin = enrol_get_plugin('cohort');
++        $studentrole = $DB->get_record('role', ['shortname' => 'student'], '*', MUST_EXIST);
++
++        $course = $this->getDataGenerator()->create_course();
++        $user = $this->getDataGenerator()->create_user();
++        $cohort = $this->getDataGenerator()->create_cohort();
++
++        $this->disable_plugin(); // Prevents event sync.
++        $id = $cohortplugin->add_instance($course, ['customint1' => $cohort->id, 'roleid' => $studentrole->id]);
++        $instance = $DB->get_record('enrol', ['id' => $id], '*', MUST_EXIST);
++        cohort_add_member($cohort->id, $user->id);
++        $this->enable_plugin();
++
++        $cohortplugin->set_config('unenrolaction', ENROL_EXT_REMOVED_SUSPENDNOROLES);
++
++        enrol_cohort_sync(new \null_progress_trace(), $course->id);
++        $this->assertTrue($DB->record_exists('user_enrolments',
++            ['enrolid' => $instance->id, 'userid' => $user->id, 'status' => ENROL_USER_ACTIVE]));
++
++        // Remove the cohort member using the low level DB api to prevent events.
++        $DB->delete_records('cohort_members', ['cohortid' => $cohort->id, 'userid' => $user->id]);
++
++        // First sync suspends the enrolment.
++        $trace = new \progress_trace_buffer(new \text_progress_trace(), false);
++        enrol_cohort_sync($trace, $course->id);
++        $trace->finished();
++        $this->assertStringContainsString("suspending: {$user->id} ==> {$course->id}", $trace->get_buffer());
++        $ue = $DB->get_record('user_enrolments', ['enrolid' => $instance->id, 'userid' => $user->id], '*', MUST_EXIST);
++        $this->assertEquals(ENROL_USER_SUSPENDED, $ue->status);
++
++        // Subsequent syncs must leave the already suspended enrolment alone.
++        $trace = new \progress_trace_buffer(new \text_progress_trace(), false);
++        enrol_cohort_sync($trace, $course->id);
++        $trace->finished();
++        $this->assertStringNotContainsString('suspending', $trace->get_buffer());
++        $this->assertStringNotContainsString('unenrolling', $trace->get_buffer());
++        $this->assertEquals($ue, $DB->get_record('user_enrolments', ['id' => $ue->id], '*', MUST_EXIST));
++
++        // When unenrolling is configured, suspended enrolments are still removed.
++        $cohortplugin->set_config('unenrolaction', ENROL_EXT_REMOVED_UNENROL);
++        $trace = new \progress_trace_buffer(new \text_progress_trace(), false);
++        enrol_cohort_sync($trace, $course->id);
++        $trace->finished();
++        $this->assertStringContainsString("unenrolling: {$user->id} ==> {$course->id}", $trace->get_buffer());
++        $this->assertFalse($DB->record_exists('user_enrolments', ['enrolid' => $instance->id, 'userid' => $user->id]));
++    }
+ }

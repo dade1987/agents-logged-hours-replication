@@ -1,0 +1,224 @@
+diff --git a/mysql-test/main/sp-anchor-row-type-table.result b/mysql-test/main/sp-anchor-row-type-table.result
+index 9bb4e68d..49f77a8e 100644
+--- a/mysql-test/main/sp-anchor-row-type-table.result
++++ b/mysql-test/main/sp-anchor-row-type-table.result
+@@ -937,3 +937,62 @@ DROP TABLE t1;
+ #
+ # End of 11.7 tests
+ #
++#
++# MDEV-40790 SELECT INTO row_type_of.field crashes the server
++#
++CREATE TABLE t1 (a INT,b VARCHAR(10));
++INSERT INTO t1 VALUES (10,'b10');
++CREATE PROCEDURE p1()
++BEGIN
++DECLARE r0 ROW TYPE OF t1;
++SELECT a,b INTO r0.a,r0.b FROM t1;
++SELECT r0.a, r0.b;
++SELECT 20 INTO r0.a;
++SELECT r0.a, r0.b;
++END;
++$$
++CALL p1;
++r0.a	r0.b
++10	b10
++r0.a	r0.b
++20	b10
++CALL p1;
++r0.a	r0.b
++10	b10
++r0.a	r0.b
++20	b10
++DROP PROCEDURE p1;
++CREATE PROCEDURE p1()
++BEGIN
++DECLARE c1 CURSOR FOR SELECT * FROM t1;
++BEGIN
++DECLARE r0 ROW TYPE OF c1;
++SELECT a,b INTO r0.a,r0.b FROM t1;
++SELECT r0.a, r0.b;
++END;
++END;
++$$
++CALL p1;
++r0.a	r0.b
++10	b10
++DROP PROCEDURE p1;
++CREATE PROCEDURE p1()
++BEGIN
++DECLARE r0 ROW TYPE OF t1;
++SELECT a,b INTO r0.a,r0.c FROM t1;
++END;
++$$
++CALL p1;
++ERROR HY000: Row variable 'r0' does not have a field 'c'
++DROP PROCEDURE p1;
++CREATE PROCEDURE p1()
++BEGIN
++DECLARE r0 ROW TYPE OF t1;
++EXPLAIN SELECT a,b INTO r0.a,r0.b FROM t1;
++END;
++$$
++DROP PROCEDURE p1;
++DROP TABLE t1;
++#
++# End of 12.3 tests
++#
+diff --git a/mysql-test/main/sp-anchor-row-type-table.test b/mysql-test/main/sp-anchor-row-type-table.test
+index 8473b15b..1fef30a2 100644
+--- a/mysql-test/main/sp-anchor-row-type-table.test
++++ b/mysql-test/main/sp-anchor-row-type-table.test
+@@ -1011,3 +1011,66 @@ DROP TABLE t1;
+ --echo #
+ --echo # End of 11.7 tests
+ --echo #
++
++--echo #
++--echo # MDEV-40790 SELECT INTO row_type_of.field crashes the server
++--echo #
++
++CREATE TABLE t1 (a INT,b VARCHAR(10));
++INSERT INTO t1 VALUES (10,'b10');
++DELIMITER $$;
++CREATE PROCEDURE p1()
++BEGIN
++  DECLARE r0 ROW TYPE OF t1;
++  SELECT a,b INTO r0.a,r0.b FROM t1;
++  SELECT r0.a, r0.b;
++  SELECT 20 INTO r0.a;
++  SELECT r0.a, r0.b;
++END;
++$$
++DELIMITER ;$$
++CALL p1;
++CALL p1;
++DROP PROCEDURE p1;
++
++DELIMITER $$;
++CREATE PROCEDURE p1()
++BEGIN
++  DECLARE c1 CURSOR FOR SELECT * FROM t1;
++  BEGIN
++    DECLARE r0 ROW TYPE OF c1;
++    SELECT a,b INTO r0.a,r0.b FROM t1;
++    SELECT r0.a, r0.b;
++  END;
++END;
++$$
++DELIMITER ;$$
++CALL p1;
++DROP PROCEDURE p1;
++
++DELIMITER $$;
++CREATE PROCEDURE p1()
++BEGIN
++  DECLARE r0 ROW TYPE OF t1;
++  SELECT a,b INTO r0.a,r0.c FROM t1;
++END;
++$$
++DELIMITER ;$$
++--error ER_ROW_VARIABLE_DOES_NOT_HAVE_FIELD
++CALL p1;
++DROP PROCEDURE p1;
++
++DELIMITER $$;
++CREATE PROCEDURE p1()
++BEGIN
++  DECLARE r0 ROW TYPE OF t1;
++  EXPLAIN SELECT a,b INTO r0.a,r0.b FROM t1;
++END;
++$$
++DELIMITER ;$$
++DROP PROCEDURE p1;
++DROP TABLE t1;
++
++--echo #
++--echo # End of 12.3 tests
++--echo #
+diff --git a/sql/sql_type_row.cc b/sql/sql_type_row.cc
+index c72cab62..cde3421c 100644
+--- a/sql/sql_type_row.cc
++++ b/sql/sql_type_row.cc
+@@ -125,7 +125,7 @@ class my_var_sp_row_field: public my_var_sp
+                            bool *assign_as_row) const override
+   {
+     *assign_as_row= false;
+-    return select_list.elements == 1;
++    return select_list.elements != 1;
+   }
+   bool set(THD *thd, Item *item) override
+   {
+@@ -135,6 +135,43 @@ class my_var_sp_row_field: public my_var_sp
+ };
+ 
+ 
++/*
++  This class handles fields of a ROW SP variable declared as
++    DECLARE r ROW TYPE OF table;   or
++    DECLARE r ROW TYPE OF cursor;
++  in SELECT .. INTO r.field.
++  The structure of such variables is not known at parse time,
++  so the field is resolved by name at execution time.
++*/
++class my_var_sp_row_field_by_name: public my_var_sp
++{
++  LEX_CSTRING m_field_name;
++public:
++  my_var_sp_row_field_by_name(const Lex_ident_sys_st &varname,
++                              const sp_rcontext_addr &varaddr,
++                              const LEX_CSTRING &field_name,
++                              sp_head *s)
++   :my_var_sp(varname, varaddr,
++              &type_handler_double/*Not really used*/, s),
++    m_field_name(field_name)
++  { }
++  bool check_assignability(THD *thd, const List<Item> &select_list,
++                           bool *assign_as_row) const override
++  {
++    *assign_as_row= false;
++    return select_list.elements != 1;
++  }
++  bool set(THD *thd, Item *item) override
++  {
++    sp_rcontext *rctx= get_rcontext(thd->spcont);
++    uint field_offset;
++    return rctx->find_row_field_by_name_or_error(&field_offset, offset(),
++                                                 m_field_name) ||
++           rctx->set_variable_row_field(thd, offset(), field_offset, &item);
++  }
++};
++
++
+ my_var *Type_handler_row::make_outvar(THD *thd,
+                                       const Lex_ident_sys_st &name,
+                                       const sp_rcontext_addr &addr,
+@@ -159,13 +196,23 @@ my_var *Type_handler_row::make_outvar_field(THD *thd,
+   DBUG_ASSERT(t);
+   DBUG_ASSERT(t->type_handler() == this);
+ 
+-  uint row_field_offset;
+-  if (!t->find_row_field(&name, &field, &row_field_offset))
++  if (t->field_def.is_table_rowtype_ref() ||
++      t->field_def.is_cursor_rowtype_ref())
+   {
+-    DBUG_ASSERT(0);
+-    my_error(ER_ROW_VARIABLE_DOES_NOT_HAVE_FIELD, MYF(0), name.str, field.str);
+-    return NULL;
++    /*
++      ROW TYPE OF table or ROW TYPE OF cursor.
++      The field list is not known yet. Resolve the field at execution time.
++    */
++    if (validate_only) // e.g. EXPLAIN SELECT .. INTO spvar_row.field;
++      return nullptr;
++    return new (thd->mem_root)
++             my_var_sp_row_field_by_name(name, addr,
++                                         field, sphead);
+   }
++
++  uint row_field_offset;
++  if (!t->find_row_field(&name, &field, &row_field_offset))
++    return NULL; // find_row_field() has already raised an error
+   if (validate_only) // e.g. EXPLAIN SELECT .. INTO spvar_row.field;
+     return nullptr;
+   return new (thd->mem_root) my_var_sp_row_field(name, addr, row_field_offset,

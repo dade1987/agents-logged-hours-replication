@@ -1,0 +1,21 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot run Moodle's test suite. You may run `php -l <file>` and read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-88514: mod_assign: User and group overrides do not affect whether staff can edit submission
+
+When a member of staff is using the Submissions page of an assignment, and they wish to edit a submission on behalf of a student, the ‘Edit submission’ menu option is only available if submissions are currently open for that student. For example, if the assignment cutoff date has passed, it is not possible to edit the submission.
+
+Perhaps staff should be allowed to edit the submission after the cutoff date, but I can see justifications for the current behaviour, so I don’t propose changing it (not in a bugfix anyway). However, this behaviour is not applied consistently:
+
+* If there is a cutoff date in the past but the student has an extension to a future date, then you are allowed to edit the submission - good.
+* If there is a user or group override and the student has an override to (a) turn off the cut off date, or (b) set it to a future date, then the staff member is still not allowed to edit the submission - bad.
+
+(This second point also applies in the other direction, i.e. if there is an override that makes the cutoff date earlier for a particular student/group, it won’t take affect either.)
+
+I can’t think of any reason why user overrides should not apply to this behaviour, so I’ve implemented a fix.

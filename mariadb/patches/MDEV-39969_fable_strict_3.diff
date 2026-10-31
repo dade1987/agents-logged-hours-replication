@@ -1,0 +1,83 @@
+diff --git a/mysql-test/suite/json/r/json_table.result b/mysql-test/suite/json/r/json_table.result
+index e4060877..06c715a7 100644
+--- a/mysql-test/suite/json/r/json_table.result
++++ b/mysql-test/suite/json/r/json_table.result
+@@ -1298,4 +1298,25 @@ COLLATION(virtual_table_from_json.property)
+ utf8mb4_uca1400_ai_ci
+ DROP TABLE table_with_longtext_column;
+ DROP DATABASE collation_testing;
++#
++# MDEV-39969 Incorrect result of JSON_TABLE with BIT
++#
++SELECT ord, i, b+0, HEX(b)
++FROM JSON_TABLE('[0,1,2,3,true,false,1.4,1.5]',
++'$[*]' COLUMNS (
++ord FOR ORDINALITY,
++i INT PATH '$',
++b BIT(2) PATH '$'
++)
++) AS jt
++ORDER BY ord;
++ord	i	b+0	HEX(b)
++1	0	0	0
++2	1	1	1
++3	2	2	2
++4	3	3	3
++5	1	1	1
++6	0	0	0
++7	1	1	1
++8	2	2	2
+ # End of 10.11 test
+diff --git a/mysql-test/suite/json/t/json_table.test b/mysql-test/suite/json/t/json_table.test
+index bab6d4b7..e6da84b5 100644
+--- a/mysql-test/suite/json/t/json_table.test
++++ b/mysql-test/suite/json/t/json_table.test
+@@ -1121,4 +1121,18 @@ SELECT COLLATION(virtual_table_from_json.property) FROM JSON_TABLE((SELECT colum
+ DROP TABLE table_with_longtext_column;
+ DROP DATABASE collation_testing;
+ 
++--echo #
++--echo # MDEV-39969 Incorrect result of JSON_TABLE with BIT
++--echo #
++
++SELECT ord, i, b+0, HEX(b)
++FROM JSON_TABLE('[0,1,2,3,true,false,1.4,1.5]',
++       '$[*]' COLUMNS (
++         ord FOR ORDINALITY,
++         i INT PATH '$',
++         b BIT(2) PATH '$'
++       )
++     ) AS jt
++ORDER BY ord;
++
+ --echo # End of 10.11 test
+diff --git a/sql/json_table.cc b/sql/json_table.cc
+index e5ac6008..94782757 100644
+--- a/sql/json_table.cc
++++ b/sql/json_table.cc
+@@ -384,6 +384,25 @@ static void store_json_in_field(Field *f, const json_engine_t *je)
+     }
+     break;
+   }
++  case JSON_VALUE_NUMBER:
++  {
++    /*
++      Field_bit::store(const char*, ...) interprets the string as a
++      binary bit string (like INSERT of a string literal into a BIT
++      column), so a JSON number like 0 (the character '0') would be
++      stored as 0x30 and get truncated to the maximum value.
++      Convert JSON numbers to a numeric value before storing them.
++    */
++    if (f->type() == MYSQL_TYPE_BIT)
++    {
++      my_decimal dec;
++      str2my_decimal(E_DEC_FATAL_ERROR & ~E_DEC_OVERFLOW,
++                     (const char *) je->value, je->value_len, je->s.cs, &dec);
++      f->store_decimal(&dec);
++      return;
++    }
++    break;
++  }
+   default:
+     break;
+   };

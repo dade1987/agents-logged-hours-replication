@@ -1,0 +1,88 @@
+diff --git a/public/enrol/cohort/locallib.php b/public/enrol/cohort/locallib.php
+index 8d9dc1251a0..b57c9da6c11 100644
+--- a/public/enrol/cohort/locallib.php
++++ b/public/enrol/cohort/locallib.php
+@@ -223,7 +223,13 @@ function enrol_cohort_sync(progress_trace $trace, $courseid = NULL) {
+               JOIN {enrol} e ON (e.id = ue.enrolid AND e.enrol = 'cohort' $onecourse)
+          LEFT JOIN {cohort_members} cm ON (cm.cohortid = e.customint1 AND cm.userid = ue.userid)
+              WHERE cm.id IS NULL";
+-    $rs = $DB->get_recordset_sql($sql, array('courseid'=>$courseid));
++    $params = ['courseid' => $courseid];
++    if ($unenrolaction != ENROL_EXT_REMOVED_UNENROL) {
++        // Already suspended enrolments need no further processing.
++        $sql .= " AND ue.status <> :suspended";
++        $params['suspended'] = ENROL_USER_SUSPENDED;
++    }
++    $rs = $DB->get_recordset_sql($sql, $params);
+     foreach($rs as $ue) {
+         if (!isset($instances[$ue->enrolid])) {
+             $instances[$ue->enrolid] = $DB->get_record('enrol', array('id'=>$ue->enrolid));
+diff --git a/public/enrol/cohort/tests/sync_test.php b/public/enrol/cohort/tests/sync_test.php
+index 2809deda139..41839016c9e 100644
+--- a/public/enrol/cohort/tests/sync_test.php
++++ b/public/enrol/cohort/tests/sync_test.php
+@@ -746,4 +746,64 @@ final class sync_test extends \advanced_testcase {
+         $this->assertTrue(groups_is_member($group1->id, $user4->id));
+         $this->assertTrue(groups_is_member($group2->id, $user4->id));
+     }
++
++    /**
++     * Test that already suspended enrolments are not processed again by the sync.
++     *
++     * @covers ::enrol_cohort_sync
++     */
++    public function test_sync_skips_already_suspended(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $this->enable_plugin();
++
++        $trace = new \null_progress_trace();
++        $cohortplugin = enrol_get_plugin('cohort');
++        $studentrole = $DB->get_record('role', ['shortname' => 'student']);
++
++        $user = $this->getDataGenerator()->create_user();
++        $cohort = $this->getDataGenerator()->create_cohort();
++        cohort_add_member($cohort->id, $user->id);
++
++        $instanceids = [];
++        for ($i = 0; $i < 3; $i++) {
++            $course = $this->getDataGenerator()->create_course();
++            $instanceids[] = $cohortplugin->add_instance($course, ['customint1' => $cohort->id, 'roleid' => $studentrole->id]);
++        }
++        enrol_cohort_sync($trace);
++        $this->assertEquals(3, $DB->count_records('user_enrolments', ['userid' => $user->id,
++            'status' => ENROL_USER_ACTIVE]));
++
++        foreach ([ENROL_EXT_REMOVED_SUSPEND, ENROL_EXT_REMOVED_SUSPENDNOROLES] as $action) {
++            $cohortplugin->set_config('unenrolaction', $action);
++            $DB->set_field('user_enrolments', 'status', ENROL_USER_ACTIVE, ['userid' => $user->id]);
++            $DB->delete_records('cohort_members', ['cohortid' => $cohort->id, 'userid' => $user->id]);
++
++            enrol_cohort_sync($trace);
++            $this->assertEquals(3, $DB->count_records('user_enrolments', ['userid' => $user->id,
++                'status' => ENROL_USER_SUSPENDED]));
++
++            // Sync again: enrolments are already suspended, nothing should be loaded.
++            $reads = $DB->perf_get_reads();
++            enrol_cohort_sync($trace);
++            $suspendedreads = $DB->perf_get_reads() - $reads;
++            $this->assertEquals(3, $DB->count_records('user_enrolments', ['userid' => $user->id,
++                'status' => ENROL_USER_SUSPENDED]));
++
++            // Compare with a sync where there are no enrolments at all.
++            $backup = $DB->get_records('user_enrolments', ['userid' => $user->id]);
++            $DB->delete_records('user_enrolments', ['userid' => $user->id]);
++            $reads = $DB->perf_get_reads();
++            enrol_cohort_sync($trace);
++            $emptyreads = $DB->perf_get_reads() - $reads;
++            foreach ($backup as $ue) {
++                $DB->import_record('user_enrolments', $ue);
++            }
++            $this->assertEquals($emptyreads, $suspendedreads);
++
++            cohort_add_member($cohort->id, $user->id);
++            enrol_cohort_sync($trace);
++        }
++    }
+ }

@@ -1,0 +1,26 @@
+diff --git a/sql/spatial.cc b/sql/spatial.cc
+index d1ed5bb8..24faee6c 100644
+--- a/sql/spatial.cc
++++ b/sql/spatial.cc
+@@ -3320,6 +3320,21 @@ bool Gis_geometry_collection::init_from_wkt(Gis_read_stream *trs, String *wkb)
+     {
+       for (;;)
+       {
++        /*
++          Reject a nested GEOMETRYCOLLECTION before recursing into it.
++          Otherwise a deeply nested input recurses once per level and can
++          overflow the stack (MDEV-40409).
++        */
++        LEX_STRING member_word;
++        if (!trs->lookup_next_word(&member_word) &&
++            member_word.length == 18 &&
++            my_charset_latin1.strnncoll("geometrycollection", 18,
++                                        member_word.str, 18) == 0)
++        {
++          trs->set_error_msg("Unexpected GEOMETRYCOLLECTION");
++          return 1;
++        }
++
+         if (!(g= create_from_wkt(&buffer, trs, wkb)))
+           return 1;
+ 

@@ -1,0 +1,105 @@
+diff --git a/mysql-test/main/grant5.result b/mysql-test/main/grant5.result
+index 5aeedb89..cd6cbf9c 100644
+--- a/mysql-test/main/grant5.result
++++ b/mysql-test/main/grant5.result
+@@ -472,3 +472,38 @@ DROP USER foo@localhost;
+ CREATE USER foo@localhost IDENTIFIED VIA not_installed_plugin;
+ ERROR HY000: Plugin 'not_installed_plugin' is not loaded
+ # End of 10.5 tests
++#
++# MDEV-40470 GRANT PROXY with empty password incorrectly checks
++#            grantor's privileges
++#
++CREATE USER u1@localhost;
++CREATE USER u2@localhost IDENTIFIED BY 'oldpassword';
++GRANT ALL PRIVILEGES ON *.* TO u2@localhost WITH GRANT OPTION;
++show create user u2@localhost;
++CREATE USER for u2@localhost
++CREATE USER `u2`@`localhost` IDENTIFIED BY PASSWORD '*F80A16243524922D382A633DDBD9671A2AEEACB9'
++connect  u,localhost,u1;
++SHOW GRANTS;
++Grants for u1@localhost
++GRANT USAGE ON *.* TO `u1`@`localhost`
++GRANT PROXY ON u1@localhost TO u2@localhost IDENTIFIED VIA '' OR mysql_native_password USING PASSWORD('newpassword');
++ERROR 42000: Access denied for user 'u1'@'localhost' to database 'mysql'
++GRANT PROXY ON u1@localhost TO u2@localhost IDENTIFIED VIA '';
++ERROR 42000: Access denied for user 'u1'@'localhost' to database 'mysql'
++GRANT PROXY ON u1@localhost TO u2@localhost IDENTIFIED BY '';
++ERROR 42000: Access denied for user 'u1'@'localhost' to database 'mysql'
++GRANT PROXY ON u1@localhost TO u2@localhost IDENTIFIED BY 'newpassword';
++ERROR 42000: Access denied for user 'u1'@'localhost' to database 'mysql'
++GRANT PROXY ON u1@localhost TO u2@localhost;
++disconnect u;
++connection default;
++show create user u2@localhost;
++CREATE USER for u2@localhost
++CREATE USER `u2`@`localhost` IDENTIFIED BY PASSWORD '*F80A16243524922D382A633DDBD9671A2AEEACB9'
++show grants for u2@localhost;
++Grants for u2@localhost
++GRANT ALL PRIVILEGES ON *.* TO `u2`@`localhost` WITH GRANT OPTION
++GRANT PROXY ON `u1`@`localhost` TO `u2`@`localhost`
++drop user u1@localhost;
++drop user u2@localhost;
++# End of 10.6 tests
+diff --git a/mysql-test/main/grant5.test b/mysql-test/main/grant5.test
+index a33cecbf..1e4071c4 100644
+--- a/mysql-test/main/grant5.test
++++ b/mysql-test/main/grant5.test
+@@ -436,3 +436,32 @@ DROP USER foo@localhost;
+ CREATE USER foo@localhost IDENTIFIED VIA not_installed_plugin;
+ 
+ --echo # End of 10.5 tests
++
++--echo #
++--echo # MDEV-40470 GRANT PROXY with empty password incorrectly checks
++--echo #            grantor's privileges
++--echo #
++CREATE USER u1@localhost;
++CREATE USER u2@localhost IDENTIFIED BY 'oldpassword';
++GRANT ALL PRIVILEGES ON *.* TO u2@localhost WITH GRANT OPTION;
++show create user u2@localhost;
++connect u,localhost,u1;
++SHOW GRANTS;
++--error ER_DBACCESS_DENIED_ERROR
++GRANT PROXY ON u1@localhost TO u2@localhost IDENTIFIED VIA '' OR mysql_native_password USING PASSWORD('newpassword');
++--error ER_DBACCESS_DENIED_ERROR
++GRANT PROXY ON u1@localhost TO u2@localhost IDENTIFIED VIA '';
++--error ER_DBACCESS_DENIED_ERROR
++GRANT PROXY ON u1@localhost TO u2@localhost IDENTIFIED BY '';
++--error ER_DBACCESS_DENIED_ERROR
++GRANT PROXY ON u1@localhost TO u2@localhost IDENTIFIED BY 'newpassword';
++# granting proxy without touching authentication is still allowed
++GRANT PROXY ON u1@localhost TO u2@localhost;
++disconnect u;
++connection default;
++show create user u2@localhost;
++show grants for u2@localhost;
++drop user u1@localhost;
++drop user u2@localhost;
++
++--echo # End of 10.6 tests
+diff --git a/sql/sql_acl.cc b/sql/sql_acl.cc
+index d4a7606d..f8d3b648 100644
+--- a/sql/sql_acl.cc
++++ b/sql/sql_acl.cc
+@@ -7131,8 +7131,18 @@ static bool copy_and_check_auth(LEX_USER *to, LEX_USER *from, THD *thd)
+ {
+   to->auth= from->auth;
+ 
+-  // if changing auth for an existing user
+-  if (has_auth(to, thd->lex) && find_user_exact(to->host.str, to->user.str))
++  /*
++    If changing auth for an existing user.
++    Any IDENTIFIED clause (even with an empty plugin/password, e.g.
++    IDENTIFIED VIA '' OR mysql_native_password USING PASSWORD('x') or
++    IDENTIFIED BY '') replaces the user's authentication data, so it must
++    be checked against the ALTER USER privilege (MDEV-40470).
++    LEX_USER::has_auth() only looks at the first USER_AUTH in the chain
++    and treats an empty one as "not specified", which is not what we
++    want here.
++  */
++  if ((to->auth || has_auth(to, thd->lex)) &&
++      find_user_exact(to->host.str, to->user.str))
+   {
+     mysql_mutex_unlock(&acl_cache->lock);
+     bool res= check_alter_user(thd, to->host.str, to->user.str);

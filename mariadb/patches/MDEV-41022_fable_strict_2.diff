@@ -1,0 +1,130 @@
+diff --git a/mysql-test/suite/innodb_fts/r/fulltext.result b/mysql-test/suite/innodb_fts/r/fulltext.result
+index fae2299e..d6b30948 100644
+--- a/mysql-test/suite/innodb_fts/r/fulltext.result
++++ b/mysql-test/suite/innodb_fts/r/fulltext.result
+@@ -835,5 +835,59 @@ id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+ 1	SIMPLE	NULL	NULL	NULL	NULL	NULL	NULL	NULL	Impossible WHERE
+ DROP TABLE t1, t2;
+ #
++# MDEV-41022 Wildcard term returns no rows when combined with a phrase
++# in boolean search
++#
++CREATE TABLE t (id INT AUTO_INCREMENT PRIMARY KEY, txt TEXT, FULLTEXT(txt))
++ENGINE=InnoDB;
++INSERT INTO t (txt) VALUES ('auth code out');
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"zzzz" aut*' IN BOOLEAN MODE);
++id
++1
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"auth code" -cod*' IN BOOLEAN MODE);
++id
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"auth code" aut*' IN BOOLEAN MODE);
++id
++1
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"auth code" @2 aut*' IN BOOLEAN MODE);
++id
++1
++SELECT id FROM t WHERE MATCH(txt) AGAINST('aut* "zzzz"' IN BOOLEAN MODE);
++id
++1
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"zzzz" +aut*' IN BOOLEAN MODE);
++id
++1
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"zzzz" auth' IN BOOLEAN MODE);
++id
++1
++SELECT id FROM t WHERE MATCH(txt) AGAINST('aut*' IN BOOLEAN MODE);
++id
++1
++SET @saved_optimize_fulltext_only = @@GLOBAL.innodb_optimize_fulltext_only;
++SET GLOBAL innodb_optimize_fulltext_only=ON;
++OPTIMIZE TABLE t;
++Table	Op	Msg_type	Msg_text
++test.t	optimize	status	OK
++SET GLOBAL innodb_optimize_fulltext_only=@saved_optimize_fulltext_only;
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"zzzz" aut*' IN BOOLEAN MODE);
++id
++1
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"auth code" -cod*' IN BOOLEAN MODE);
++id
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"auth code" aut*' IN BOOLEAN MODE);
++id
++1
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"auth code" @2 aut*' IN BOOLEAN MODE);
++id
++1
++SELECT id FROM t WHERE MATCH(txt) AGAINST('aut* "zzzz"' IN BOOLEAN MODE);
++id
++1
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"zzzz" +aut*' IN BOOLEAN MODE);
++id
++1
++DROP TABLE t;
++#
+ # End of 10.11 tests
+ #
+diff --git a/mysql-test/suite/innodb_fts/t/fulltext.test b/mysql-test/suite/innodb_fts/t/fulltext.test
+index 3afd0f7f..c5c5d6e7 100644
+--- a/mysql-test/suite/innodb_fts/t/fulltext.test
++++ b/mysql-test/suite/innodb_fts/t/fulltext.test
+@@ -850,6 +850,34 @@ WHERE EXISTS (
+ DROP TABLE t1, t2;
+ 
+ --echo #
+---echo # End of 10.11 tests
++--echo # MDEV-41022 Wildcard term returns no rows when combined with a phrase
++--echo # in boolean search
+ --echo #
++CREATE TABLE t (id INT AUTO_INCREMENT PRIMARY KEY, txt TEXT, FULLTEXT(txt))
++ENGINE=InnoDB;
++INSERT INTO t (txt) VALUES ('auth code out');
++# The row is still in the in-memory FTS index cache
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"zzzz" aut*' IN BOOLEAN MODE);
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"auth code" -cod*' IN BOOLEAN MODE);
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"auth code" aut*' IN BOOLEAN MODE);
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"auth code" @2 aut*' IN BOOLEAN MODE);
++SELECT id FROM t WHERE MATCH(txt) AGAINST('aut* "zzzz"' IN BOOLEAN MODE);
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"zzzz" +aut*' IN BOOLEAN MODE);
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"zzzz" auth' IN BOOLEAN MODE);
++SELECT id FROM t WHERE MATCH(txt) AGAINST('aut*' IN BOOLEAN MODE);
++# Sync the cache to the auxiliary tables; the results must not change
++SET @saved_optimize_fulltext_only = @@GLOBAL.innodb_optimize_fulltext_only;
++SET GLOBAL innodb_optimize_fulltext_only=ON;
++OPTIMIZE TABLE t;
++SET GLOBAL innodb_optimize_fulltext_only=@saved_optimize_fulltext_only;
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"zzzz" aut*' IN BOOLEAN MODE);
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"auth code" -cod*' IN BOOLEAN MODE);
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"auth code" aut*' IN BOOLEAN MODE);
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"auth code" @2 aut*' IN BOOLEAN MODE);
++SELECT id FROM t WHERE MATCH(txt) AGAINST('aut* "zzzz"' IN BOOLEAN MODE);
++SELECT id FROM t WHERE MATCH(txt) AGAINST('"zzzz" +aut*' IN BOOLEAN MODE);
++DROP TABLE t;
+ 
++--echo #
++--echo # End of 10.11 tests
++--echo #
+diff --git a/storage/innobase/fts/fts0que.cc b/storage/innobase/fts/fts0que.cc
+index b8f22076..f739d665 100644
+--- a/storage/innobase/fts/fts0que.cc
++++ b/storage/innobase/fts/fts0que.cc
+@@ -2720,6 +2720,11 @@ fts_query_phrase_search(
+ 	mem_heap_t*		heap = mem_heap_create(sizeof(fts_string_t));
+ 	ib_alloc_t*		heap_alloc;
+ 	ulint			num_token;
++	/* The search mode flags must be restored after the phrase
++	search, as subsequent terms of the same query (for example a
++	wildcard term following the phrase) are evaluated depending on
++	them. */
++	const ulint		flags = query->flags;
+ 
+ 	heap_alloc = ib_heap_allocator_create(heap);
+ 
+@@ -2893,6 +2898,9 @@ fts_query_phrase_search(
+ 	/* Don't need it anymore. */
+ 	query->matched = NULL;
+ 
++	/* Restore the search mode flags. */
++	query->flags = flags;
++
+ 	return(query->error);
+ }
+ 

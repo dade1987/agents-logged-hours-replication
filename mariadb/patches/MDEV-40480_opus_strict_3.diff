@@ -1,0 +1,113 @@
+diff --git a/mysql-test/suite/vcol/r/load_data_trigger.result b/mysql-test/suite/vcol/r/load_data_trigger.result
+new file mode 100644
+index 00000000..f7b3ddd0
+--- /dev/null
++++ b/mysql-test/suite/vcol/r/load_data_trigger.result
+@@ -0,0 +1,30 @@
++#
++# MDEV-40480 LOAD DATA leaves a stale STORED generated column after
++#            a BEFORE INSERT trigger changes its base column
++#
++CREATE TABLE t(
++id   INT PRIMARY KEY,
++v    INT NOT NULL,
++g    INT GENERATED ALWAYS AS (v * 2) STORED,
++gv   INT GENERATED ALWAYS AS (v * 3) VIRTUAL,
++note VARCHAR(20),
++KEY(gv)
++) ENGINE=InnoDB;
++CREATE TRIGGER t_bi BEFORE INSERT ON t FOR EACH ROW SET NEW.v = 20;
++LOAD DATA INFILE 'DATAFILE' INTO TABLE t (id, v, note);
++SELECT id, v, g, gv, g = v * 2 AS ok FROM t;
++id	v	g	gv	ok
++2	20	40	60	1
++SELECT id, gv FROM t FORCE INDEX(gv) WHERE gv = 60;
++id	gv
++2	60
++CHECK TABLE t;
++Table	Op	Msg_type	Msg_text
++test.t	check	status	OK
++DELETE FROM t;
++LOAD DATA INFILE 'DATAFILE' INTO TABLE t (id, v, @n) SET note= 'set';
++SELECT id, v, g, gv, g = v * 2 AS ok FROM t;
++id	v	g	gv	ok
++2	20	40	60	1
++DROP TABLE t;
++# End of tests
+diff --git a/mysql-test/suite/vcol/t/load_data_trigger.test b/mysql-test/suite/vcol/t/load_data_trigger.test
+new file mode 100644
+index 00000000..e65036f8
+--- /dev/null
++++ b/mysql-test/suite/vcol/t/load_data_trigger.test
+@@ -0,0 +1,38 @@
++--source include/have_innodb.inc
++
++--echo #
++--echo # MDEV-40480 LOAD DATA leaves a stale STORED generated column after
++--echo #            a BEFORE INSERT trigger changes its base column
++--echo #
++
++CREATE TABLE t(
++  id   INT PRIMARY KEY,
++  v    INT NOT NULL,
++  g    INT GENERATED ALWAYS AS (v * 2) STORED,
++  gv   INT GENERATED ALWAYS AS (v * 3) VIRTUAL,
++  note VARCHAR(20),
++  KEY(gv)
++) ENGINE=InnoDB;
++
++CREATE TRIGGER t_bi BEFORE INSERT ON t FOR EACH ROW SET NEW.v = 20;
++
++--let $datafile= $MYSQLTEST_VARDIR/tmp/mdev40480.tsv
++--write_file $datafile
++2	12	new
++EOF
++
++--replace_result $datafile DATAFILE
++eval LOAD DATA INFILE '$datafile' INTO TABLE t (id, v, note);
++SELECT id, v, g, gv, g = v * 2 AS ok FROM t;
++SELECT id, gv FROM t FORCE INDEX(gv) WHERE gv = 60;
++CHECK TABLE t;
++DELETE FROM t;
++
++--replace_result $datafile DATAFILE
++eval LOAD DATA INFILE '$datafile' INTO TABLE t (id, v, @n) SET note= 'set';
++SELECT id, v, g, gv, g = v * 2 AS ok FROM t;
++
++--remove_file $datafile
++DROP TABLE t;
++
++--echo # End of tests
+diff --git a/sql/sql_base.cc b/sql/sql_base.cc
+index 544df995..d2f07882 100644
+--- a/sql/sql_base.cc
++++ b/sql/sql_base.cc
+@@ -9372,16 +9372,21 @@ fill_record_n_invoke_before_triggers(THD *thd, TABLE *table,
+       Re-calculate virtual fields to cater for cases when base columns are
+       updated by the triggers.
+     */
+-    if (table->vfield && fields.elements)
++    if (table->vfield)
+     {
+-      Item *fld= (Item_field*) fields.head();
+-      Item_field *item_field= fld->field_for_view_update();
+-      if (item_field)
++#ifndef DBUG_OFF
++      if (fields.elements)
+       {
+-        DBUG_ASSERT(table == item_field->field->table);
+-        result|= table->update_virtual_fields(table->file,
+-                                              VCOL_UPDATE_FOR_WRITE);
++        Item_field *item_field= fields.head()->field_for_view_update();
++        DBUG_ASSERT(!item_field || table == item_field->field->table);
+       }
++#endif
++      /*
++        Note: fields may be empty, e.g. for LOAD DATA without a SET clause
++        (MDEV-40480); virtual fields must be recomputed anyway.
++      */
++      result|= table->update_virtual_fields(table->file,
++                                            VCOL_UPDATE_FOR_WRITE);
+     }
+   }
+   return result;

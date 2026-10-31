@@ -1,0 +1,136 @@
+diff --git a/public/lib/classes/check/manager.php b/public/lib/classes/check/manager.php
+index 417907106b4..7a19098c4e6 100644
+--- a/public/lib/classes/check/manager.php
++++ b/public/lib/classes/check/manager.php
+@@ -132,6 +132,7 @@ class manager {
+             new security\crawlers(),
+             new security\passwordpolicy(),
+             new security\emailchangeconfirmation(),
++            new security\newlogin(),
+             new security\webcron(),
+             new http\cookiesecure(),
+             new access\riskadmin(),
+diff --git a/public/lib/classes/check/security/newlogin.php b/public/lib/classes/check/security/newlogin.php
+new file mode 100644
+index 00000000000..cb258a2f0e4
+--- /dev/null
++++ b/public/lib/classes/check/security/newlogin.php
+@@ -0,0 +1,85 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\check\security;
++
++use core\check\check;
++use core\check\result;
++
++/**
++ * Verifies that new login notifications are forced on.
++ *
++ * @package    core
++ * @category   check
++ * @copyright  2026 Moodle
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class newlogin extends check {
++
++    /**
++     * Get the short check name
++     *
++     * @return string
++     */
++    #[\Override]
++    public function get_name(): string {
++        return get_string('check_newlogin_name', 'report_security');
++    }
++
++    /**
++     * A link to a place to action this
++     *
++     * @return \action_link|null
++     */
++    #[\Override]
++    public function get_action_link(): ?\action_link {
++        return new \action_link(
++            new \moodle_url('/admin/message.php'),
++            get_string('messageoutputs', 'message'),
++        );
++    }
++
++    /**
++     * Return result
++     * @return result
++     */
++    #[\Override]
++    public function get_result(): result {
++        $details = get_string('check_newlogin_details', 'report_security');
++        $config = get_config('message');
++
++        if (!empty($config->moodle_newlogin_disable)) {
++            return new result(result::WARNING, get_string('check_newlogin_disabled', 'report_security'), $details);
++        }
++
++        // Forced on means locked and enabled for at least one working processor.
++        $forced = false;
++        foreach (get_message_processors(true) as $processor) {
++            $base = $processor->name . '_provider_moodle_newlogin';
++            $locked = !empty($config->{$base . '_locked'});
++            $enabledlist = explode(',', (string) ($config->{'message_provider_moodle_newlogin_enabled'} ?? ''));
++            if ($locked && in_array($processor->name, $enabledlist)) {
++                $forced = true;
++                break;
++            }
++        }
++
++        if ($forced) {
++            return new result(result::OK, get_string('check_newlogin_ok', 'report_security'), $details);
++        }
++        return new result(result::WARNING, get_string('check_newlogin_error', 'report_security'), $details);
++    }
++}
+diff --git a/public/lib/db/messages.php b/public/lib/db/messages.php
+index bf803ce1d1c..b6e4d49902c 100644
+--- a/public/lib/db/messages.php
++++ b/public/lib/db/messages.php
+@@ -37,9 +37,9 @@ $messageproviders = array (
+ 
+     'newlogin' => array (
+         'defaults' => [
+-            'popup' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
+-            'email' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
+-            'airnotifier' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
++            'popup' => MESSAGE_FORCED,
++            'email' => MESSAGE_FORCED,
++            'airnotifier' => MESSAGE_FORCED,
+         ],
+     ),
+ 
+diff --git a/public/report/security/lang/en/report_security.php b/public/report/security/lang/en/report_security.php
+index dbfc33d7607..bac1b0080f2 100644
+--- a/public/report/security/lang/en/report_security.php
++++ b/public/report/security/lang/en/report_security.php
+@@ -86,6 +86,11 @@ $string['check_guestrole_ok'] = 'Guest role definition is OK.';
+ $string['check_nodemodules_details'] = '<p>The directory <code>{$a->path}</code> contains Node.js modules and their dependencies, typically installed by the NPM utility. These modules may be needed for local Moodle development, such as for using the grunt framework. They are not needed to run a Moodle site in production and they can contain potentially dangerous code exposing your site to remote attacks.</p><p>It is strongly recommended to remove the directory if the site is available via a public URL, or at least prohibit web access to it in your webserver configuration.</p>';
+ $string['check_nodemodules_info'] = 'The node_modules directory should not be present on public sites.';
+ $string['check_nodemodules_name'] = 'Node.js modules directory';
++$string['check_newlogin_details'] = '<p>New login notifications alert users when their account is signed in to from a new device or location, helping them notice unauthorised access. It is recommended that they are forced on for at least one notification method.</p>';
++$string['check_newlogin_disabled'] = 'New login notifications are disabled.';
++$string['check_newlogin_error'] = 'New login notifications are not forced on.';
++$string['check_newlogin_name'] = 'New login notifications';
++$string['check_newlogin_ok'] = 'New login notifications are forced on.';
+ $string['check_openprofiles_details'] = 'Open user profiles can be abused by spammers. It is recommended that either <code>Force users to log in for profiles</code> or <code>Force users to log in</code> are enabled.';
+ $string['check_openprofiles_error'] = 'Anyone can may view user profiles without logging in.';
+ $string['check_openprofiles_name'] = 'Open user profiles';

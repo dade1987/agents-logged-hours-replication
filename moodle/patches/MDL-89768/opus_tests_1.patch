@@ -1,0 +1,57 @@
+diff --git a/public/mod/wiki/classes/external.php b/public/mod/wiki/classes/external.php
+index ec0f9e72a74..b410c7d22de 100644
+--- a/public/mod/wiki/classes/external.php
++++ b/public/mod/wiki/classes/external.php
+@@ -988,6 +988,7 @@ class mod_wiki_external extends external_api {
+             $cm = get_coursemodule_from_instance('wiki', $wiki->id, $wiki->course);
+             $context = context_module::instance($cm->id);
+             self::validate_context($context);
++            require_capability('mod/wiki:createpage', $context);
+ 
+         } else {
+             if (!$wiki = wiki_get_wiki($params['wikiid'])) {
+@@ -998,6 +999,7 @@ class mod_wiki_external extends external_api {
+             $cm = get_coursemodule_from_instance('wiki', $wiki->id, $wiki->course);
+             $context = context_module::instance($cm->id);
+             self::validate_context($context);
++            require_capability('mod/wiki:createpage', $context);
+ 
+             // Determine groupid and userid to use.
+             list($groupid, $userid) = self::determine_group_and_user($cm, $wiki, $params['groupid'], $params['userid']);
+diff --git a/public/mod/wiki/tests/externallib_test.php b/public/mod/wiki/tests/externallib_test.php
+index 93ba3f73af1..952229930e0 100644
+--- a/public/mod/wiki/tests/externallib_test.php
++++ b/public/mod/wiki/tests/externallib_test.php
+@@ -1440,6 +1440,32 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+             $this->assertEquals('cannoteditpage', $e->errorcode);
+         }
+ 
++        // Check page creation for a user without the createpage capability (but still with editpage).
++        $studentrole = $this->studentrole;
++        assign_capability('mod/wiki:createpage', CAP_PROHIBIT, $studentrole->id,
++            \context_module::instance($this->wikisepind->cmid)->id);
++        accesslib_clear_all_caches_for_unit_testing();
++
++        // Existing subwiki.
++        try {
++            mod_wiki_external::new_page('Another page', $pagecontent, 'html', $this->fpsepg1indstu->subwikiid);
++            $this->fail('Exception expected due to missing createpage capability.');
++        } catch (\required_capability_exception $e) {
++            $this->assertEquals('nopermissions', $e->errorcode);
++        }
++
++        // Subwiki identified by wiki, group and user.
++        try {
++            mod_wiki_external::new_page('Another page', $pagecontent, 'html', null, $this->wikisepind->id,
++                $this->student->id, $this->group2->id);
++            $this->fail('Exception expected due to missing createpage capability.');
++        } catch (\required_capability_exception $e) {
++            $this->assertEquals('nopermissions', $e->errorcode);
++        }
++
++        // The user can still edit pages.
++        $subwiki = wiki_get_subwiki($this->fpsepg1indstu->subwikiid);
++        $this->assertTrue(wiki_user_can_edit($subwiki));
+     }
+ 
+     /**

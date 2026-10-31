@@ -1,0 +1,130 @@
+diff --git a/public/mod/forum/db/services.php b/public/mod/forum/db/services.php
+index a4a016cbe81..403185828b1 100644
+--- a/public/mod/forum/db/services.php
++++ b/public/mod/forum/db/services.php
+@@ -156,6 +156,16 @@ $functions = array(
+         'services' => array(MOODLE_OFFICIAL_MOBILE_SERVICE),
+     ),
+ 
++    'mod_forum_set_read_state' => array(
++        'classname' => 'mod_forum_external',
++        'methodname' => 'set_read_state',
++        'classpath' => 'mod/forum/externallib.php',
++        'description' => 'Set the read state of a post for the current user',
++        'type' => 'write',
++        'ajax' => true,
++        'services' => array(MOODLE_OFFICIAL_MOBILE_SERVICE),
++    ),
++
+     'mod_forum_delete_post' => array(
+         'classname' => 'mod_forum_external',
+         'methodname' => 'delete_post',
+diff --git a/public/mod/forum/externallib.php b/public/mod/forum/externallib.php
+index 3040f7f2844..2db4f2e3ff0 100644
+--- a/public/mod/forum/externallib.php
++++ b/public/mod/forum/externallib.php
+@@ -1625,6 +1625,92 @@ class mod_forum_external extends external_api {
+         return discussion_exporter::get_read_structure();
+     }
+ 
++    /**
++     * Set the read state of a post for the current user.
++     *
++     * @param   int     $postid      The post to mark as read or unread.
++     * @param   bool    $targetstate True to mark the post as read, false to mark it as unread.
++     * @return  stdClass The exported post.
++     */
++    public static function set_read_state($postid, $targetstate) {
++        global $CFG, $USER;
++        require_once($CFG->dirroot . "/mod/forum/lib.php");
++
++        $params = self::validate_parameters(self::set_read_state_parameters(), [
++            'postid' => $postid,
++            'targetstate' => $targetstate,
++        ]);
++
++        $vaultfactory = mod_forum\local\container::get_vault_factory();
++        $managerfactory = mod_forum\local\container::get_manager_factory();
++        $postvault = $vaultfactory->get_post_vault();
++        $discussionvault = $vaultfactory->get_discussion_vault();
++        $forumvault = $vaultfactory->get_forum_vault();
++
++        $postentity = $postvault->get_from_id($params['postid']);
++        if (empty($postentity)) {
++            throw new \moodle_exception('invalidpostid', 'forum');
++        }
++
++        $discussionentity = $discussionvault->get_from_id($postentity->get_discussion_id());
++        if (empty($discussionentity)) {
++            throw new \moodle_exception('notpartofdiscussion', 'forum');
++        }
++
++        $forumentity = $forumvault->get_from_id($discussionentity->get_forum_id());
++        if (empty($forumentity)) {
++            throw new \moodle_exception('invalidforumid', 'forum');
++        }
++
++        self::validate_context($forumentity->get_context());
++
++        $capabilitymanager = $managerfactory->get_capability_manager($forumentity);
++        if (!$capabilitymanager->can_view_post($USER, $discussionentity, $postentity)) {
++            throw new \moodle_exception('noviewdiscussionspermission', 'forum');
++        }
++
++        if (!$capabilitymanager->can_manually_control_post_read_status($USER)) {
++            throw new \moodle_exception('cannotcontrolreadstatus', 'forum');
++        }
++
++        if ($params['targetstate']) {
++            forum_tp_add_read_record($USER->id, $postentity->get_id());
++        } else {
++            forum_tp_delete_read_records($USER->id, $postentity->get_id());
++        }
++
++        $builderfactory = \mod_forum\local\container::get_builder_factory();
++        $exportedpostsbuilder = $builderfactory->get_exported_posts_builder();
++        $exportedposts = $exportedpostsbuilder->build($USER, [$forumentity], [$discussionentity], [$postentity]);
++
++        return $exportedposts[0];
++    }
++
++    /**
++     * Returns description of method parameters.
++     *
++     * @return external_function_parameters
++     */
++    public static function set_read_state_parameters() {
++        return new external_function_parameters(
++            [
++                'postid' => new external_value(PARAM_INT, 'The post to mark as read or unread', VALUE_REQUIRED,
++                    null, NULL_NOT_ALLOWED),
++                'targetstate' => new external_value(PARAM_BOOL, 'True to mark the post as read, false to mark it as unread',
++                    VALUE_REQUIRED, null, NULL_NOT_ALLOWED),
++            ]
++        );
++    }
++
++    /**
++     * Returns description of method result value.
++     *
++     * @return external_single_structure
++     */
++    public static function set_read_state_returns() {
++        return post_exporter::get_read_structure();
++    }
++
+     /**
+      * Returns description of method parameters
+      *
+diff --git a/public/mod/forum/lang/en/forum.php b/public/mod/forum/lang/en/forum.php
+index 4dec813a006..35b2d21e353 100644
+--- a/public/mod/forum/lang/en/forum.php
++++ b/public/mod/forum/lang/en/forum.php
+@@ -73,6 +73,7 @@ $string['cannotadd'] = 'Could not add the discussion for this forum';
+ $string['cannotadddiscussion'] = 'Adding discussions to this forum requires group membership.';
+ $string['cannotadddiscussionall'] = 'You do not have permission to add a new discussion topic for all participants.';
+ $string['cannotadddiscussiongroup'] = 'You are not able to create a discussion because you are not a member of any group.';
++$string['cannotcontrolreadstatus'] = 'Sorry, you do not have permission to manually control the read status of posts.';
+ $string['cannotaddsubscriber'] = 'Could not add subscriber with id {$a} to this forum!';
+ $string['cannotaddteacherforumto'] = 'Could not add converted teacher forum instance to section 0 in the course';
+ $string['cannotcreatediscussion'] = 'Could not create new discussion';

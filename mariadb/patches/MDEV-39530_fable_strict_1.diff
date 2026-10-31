@@ -1,0 +1,135 @@
+diff --git a/mysql-test/main/ctype_utf8.result b/mysql-test/main/ctype_utf8.result
+index 55b95de9..d3537fd8 100644
+--- a/mysql-test/main/ctype_utf8.result
++++ b/mysql-test/main/ctype_utf8.result
+@@ -10834,3 +10834,33 @@ DROP TABLE t1;
+ #
+ # End of 11.6 tests
+ #
++#
++# Start of 12.3 tests
++#
++#
++# MDEV-39530 Collation mix issue after update
++#
++SET NAMES utf8mb3 COLLATE utf8mb3_uca1400_ai_ci;
++CREATE TABLE t1 (id INT NOT NULL PRIMARY KEY, path VARCHAR(800) NOT NULL DEFAULT '')
++CHARACTER SET utf8mb3 COLLATE utf8mb3_unicode_ci;
++INSERT INTO t1 VALUES (1,'text');
++SELECT IF((@p:=(SELECT path FROM t1 WHERE id=1 AND path REGEXP '^xx'))!='',1,2) AS c1;
++c1
++2
++SELECT IF((@p:=(SELECT path FROM t1 WHERE id=1 AND path REGEXP '^te'))!='',1,2) AS c1;
++c1
++1
++SELECT (@p:=path)!='' AS c1 FROM t1;
++c1
++1
++SELECT COERCIBILITY(@p:=path), COERCIBILITY(@p), COERCIBILITY('') FROM t1;
++COERCIBILITY(@p:=path)	COERCIBILITY(@p)	COERCIBILITY('')
++5	5	6
++SELECT COLLATION(@p:=path), COLLATION(@p), COLLATION('') FROM t1;
++COLLATION(@p:=path)	COLLATION(@p)	COLLATION('')
++utf8mb3_unicode_ci	utf8mb3_unicode_ci	utf8mb3_uca1400_ai_ci
++DROP TABLE t1;
++SET NAMES utf8mb3;
++#
++# End of 12.3 tests
++#
+diff --git a/mysql-test/main/ctype_utf8.test b/mysql-test/main/ctype_utf8.test
+index e6b43cd4..a6cda418 100644
+--- a/mysql-test/main/ctype_utf8.test
++++ b/mysql-test/main/ctype_utf8.test
+@@ -2565,3 +2565,27 @@ DROP TABLE t1;
+ --echo #
+ --echo # End of 11.6 tests
+ --echo #
++
++--echo #
++--echo # Start of 12.3 tests
++--echo #
++
++--echo #
++--echo # MDEV-39530 Collation mix issue after update
++--echo #
++
++SET NAMES utf8mb3 COLLATE utf8mb3_uca1400_ai_ci;
++CREATE TABLE t1 (id INT NOT NULL PRIMARY KEY, path VARCHAR(800) NOT NULL DEFAULT '')
++  CHARACTER SET utf8mb3 COLLATE utf8mb3_unicode_ci;
++INSERT INTO t1 VALUES (1,'text');
++SELECT IF((@p:=(SELECT path FROM t1 WHERE id=1 AND path REGEXP '^xx'))!='',1,2) AS c1;
++SELECT IF((@p:=(SELECT path FROM t1 WHERE id=1 AND path REGEXP '^te'))!='',1,2) AS c1;
++SELECT (@p:=path)!='' AS c1 FROM t1;
++SELECT COERCIBILITY(@p:=path), COERCIBILITY(@p), COERCIBILITY('') FROM t1;
++SELECT COLLATION(@p:=path), COLLATION(@p), COLLATION('') FROM t1;
++DROP TABLE t1;
++SET NAMES utf8mb3;
++
++--echo #
++--echo # End of 12.3 tests
++--echo #
+diff --git a/mysql-test/main/user_var.result b/mysql-test/main/user_var.result
+index 8afe3839..24e6c90a 100644
+--- a/mysql-test/main/user_var.result
++++ b/mysql-test/main/user_var.result
+@@ -162,13 +162,13 @@ collation(@a:=_latin2'test')
+ latin2_general_ci
+ select coercibility(@a:=_latin2'test');
+ coercibility(@a:=_latin2'test')
+-6
++5
+ select collation(@a:=_latin2'test' collate latin2_bin);
+ collation(@a:=_latin2'test' collate latin2_bin)
+ latin2_bin
+ select coercibility(@a:=_latin2'test' collate latin2_bin);
+ coercibility(@a:=_latin2'test' collate latin2_bin)
+-6
++5
+ select (@a:=_latin2'test' collate latin2_bin) = _latin2'TEST';
+ (@a:=_latin2'test' collate latin2_bin) = _latin2'TEST'
+ 0
+diff --git a/sql/item_func.cc b/sql/item_func.cc
+index 07b811eb..f678084e 100644
+--- a/sql/item_func.cc
++++ b/sql/item_func.cc
+@@ -4849,9 +4849,17 @@ bool Item_func_set_user_var::fix_fields(THD *thd, Item **ref)
+   if (!m_var_entry->charset() || !null_item)
+     m_var_entry->set_charset(args[0]->collation.derivation == DERIVATION_NUMERIC ?
+                              &my_charset_numeric : args[0]->collation.collation);
++  /*
++    Use DERIVATION_USERVAR, like Item_func_get_user_var does, so that
++    (@a:=expr) behaves as a user variable in collation aggregation
++    and does not conflict with string literals of a different
++    collation of the same character set, e.g. when
++    @@collation_connection differs from the column collation:
++      SELECT (@a:=(SELECT col FROM t1)) <> ''
++  */
+   collation.set(m_var_entry->charset(),
+                 args[0]->collation.derivation == DERIVATION_NUMERIC ?
+-                DERIVATION_NUMERIC : DERIVATION_COERCIBLE);
++                DERIVATION_NUMERIC : DERIVATION_USERVAR);
+   switch (args[0]->result_type()) {
+   case STRING_RESULT:
+   case TIME_RESULT:
+@@ -4916,7 +4924,7 @@ Item_func_set_user_var::fix_length_and_dec(THD *thd)
+   }
+   else
+   {
+-    collation.set(DERIVATION_COERCIBLE);
++    collation.set(DERIVATION_USERVAR);
+     fix_length_and_charset(args[0]->max_char_length(),
+                            args[0]->collation.collation);
+   }
+diff --git a/sql/sql_type.h b/sql/sql_type.h
+index 40694237..d3ac09e8 100644
+--- a/sql/sql_type.h
++++ b/sql/sql_type.h
+@@ -3125,7 +3125,7 @@ enum Derivation
+   DERIVATION_COERCIBLE= 6,
+ 
+   /*
+-    - String user variables
++    - String user variables: @a and (@a:=string_expr)
+   */
+   DERIVATION_USERVAR= 5,
+ 

@@ -1,0 +1,141 @@
+diff --git a/mysql-test/main/func_json.result b/mysql-test/main/func_json.result
+index dd40304f..92be740f 100644
+--- a/mysql-test/main/func_json.result
++++ b/mysql-test/main/func_json.result
+@@ -1805,5 +1805,42 @@ SELECT JSON_EXISTS('[[[[[Y[[[[[[[[[[[[[[[[[[Vn]]]]]]]]]]]]]],]]:]]]](', '$[0 to
+ je
+ NULL
+ #
++# MDEV-39817 JSON_ARRAYAGG() returns garbage because of off-by-one error
++#
++set session group_concat_max_len = 9;
++create table t (c varchar(20) character set latin1);
++insert into t values ('ab'), ('cd'), ('ef');
++select json_arrayagg(c order by c) from t;
++json_arrayagg(c order by c)
++["ab","cd"]
++Warnings:
++Warning	1260	Row 3 was cut by JSON_ARRAYAGG()
++set session group_concat_max_len = 10;
++select json_arrayagg(c order by c) from t;
++json_arrayagg(c order by c)
++["ab","cd"]
++Warnings:
++Warning	1260	Row 3 was cut by JSON_ARRAYAGG()
++set session group_concat_max_len = 11;
++select json_arrayagg(c order by c) from t;
++json_arrayagg(c order by c)
++["ab","cd"]
++Warnings:
++Warning	1260	Row 3 was cut by JSON_ARRAYAGG()
++set session group_concat_max_len = 12;
++select json_arrayagg(c order by c) from t;
++json_arrayagg(c order by c)
++["ab","cd",""]
++Warnings:
++Warning	1260	Row 3 was cut by JSON_ARRAYAGG()
++set session group_concat_max_len = 13;
++select json_arrayagg(c order by c) from t;
++json_arrayagg(c order by c)
++["ab","cd","e"]
++Warnings:
++Warning	1260	Row 3 was cut by JSON_ARRAYAGG()
++drop table t;
++set session group_concat_max_len = default;
++#
+ # End of 10.6 tests
+ #
+diff --git a/mysql-test/main/func_json.test b/mysql-test/main/func_json.test
+index 842ce772..89099d9f 100644
+--- a/mysql-test/main/func_json.test
++++ b/mysql-test/main/func_json.test
+@@ -1256,6 +1256,31 @@ SELECT JSON_EXISTS(CONCAT('[', REPEAT('[', 4000), 'Y', REPEAT(']', 4000), ', 1]'
+ SELECT JSON_EXISTS('[[[[[Y[[[[n[[[[[[[[[[[n[[[Vn]]]]]]]]]]]]]],]]:]]]](', '$[0 to rrrrrRR-1]') as je;
+ SELECT JSON_EXISTS('[[[[[Y[[[[[[[[[[[[[[[[[[Vn]]]]]]]]]]]]]],]]:]]]](', '$[0 to rrrrRR-1]') as je;
+ 
++--echo #
++--echo # MDEV-39817 JSON_ARRAYAGG() returns garbage because of off-by-one error
++--echo #
++
++set session group_concat_max_len = 9;
++create table t (c varchar(20) character set latin1);
++insert into t values ('ab'), ('cd'), ('ef');
++--disable_cursor_protocol
++--disable_view_protocol
++--disable_ps2_protocol
++select json_arrayagg(c order by c) from t;
++set session group_concat_max_len = 10;
++select json_arrayagg(c order by c) from t;
++set session group_concat_max_len = 11;
++select json_arrayagg(c order by c) from t;
++set session group_concat_max_len = 12;
++select json_arrayagg(c order by c) from t;
++set session group_concat_max_len = 13;
++select json_arrayagg(c order by c) from t;
++--enable_ps2_protocol
++--enable_view_protocol
++--enable_cursor_protocol
++drop table t;
++set session group_concat_max_len = default;
++
+ --echo #
+ --echo # End of 10.6 tests
+ --echo #
+diff --git a/sql/item_jsonfunc.cc b/sql/item_jsonfunc.cc
+index cf5bb9be..768b62f1 100644
+--- a/sql/item_jsonfunc.cc
++++ b/sql/item_jsonfunc.cc
+@@ -4101,7 +4101,53 @@ void Item_func_json_arrayagg::cut_max_length(String *result,
+     return;
+   }
+ 
++  /*
++    The last appended value is a JSON string: <separator>"...".
++    Find the position of its opening quote, skipping the separator.
++  */
++  const char *ptr= result->ptr();
++  uint start= old_length;
++  while (start < result->length() && ptr[start] != '"')
++    start++;
++
++  /*
++    There must be room for at least the opening and the closing quotes,
++    i.e. for an empty string '""'. Otherwise we can neither cut the value
++    nor close it properly (and max_length-1 could even be smaller than
++    old_length, making the cut below read outside of the appended value),
++    so drop the whole last value together with its separator.
++  */
++  if (max_length < start + 2)
++  {
++    result->length(old_length);
++    return;
++  }
++
+   Item_func_group_concat::cut_max_length(result, old_length, max_length-1);
++
++  /*
++    Make sure we did not cut in the middle of a JSON escape sequence
++    (\X or \uXXXX), which would produce an invalid JSON string.
++  */
++  {
++    uint cut_length= result->length();
++    uint i= start + 1;
++    while (i < cut_length)
++    {
++      if (ptr[i] == '\\')
++      {
++        uint esc_length= (i + 1 < cut_length && ptr[i + 1] == 'u') ? 6 : 2;
++        if (i + esc_length > cut_length)
++        {
++          result->length(i);
++          break;
++        }
++        i+= esc_length;
++      }
++      else
++        i++;
++    }
++  }
+   result->append('"');
+ }
+ 

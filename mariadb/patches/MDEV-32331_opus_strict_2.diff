@@ -1,0 +1,113 @@
+diff --git a/mysql-test/main/func_json.result b/mysql-test/main/func_json.result
+index da78b027..85a83fea 100644
+--- a/mysql-test/main/func_json.result
++++ b/mysql-test/main/func_json.result
+@@ -2959,4 +2959,14 @@ NULL
+ SELECT JSON_OVERLAPS(JSON_ARRAY_INSERT(NULL,'$[0]',1), '[]') AS x;
+ x
+ NULL
++#
++# MDEV-32331 JSON path functions with no charset on path crash server
++#
++SELECT ( WITH x ( x ) AS ( WITH x ( x ) AS ( SELECT json_array_append ( 'x' , ( 'x' % 'x' ) , 1 , 'x' , 1 ) ) SELECT CASE WHEN x * x THEN x END FROM x ) ( SELECT 1 FROM x WHERE x ) ) AS r;
++r
++NULL
++SELECT JSON_ARRAY_APPEND('[1]', 'x' % 'x', 1) AS r FROM (SELECT 1 UNION SELECT 2) t;
++r
++NULL
++NULL
+ # End of 10.11 Test
+diff --git a/mysql-test/main/func_json.test b/mysql-test/main/func_json.test
+index c9a65929..412c85f1 100644
+--- a/mysql-test/main/func_json.test
++++ b/mysql-test/main/func_json.test
+@@ -2130,4 +2130,13 @@ SELECT JSON_ARRAY_INSERT (0,NULL,1) as j;
+ SELECT JSON_EQUALS('[]', JSON_ARRAY_INSERT(NULL,'$[0]',1)) AS x;
+ SELECT JSON_OVERLAPS(JSON_ARRAY_INSERT(NULL,'$[0]',1), '[]') AS x;
+ 
++--echo #
++--echo # MDEV-32331 JSON path functions with no charset on path crash server
++--echo #
++
++--disable_warnings
++SELECT ( WITH x ( x ) AS ( WITH x ( x ) AS ( SELECT json_array_append ( 'x' , ( 'x' % 'x' ) , 1 , 'x' , 1 ) ) SELECT CASE WHEN x * x THEN x END FROM x ) ( SELECT 1 FROM x WHERE x ) ) AS r;
++SELECT JSON_ARRAY_APPEND('[1]', 'x' % 'x', 1) AS r FROM (SELECT 1 UNION SELECT 2) t;
++--enable_warnings
++
+ --echo # End of 10.11 Test
+diff --git a/sql/item_jsonfunc.cc b/sql/item_jsonfunc.cc
+index cfe244dc..2a7c2c20 100644
+--- a/sql/item_jsonfunc.cc
++++ b/sql/item_jsonfunc.cc
+@@ -708,7 +708,7 @@ bool Item_func_json_exists::val_bool()
+         json_path_setup(&path.p, s_p->charset(), (const uchar *) s_p->ptr(),
+                         (const uchar *) s_p->ptr() + s_p->length()))
+       goto err_return;
+-    path.parsed= path.constant;
++    path.parsed= s_p ? path.constant : false;
+   }
+ 
+   if ((null_value= args[0]->null_value || args[1]->null_value))
+@@ -793,7 +793,7 @@ bool Json_path_extractor::extract(String *str, Item *item_js, Item *item_jp,
+       return true;
+     }
+ 
+-    parsed= constant;
++    parsed= s_p ? constant : false;
+   }
+ 
+   if (item_js->null_value || item_jp->null_value)
+@@ -1610,7 +1610,7 @@ bool Item_func_json_contains::val_bool()
+         report_path_error(s_p, &path.p, 2);
+         goto return_null;
+       }
+-      path.parsed= path.constant;
++      path.parsed= s_p ? path.constant : false;
+     }
+     if (args[2]->null_value)
+       goto return_null;
+@@ -2171,7 +2171,7 @@ String *Item_func_json_array_append::val_str(String *str)
+         report_path_error(s_p, &c_path->p, n_arg);
+         goto return_null;
+       }
+-      c_path->parsed= c_path->constant;
++      c_path->parsed= s_p ? c_path->constant : false;
+     }
+     if (args[n_arg]->null_value)
+       goto return_null;
+@@ -3172,7 +3172,7 @@ longlong Item_func_json_length::val_int()
+         report_path_error(s_p, &path.p, 1);
+         goto null_return;
+       }
+-      path.parsed= path.constant;
++      path.parsed= s_p ? path.constant : false;
+     }
+     if (args[1]->null_value)
+       goto null_return;
+@@ -3421,7 +3421,7 @@ String *Item_func_json_insert::val_str(String *str)
+         /* We search to the last step. */
+         c_path->p.last_step--;
+       }
+-      c_path->parsed= c_path->constant;
++      c_path->parsed= s_p ? c_path->constant : false;
+     }
+     if (args[n_arg]->null_value)
+       goto return_null;
+@@ -3692,7 +3692,7 @@ String *Item_func_json_remove::val_str(String *str)
+           goto null_return;
+         }
+       }
+-      c_path->parsed= c_path->constant;
++      c_path->parsed= s_p ? c_path->constant : false;
+     }
+     if (args[n_arg]->null_value)
+       goto null_return;
+@@ -3912,7 +3912,7 @@ String *Item_func_json_keys::val_str(String *str)
+         report_path_error(s_p, &path.p, 1);
+         goto null_return;
+       }
+-    path.parsed= path.constant;
++    path.parsed= s_p ? path.constant : false;
+   }
+ 
+   if (args[1]->null_value)

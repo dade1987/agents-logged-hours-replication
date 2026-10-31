@@ -1,0 +1,126 @@
+diff --git a/public/backup/util/factories/backup_factory.class.php b/public/backup/util/factories/backup_factory.class.php
+index 2121763c186..93cd6170323 100644
+--- a/public/backup/util/factories/backup_factory.class.php
++++ b/public/backup/util/factories/backup_factory.class.php
+@@ -62,7 +62,7 @@ abstract class backup_factory {
+         // defaulting to $dfltloglevel
+         $backuptempdir = make_backup_temp_directory(''); // Need to ensure that $CFG->backuptempdir already exists.
+         $fllevel = isset($CFG->backup_file_logger_level) ? $CFG->backup_file_logger_level : $dfltloglevel;
+-        $enabledloggers[] = new file_logger($fllevel, true, true, $backuptempdir . '/' . $backupid . '.log');
++        $enabledloggers[] = new file_logger($fllevel, true, true, $backupid . '.log');
+ 
+         // Create database_logger, observing $CFG->backup_database_logger_level and defaulting to LOG_WARNING
+         // and pointing to the backup_logs table
+diff --git a/public/backup/util/loggers/file_logger.class.php b/public/backup/util/loggers/file_logger.class.php
+index 797ffa0e29f..f6b962a5b22 100644
+--- a/public/backup/util/loggers/file_logger.class.php
++++ b/public/backup/util/loggers/file_logger.class.php
+@@ -36,14 +36,16 @@ class file_logger extends base_logger {
+         if (empty($fullpath)) {
+             throw new base_logger_exception('missing_fullpath_parameter', $fullpath);
+         }
+-        if (!is_writable(dirname($fullpath))) {
+-            throw new base_logger_exception('file_not_writable', $fullpath);
++        // Relative paths (just a filename) are resolved against the current backup temp dir.
++        $resolved = self::resolve_path($fullpath);
++        if (!is_writable(dirname($resolved))) {
++            throw new base_logger_exception('file_not_writable', $resolved);
+         }
+         // Open the OS file for writing (append)
+         $this->fullpath = $fullpath;
+         if ($level > backup::LOG_NONE) { // Only create the file if we are going to log something
+-            if (! $this->fhandle = fopen($this->fullpath, 'a')) {
+-                throw new base_logger_exception('error_opening_file', $fullpath);
++            if (! $this->fhandle = fopen($resolved, 'a')) {
++                throw new base_logger_exception('error_opening_file', $resolved);
+             }
+         }
+         parent::__construct($level, $showdate, $showlevel);
+@@ -62,24 +64,71 @@ class file_logger extends base_logger {
+             @fclose($this->fhandle);
+             $this->fhandle = null;
+         }
++        // Store only the filename for files living in the backup temp dir, so the
++        // serialised data is not host specific.
++        $this->fullpath = $this->get_relative_path($this->fullpath);
+         return array('level', 'showdate', 'showlevel', 'next', 'fullpath');
+     }
+ 
+     public function __wakeup() {
+-        // If the stored path no longer exists, reconstruct it using the current backup temp dir.
+-        if (!empty($this->fullpath) && !file_exists(dirname($this->fullpath))) {
+-            $filename = basename($this->fullpath);
+-            $backuptempdir = make_backup_temp_directory('');
+-            $this->fullpath = $backuptempdir . '/' . $filename;
++        if (!empty($this->fullpath)) {
++            $resolved = self::resolve_path($this->fullpath);
++            // If a stored absolute path no longer exists, reconstruct it using the current backup temp dir.
++            if (!file_exists(dirname($resolved))) {
++                $resolved = make_backup_temp_directory('') . '/' . basename($this->fullpath);
++            }
++            // Keep the path relative if it lives in the backup temp dir.
++            $this->fullpath = $this->get_relative_path($resolved);
+         }
+ 
+         if ($this->level > backup::LOG_NONE) { // Only create the file if we are going to log something
+-            if (! $this->fhandle = fopen($this->fullpath, 'a')) {
+-                throw new base_logger_exception('error_opening_file', $this->fullpath);
++            $resolved = self::resolve_path($this->fullpath);
++            if (! $this->fhandle = fopen($resolved, 'a')) {
++                throw new base_logger_exception('error_opening_file', $resolved);
+             }
+         }
+     }
+ 
++    /**
++     * Whether the given path is absolute.
++     *
++     * @param string $path
++     * @return bool
++     */
++    protected static function is_absolute_path(string $path): bool {
++        return $path !== '' && ($path[0] === '/' || $path[0] === '\\' || preg_match('~^[a-zA-Z]:[\\\\/]~', $path));
++    }
++
++    /**
++     * Resolve a (possibly relative) path to a full path, relative ones being based on the backup temp dir.
++     *
++     * @param string $path
++     * @return string
++     */
++    protected static function resolve_path(string $path): string {
++        if (self::is_absolute_path($path)) {
++            return $path;
++        }
++        return make_backup_temp_directory('') . '/' . $path;
++    }
++
++    /**
++     * Convert a path to a relative one (filename) if it is directly inside the backup temp dir.
++     *
++     * @param string $path
++     * @return string
++     */
++    protected function get_relative_path(string $path): string {
++        if (!self::is_absolute_path($path)) {
++            return $path;
++        }
++        $backuptempdir = rtrim(make_backup_temp_directory(''), '/\\');
++        if (dirname($path) === $backuptempdir) {
++            return basename($path);
++        }
++        return $path;
++    }
++
+     /**
+      * Close the logger resources (file handle) if still open.
+      *
+@@ -105,7 +154,7 @@ class file_logger extends base_logger {
+             $content = $prefix . str_repeat('&nbsp;&nbsp;', $depth) . htmlentities($message, ENT_QUOTES, 'UTF-8') . '<br/>' . PHP_EOL;
+         }
+         if (!is_resource($this->fhandle) || (false === fwrite($this->fhandle, $content))) {
+-            throw new base_logger_exception('error_writing_file', $this->fullpath);
++            throw new base_logger_exception('error_writing_file', self::resolve_path($this->fullpath));
+         }
+         return true;
+     }

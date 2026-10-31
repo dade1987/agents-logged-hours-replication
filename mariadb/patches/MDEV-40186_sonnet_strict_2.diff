@@ -1,0 +1,100 @@
+diff --git a/include/heap.h b/include/heap.h
+index 4df384d7..29315488 100644
+--- a/include/heap.h
++++ b/include/heap.h
+@@ -180,6 +180,7 @@ typedef struct st_heap_info
+   uint key_version;                     /* Version at last read */
+   uint file_version;                    /* Version at scan */
+   uint lastkey_len;
++  my_bool lastkey_is_found;             /* lastkey is a found key + rowpos */
+   my_bool implicit_emptied;
+   THR_LOCK_DATA lock;
+   LIST open_list;
+diff --git a/storage/heap/hp_rfirst.c b/storage/heap/hp_rfirst.c
+index 1b1610ac..2016dd94 100644
+--- a/storage/heap/hp_rfirst.c
++++ b/storage/heap/hp_rfirst.c
+@@ -48,6 +48,7 @@ int heap_rfirst(HP_INFO *info, uchar *record, int inx)
+         for now heap_rlast() is never used for DELETE queries.
+       */
+       info->lastkey_len= 0;
++      info->lastkey_is_found= 0;
+       info->update = HA_STATE_AKTIV;
+     }
+     else
+diff --git a/storage/heap/hp_rkey.c b/storage/heap/hp_rkey.c
+index aa26bf4e..ba0a9abb 100644
+--- a/storage/heap/hp_rkey.c
++++ b/storage/heap/hp_rkey.c
+@@ -32,6 +32,7 @@ int heap_rkey(HP_INFO *info, uchar *record, int inx, const uchar *key,
+   info->lastinx= inx;
+   info->current_record= (ulong) ~0L;		/* For heap_rrnd() */
+   info->key_version= info->s->key_version;
++  info->lastkey_is_found= 0;
+ 
+   if (keyinfo->algorithm == HA_KEY_ALG_BTREE)
+   {
+diff --git a/storage/heap/hp_rlast.c b/storage/heap/hp_rlast.c
+index c95d8af5..8a7bcfe2 100644
+--- a/storage/heap/hp_rlast.c
++++ b/storage/heap/hp_rlast.c
+@@ -27,6 +27,7 @@ int heap_rlast(HP_INFO *info, uchar *record, int inx)
+   DBUG_ENTER("heap_rlast");
+   info->lastinx= inx;
+   info->key_version= info->s->key_version;
++  info->lastkey_is_found= 0;
+   if (keyinfo->algorithm == HA_KEY_ALG_BTREE)
+   {
+     uchar *pos;
+diff --git a/storage/heap/hp_rnext.c b/storage/heap/hp_rnext.c
+index a07d8fae..53b9c6fc 100644
+--- a/storage/heap/hp_rnext.c
++++ b/storage/heap/hp_rnext.c
+@@ -57,6 +57,21 @@ int heap_rnext(HP_INFO *info, uchar *record)
+                             offsetof(TREE_ELEMENT, left),
+                             offsetof(TREE_ELEMENT, right));
+     }
++    else if (info->lastkey_is_found)
++    {
++      /*
++        The previously found key (with the row pointer) is saved in lastkey.
++        The row was deleted, so restart the search from that key, not from
++        the original search key, and take the first key after it.
++      */
++      custom_arg.keyseg = keyinfo->seg;
++      custom_arg.key_length = info->lastkey_len;
++      custom_arg.search_flag = SEARCH_SAME;
++      info->last_find_flag= HA_READ_AFTER_KEY;
++      pos= tree_search_key(&keyinfo->rb_tree, info->lastkey, info->parents,
++                           &info->last_pos, HA_READ_AFTER_KEY, &custom_arg);
++      info->key_version= info->s->key_version;
++    }
+     else if (!info->lastkey_len)
+     {
+       /*
+@@ -92,7 +107,12 @@ int heap_rnext(HP_INFO *info, uchar *record)
+     }
+     if (pos)
+     {
+-      memcpy(&pos, pos + keyinfo->get_key_length(keyinfo, pos), sizeof(uchar*));
++      /* Remember the found key, to be able to restart after a DELETE */
++      uint key_len= keyinfo->get_key_length(keyinfo, pos);
++      memcpy(info->lastkey, pos, key_len + sizeof(uchar*));
++      info->lastkey_len= key_len;
++      info->lastkey_is_found= 1;
++      memcpy(&pos, pos + key_len, sizeof(uchar*));
+       info->current_ptr = pos;
+     }
+     else
+diff --git a/storage/heap/hp_rprev.c b/storage/heap/hp_rprev.c
+index bb9ef06d..085312d5 100644
+--- a/storage/heap/hp_rprev.c
++++ b/storage/heap/hp_rprev.c
+@@ -62,6 +62,7 @@ int heap_rprev(HP_INFO *info, uchar *record)
+     }
+     if (pos)
+     {
++      info->lastkey_is_found= 0;
+       memcpy(&pos, pos + keyinfo->get_key_length(keyinfo, pos), sizeof(uchar*));
+       info->current_ptr = pos;
+     }

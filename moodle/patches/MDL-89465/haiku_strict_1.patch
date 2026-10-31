@@ -1,0 +1,124 @@
+diff --git a/public/lib/classes/check/manager.php b/public/lib/classes/check/manager.php
+index 417907106b4..63f49150bbc 100644
+--- a/public/lib/classes/check/manager.php
++++ b/public/lib/classes/check/manager.php
+@@ -132,6 +132,7 @@ class manager {
+             new security\crawlers(),
+             new security\passwordpolicy(),
+             new security\emailchangeconfirmation(),
++            new security\newloginnotifications(),
+             new security\webcron(),
+             new http\cookiesecure(),
+             new access\riskadmin(),
+diff --git a/public/lib/classes/check/security/newloginnotifications.php b/public/lib/classes/check/security/newloginnotifications.php
+new file mode 100644
+index 00000000000..b1bedb5e976
+--- /dev/null
++++ b/public/lib/classes/check/security/newloginnotifications.php
+@@ -0,0 +1,78 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++/**
++ * Verifies that new login notifications are forced on.
++ *
++ * @package    core
++ * @category   check
++ * @copyright  2026 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++
++namespace core\check\security;
++
++defined('MOODLE_INTERNAL') || die();
++
++use core\check\check;
++use core\check\result;
++
++/**
++ * Verifies that new login notifications are forced on (locked for users) by the admin.
++ *
++ * @copyright  2026 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class newloginnotifications extends check {
++
++    /**
++     * Get the short check name
++     *
++     * @return string
++     */
++    public function get_name(): string {
++        return get_string('check_newloginnotifications_name', 'report_security');
++    }
++
++    /**
++     * A link to a place to action this
++     *
++     * @return \action_link|null
++     */
++    public function get_action_link(): ?\action_link {
++        return new \action_link(
++            new \moodle_url('/admin/message.php'),
++            get_string('managemessageoutputs', 'message'));
++    }
++
++    /**
++     * Return result
++     * @return result
++     */
++    public function get_result(): result {
++        $details = get_string('check_newloginnotifications_details', 'report_security');
++        // New login notifications are sent by email, so the email processor setting is the one that matters.
++        $forced = !empty(get_config('message', 'email_provider_moodle_newlogin_locked'));
++        if ($forced) {
++            $status = result::OK;
++            $summary = get_string('check_newloginnotifications_ok', 'report_security');
++        } else {
++            $status = result::WARNING;
++            $summary = get_string('check_newloginnotifications_warning', 'report_security');
++        }
++        return new result($status, $summary, $details);
++    }
++}
+diff --git a/public/lib/db/messages.php b/public/lib/db/messages.php
+index bf803ce1d1c..0e5f207cd0c 100644
+--- a/public/lib/db/messages.php
++++ b/public/lib/db/messages.php
+@@ -38,7 +38,7 @@ $messageproviders = array (
+     'newlogin' => array (
+         'defaults' => [
+             'popup' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
+-            'email' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
++            'email' => MESSAGE_FORCED,
+             'airnotifier' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
+         ],
+     ),
+diff --git a/public/report/security/lang/en/report_security.php b/public/report/security/lang/en/report_security.php
+index dbfc33d7607..d52dfd391b4 100644
+--- a/public/report/security/lang/en/report_security.php
++++ b/public/report/security/lang/en/report_security.php
+@@ -83,6 +83,10 @@ $string['check_guestrole_error'] = 'The guest role "{$a}" is incorrectly defined
+ $string['check_guestrole_name'] = 'Guest role';
+ $string['check_guestrole_notset'] = 'Guest role is not set.';
+ $string['check_guestrole_ok'] = 'Guest role definition is OK.';
++$string['check_newloginnotifications_details'] = '<p>New login notifications alert users when their account is signed in to from a new device, so that unauthorised logins are noticed. It is recommended that this notification is forced on for all users.</p>';
++$string['check_newloginnotifications_name'] = 'New login notifications';
++$string['check_newloginnotifications_ok'] = 'New login notifications are forced on for email.';
++$string['check_newloginnotifications_warning'] = 'New login notifications are not forced on. Users may not be told about logins from new devices.';
+ $string['check_nodemodules_details'] = '<p>The directory <code>{$a->path}</code> contains Node.js modules and their dependencies, typically installed by the NPM utility. These modules may be needed for local Moodle development, such as for using the grunt framework. They are not needed to run a Moodle site in production and they can contain potentially dangerous code exposing your site to remote attacks.</p><p>It is strongly recommended to remove the directory if the site is available via a public URL, or at least prohibit web access to it in your webserver configuration.</p>';
+ $string['check_nodemodules_info'] = 'The node_modules directory should not be present on public sites.';
+ $string['check_nodemodules_name'] = 'Node.js modules directory';

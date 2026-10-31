@@ -1,0 +1,63 @@
+diff --git a/public/admin/tool/customlang/locallib.php b/public/admin/tool/customlang/locallib.php
+index c76ff7829fb..4945476d8fb 100644
+--- a/public/admin/tool/customlang/locallib.php
++++ b/public/admin/tool/customlang/locallib.php
+@@ -32,12 +32,6 @@ defined('MOODLE_INTERNAL') || die();
+  */
+ class tool_customlang_utils {
+ 
+-    /**
+-     * Rough number of strings that are being processed during a full checkout.
+-     * This is used to estimate the progress of the checkout.
+-     */
+-    const ROUGH_NUMBER_OF_STRINGS = 33000;
+-
+     /** @var array cache of {@link self::list_components()} results */
+     private static $components = null;
+ 
+@@ -126,13 +120,15 @@ class tool_customlang_utils {
+         }
+         unset($current);
+ 
+-        // initialize the progress counter - stores the number of processed strings
+-        $done = 0;
++        // Progress is computed from the number of processed components (a known total),
++        // interpolating within each component using its own number of strings.
++        $componentsdone = 0;
+         $strinprogress = get_string('checkoutinprogress', 'tool_customlang');
+ 
+         // reload components and fetch their strings
+         $stringman  = get_string_manager();
+         $components = $DB->get_records('tool_customlang_components');
++        $totalcomponents = max(count($components), 1);
+         foreach ($components as $component) {
+             $sql = "SELECT stringid, id, lang, componentid, original, master, local, timemodified, timecustomized, outdated, modified
+                       FROM {tool_customlang} s
+@@ -147,14 +143,17 @@ class tool_customlang_utils {
+             }
+             $local = $stringman->load_component_strings($component->name, $lang, true, false);
+ 
++            $totalstrings = max(count($english), 1);
++            $stringsdone = 0;
+             foreach ($english as $stringid => $stringoriginal) {
+                 $stringmaster = isset($master[$stringid]) ? $master[$stringid] : null;
+                 $stringlocal = isset($local[$stringid]) ? $local[$stringid] : null;
+                 $now = time();
+ 
+                 if (!is_null($progressbar)) {
+-                    $done++;
+-                    $donepercent = floor(min($done, self::ROUGH_NUMBER_OF_STRINGS) / self::ROUGH_NUMBER_OF_STRINGS * 100);
++                    $stringsdone++;
++                    // Never reach 100% before the checkout is really finished.
++                    $donepercent = min(99, floor(($componentsdone + $stringsdone / $totalstrings) / $totalcomponents * 100));
+                     $progressbar->update_full($donepercent, $strinprogress);
+                 }
+ 
+@@ -208,6 +207,7 @@ class tool_customlang_utils {
+                     $DB->insert_record('tool_customlang', $record);
+                 }
+             }
++            $componentsdone++;
+         }
+ 
+         if (!is_null($progressbar)) {

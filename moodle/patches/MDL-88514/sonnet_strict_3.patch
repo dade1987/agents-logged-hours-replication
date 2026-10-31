@@ -1,0 +1,34 @@
+diff --git a/public/mod/assign/locallib.php b/public/mod/assign/locallib.php
+index 2901a49b29a..b6ab7e6fb1b 100644
+--- a/public/mod/assign/locallib.php
++++ b/public/mod/assign/locallib.php
+@@ -6659,8 +6659,15 @@ class assign {
+         $time = \core\di::get(\core\clock::class)->time();
+         $dateopen = true;
+         $finaldate = false;
+-        if ($this->get_instance()->cutoffdate) {
+-            $finaldate = $this->get_instance()->cutoffdate;
++        // Apply any user or group overrides for the user being checked, not just the current user.
++        $override = $this->override_exists($userid);
++        $userinstance = $this->get_instance($userid);
++        $cutoffdate = isset($override->cutoffdate) ? $override->cutoffdate : $userinstance->cutoffdate;
++        $allowsubmissionsfromdate = isset($override->allowsubmissionsfromdate)
++            ? $override->allowsubmissionsfromdate
++            : $userinstance->allowsubmissionsfromdate;
++        if ($cutoffdate) {
++            $finaldate = $cutoffdate;
+         }
+ 
+         if ($flags === false) {
+@@ -6681,9 +6688,9 @@ class assign {
+         }
+ 
+         if ($finaldate) {
+-            $dateopen = ($this->get_instance()->allowsubmissionsfromdate <= $time && $time <= $finaldate);
++            $dateopen = ($allowsubmissionsfromdate <= $time && $time <= $finaldate);
+         } else {
+-            $dateopen = ($this->get_instance()->allowsubmissionsfromdate <= $time);
++            $dateopen = ($allowsubmissionsfromdate <= $time);
+         }
+ 
+         if (!$dateopen) {

@@ -1,0 +1,315 @@
+diff --git a/.upgradenotes/MDL-88618-2026102607300000.yml b/.upgradenotes/MDL-88618-2026102607300000.yml
+new file mode 100644
+index 00000000000..31c66ca4a1b
+--- /dev/null
++++ b/.upgradenotes/MDL-88618-2026102607300000.yml
+@@ -0,0 +1,15 @@
++issueNumber: MDL-88618
++notes:
++  editor_tiny:
++    - message: >-
++        The bundled TinyMCE Accordion and List Styles (advlist) plugins are now
++        enabled by default. The Accordion plugin is available from the Insert
++        menu, and the List Styles plugin extends the existing bullet and
++        numbered list toolbar buttons with additional list style options.
++      type: improved
++  core:
++    - message: >-
++        The HTML purifier (`purify_html()`) now allows the `<details>` and
++        `<summary>` elements, including the `open` attribute, so that
++        accordion content created with TinyMCE is preserved by `format_text()`.
++      type: improved
+diff --git a/public/lib/editor/tiny/amd/build/defaults.min.js b/public/lib/editor/tiny/amd/build/defaults.min.js
+index 19f6ae353759f93de61887415c2366fd35b1d56d..41365c1299f19b2c20fdd26895f1bfed23d9410e 100644
+GIT binary patch
+delta 22
+ecmZ1`zd?S(TV~G0<mCLKl+66R&2N}@aRUHr7ztMZ
+
+delta 17
+ZcmdlWzf69^TjtFLyv$6Sf3a@k1OP#-2HOAt
+
+diff --git a/public/lib/editor/tiny/amd/src/defaults.js b/public/lib/editor/tiny/amd/src/defaults.js
+index 3042c376cea..769cc601724 100644
+--- a/public/lib/editor/tiny/amd/src/defaults.js
++++ b/public/lib/editor/tiny/amd/src/defaults.js
+@@ -36,7 +36,7 @@ export const getDefaultMenu = () => {
+         file: {title: 'File', items: 'newdocument restoredraft | preview | export print | deleteallconversations'},
+         edit: {title: 'Edit', items: 'undo redo | cut copy paste pastetext | selectall | searchreplace'},
+         view: {title: 'View', items: 'code | visualaid visualchars visualblocks | spellchecker | preview fullscreen | showcomments'},
+-        insert: {title: 'Insert', items: 'image link media addcomment pageembed template codesample inserttable | charmap emoticons hr | pagebreak nonbreaking anchor tableofcontents | insertdatetime'},
++        insert: {title: 'Insert', items: 'image link media addcomment pageembed template codesample inserttable accordion | charmap emoticons hr | pagebreak nonbreaking anchor tableofcontents | insertdatetime'},
+         format: {title: 'Format', items: 'bold italic underline strikethrough superscript subscript codeformat | styles blocks fontfamily fontsize align lineheight | forecolor backcolor | language | removeformat'},
+         tools: {title: 'Tools', items: 'spellchecker spellcheckerlanguage | a11ycheck code wordcount'},
+         table: {title: 'Table', items: 'inserttable | cell row column | advtablesort | tableprops deletetable'},
+diff --git a/public/lib/editor/tiny/classes/manager.php b/public/lib/editor/tiny/classes/manager.php
+index 57f10a42bb7..968c54922de 100644
+--- a/public/lib/editor/tiny/classes/manager.php
++++ b/public/lib/editor/tiny/classes/manager.php
+@@ -275,6 +275,16 @@ class manager {
+         // The following list is defined at:
+         // https://www.tiny.cloud/docs/advanced/available-toolbar-buttons/#thecoretoolbarbuttons.
+         return [
++            'accordion' => [
++                'buttons' => [
++                    'accordion',
++                    'accordiontoggle',
++                    'accordionremove',
++                ],
++                'menuitems' => [
++                    'accordion' => 'insert',
++                ],
++            ],
+             'anchor' => [
+                 'buttons' => [
+                     'anchor',
+@@ -377,6 +387,9 @@ class manager {
+                     'numlist',
+                 ],
+             ],
++            // The List Styles (advlist) plugin depends on the lists plugin, and must be loaded after it.
++            // It extends the existing bullist and numlist toolbar buttons rather than adding any of its own.
++            'advlist' => [],
+             'media' => [
+                 'buttons' => [
+                     'media',
+diff --git a/public/lib/editor/tiny/tests/behat/accordion.feature b/public/lib/editor/tiny/tests/behat/accordion.feature
+new file mode 100644
+index 00000000000..82a072f55bf
+--- /dev/null
++++ b/public/lib/editor/tiny/tests/behat/accordion.feature
+@@ -0,0 +1,29 @@
++@editor @editor_tiny @javascript
++Feature: Insert accordions in TinyMCE
++  In order to present structured content
++  As a user
++  I need to be able to insert collapsible accordion sections using the TinyMCE Accordion plugin
++
++  Scenario: Insert an accordion from the Insert menu
++    Given I am on the "Profile advanced editing" page logged in as "admin"
++    And I set the field "Description" to "<p>Some text</p>"
++    When I click on the "Insert > Accordion" menu item for the "Description" TinyMCE editor
++    And I switch to the "Description" TinyMCE editor iframe
++    Then "details.mce-accordion" "css_element" should exist
++    And "details.mce-accordion summary.mce-accordion-summary" "css_element" should exist
++    And I should see "Accordion summary..." in the "details.mce-accordion summary" "css_element"
++    And I should see "Accordion body..." in the "details.mce-accordion" "css_element"
++
++  Scenario: Accordion content is preserved when saved and displayed
++    Given I am on the "Profile advanced editing" page logged in as "admin"
++    And I set the field "Description" to multiline:
++    """
++    <details class="mce-accordion" open="open">
++      <summary class="mce-accordion-summary">My accordion summary</summary>
++      <p>My accordion body</p>
++    </details>
++    """
++    When I press "Update profile"
++    Then "details.mce-accordion" "css_element" should exist
++    And I should see "My accordion summary" in the "details.mce-accordion summary" "css_element"
++    And I should see "My accordion body" in the "details.mce-accordion" "css_element"
+diff --git a/public/lib/editor/tiny/tests/behat/advlist.feature b/public/lib/editor/tiny/tests/behat/advlist.feature
+new file mode 100644
+index 00000000000..0109bc99e96
+--- /dev/null
++++ b/public/lib/editor/tiny/tests/behat/advlist.feature
+@@ -0,0 +1,25 @@
++@editor @editor_tiny @javascript
++Feature: Apply list styles in TinyMCE
++  In order to format document-style content
++  As a user
++  I need to be able to apply extended list styles using the TinyMCE List Styles plugin
++
++  Scenario: Apply a lower alpha style to a numbered list
++    Given I am on the "Profile advanced editing" page logged in as "admin"
++    And I set the field "Description" to "<ol><li>First item</li><li>Second item</li></ol>"
++    And I expand all toolbars for the "Description" TinyMCE editor
++    And I select the "li" element in position "0" of the "Description" TinyMCE editor
++    When I click on ".tox-split-button__chevron" "css_element" in the "[aria-label='Numbered list']" "css_element"
++    And I click on "[aria-label='Lower Alpha'][role^='menuitem']" "css_element"
++    And I switch to the "Description" TinyMCE editor iframe
++    Then "ol[style*='lower-alpha']" "css_element" should exist
++
++  Scenario: Apply a circle style to a bullet list
++    Given I am on the "Profile advanced editing" page logged in as "admin"
++    And I set the field "Description" to "<ul><li>First item</li><li>Second item</li></ul>"
++    And I expand all toolbars for the "Description" TinyMCE editor
++    And I select the "li" element in position "0" of the "Description" TinyMCE editor
++    When I click on ".tox-split-button__chevron" "css_element" in the "[aria-label='Bullet list']" "css_element"
++    And I click on "[aria-label='Circle'][role^='menuitem']" "css_element"
++    And I switch to the "Description" TinyMCE editor iframe
++    Then "ul[style*='circle']" "css_element" should exist
+diff --git a/public/lib/editor/tiny/tests/manager_test.php b/public/lib/editor/tiny/tests/manager_test.php
+new file mode 100644
+index 00000000000..c86b60995ad
+--- /dev/null
++++ b/public/lib/editor/tiny/tests/manager_test.php
+@@ -0,0 +1,107 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++declare(strict_types=1);
++
++namespace editor_tiny;
++
++use advanced_testcase;
++
++/**
++ * Unit tests for the editor_tiny\manager class.
++ *
++ * @package     editor_tiny
++ * @covers      \editor_tiny\manager
++ * @copyright   2026 Moodle Pty Ltd
++ * @license     http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++final class manager_test extends advanced_testcase {
++    /**
++     * Test that the expected shipped TinyMCE plugins are included in the plugin configuration.
++     *
++     * @dataProvider shipped_plugins_provider
++     * @param string $plugin The TinyMCE plugin name
++     */
++    public function test_get_plugin_configuration_includes_shipped_plugins(string $plugin): void {
++        $this->resetAfterTest();
++
++        $manager = new manager();
++        $plugins = $manager->get_plugin_configuration(\core\context\system::instance());
++
++        $this->assertArrayHasKey($plugin, $plugins);
++    }
++
++    /**
++     * Data provider for test_get_plugin_configuration_includes_shipped_plugins.
++     *
++     * @return array
++     */
++    public static function shipped_plugins_provider(): array {
++        return [
++            'accordion' => ['accordion'],
++            'advlist' => ['advlist'],
++            'lists' => ['lists'],
++            'table' => ['table'],
++        ];
++    }
++
++    /**
++     * Test that the advlist plugin is loaded after its dependency, the lists plugin.
++     */
++    public function test_advlist_is_loaded_after_lists(): void {
++        $this->resetAfterTest();
++
++        $manager = new manager();
++        $plugins = array_keys($manager->get_plugin_configuration(\core\context\system::instance()));
++
++        $listsposition = array_search('lists', $plugins, true);
++        $advlistposition = array_search('advlist', $plugins, true);
++
++        $this->assertNotFalse($listsposition);
++        $this->assertNotFalse($advlistposition);
++        $this->assertGreaterThan($listsposition, $advlistposition);
++    }
++
++    /**
++     * Test that the disabled TinyMCE plugins are not included in the plugin configuration.
++     *
++     * @dataProvider disabled_plugins_provider
++     * @param string $plugin The TinyMCE plugin name
++     */
++    public function test_get_plugin_configuration_excludes_disabled_plugins(string $plugin): void {
++        $this->resetAfterTest();
++
++        $manager = new manager();
++        $plugins = $manager->get_plugin_configuration(\core\context\system::instance());
++
++        $this->assertArrayNotHasKey($plugin, $plugins);
++    }
++
++    /**
++     * Data provider for test_get_plugin_configuration_excludes_disabled_plugins.
++     *
++     * @return array
++     */
++    public static function disabled_plugins_provider(): array {
++        return [
++            'image' => ['image'],
++            'media' => ['media'],
++            'autosave' => ['autosave'],
++            'preview' => ['preview'],
++            'link' => ['link'],
++        ];
++    }
++}
+diff --git a/public/lib/tests/htmlpurifier_test.php b/public/lib/tests/htmlpurifier_test.php
+index 60cde533518..a9c45c546e6 100644
+--- a/public/lib/tests/htmlpurifier_test.php
++++ b/public/lib/tests/htmlpurifier_test.php
+@@ -184,6 +184,29 @@ final class htmlpurifier_test extends \basic_testcase {
+         $this->assertSame($text, purify_html($text));
+     }
+ 
++    /**
++     * Test that the details and summary elements (used by the TinyMCE accordion plugin) are preserved.
++     */
++    public function test_details_and_summary(): void {
++        // Markup as generated by the TinyMCE accordion plugin.
++        $text = '<details class="mce-accordion" open="open">' .
++            '<summary class="mce-accordion-summary">Accordion summary</summary>' .
++            '<p>Accordion body</p>' .
++            '</details>';
++        $this->assertSame($text, purify_html($text));
++        $this->assertSame($text, format_text($text, FORMAT_HTML, ['filter' => false]));
++
++        // A closed accordion.
++        $text = '<details class="mce-accordion"><summary>Summary</summary><p>Body</p></details>';
++        $this->assertSame($text, purify_html($text));
++
++        // Unsafe attributes are still removed.
++        $text = '<details open="open" ontoggle="alert(1)"><summary onclick="alert(1)">Summary</summary>' .
++            '<p>Body</p></details>';
++        $expected = '<details open="open"><summary>Summary</summary><p>Body</p></details>';
++        $this->assertSame($expected, purify_html($text));
++    }
++
+     /**
+      * Test that XSS protection works, complete smoke tests are in htmlpurifier itself.
+      */
+diff --git a/public/lib/weblib.php b/public/lib/weblib.php
+index 225779a9cd8..680d07804c4 100644
+--- a/public/lib/weblib.php
++++ b/public/lib/weblib.php
+@@ -1107,7 +1107,7 @@ function purify_html($text, $options = array()) {
+         $config = HTMLPurifier_Config::createDefault();
+ 
+         $config->set('HTML.DefinitionID', 'moodlehtml');
+-        $config->set('HTML.DefinitionRev', 7);
++        $config->set('HTML.DefinitionRev', 8);
+         $config->set('CSS.Proprietary', true);
+         $config->set('Cache.SerializerPath', $cachedir);
+         $config->set('Cache.SerializerPermissions', $CFG->directorypermissions);
+@@ -1190,6 +1190,14 @@ function purify_html($text, $options = array()) {
+                 'default' => 'Bool',
+             ]);
+ 
++            // Disclosure elements, as used by the TinyMCE accordion plugin.
++            // https://html.spec.whatwg.org/#the-details-element
++            $def->addElement('details', 'Block', 'Optional: summary | Flow', 'Common', [
++                'open' => 'Bool#open',
++            ]);
++            // https://html.spec.whatwg.org/#the-summary-element
++            $def->addElement('summary', false, 'Flow', 'Common');
++
+             // Use the built-in Ruby module to add annotation support.
+             $def->manager->addModule(new HTMLPurifier_HTMLModule_Ruby());
+         }

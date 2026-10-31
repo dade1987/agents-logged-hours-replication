@@ -1,0 +1,35 @@
+diff --git a/sql/sql_path.cc b/sql/sql_path.cc
+index 982fbffa..c03cdc94 100644
+--- a/sql/sql_path.cc
++++ b/sql/sql_path.cc
+@@ -283,6 +283,9 @@ bool Sql_path::from_text(const system_variables &sv, String *str)
+   while (curr < end)
+   {
+     auto len = cs->charlen(curr, end);
++    // Invalid or truncated utf8 sequence: charlen() returns <= 0
++    if (len <= 0)
++      goto err_bad_val;
+ 
+     switch (state)
+     {
+diff --git a/sql/sys_vars.inl b/sql/sys_vars.inl
+index 0f8aa1eb..b4b9c1cf 100644
+--- a/sql/sys_vars.inl
++++ b/sql/sys_vars.inl
+@@ -3099,8 +3099,14 @@ class Sys_var_path: public sys_var
+ 
+   static bool from_item(THD *thd, Sql_path *path, Item *item)
+   {
+-    String *value, buffer;
+-    if (!(value= item->val_str_ascii(&buffer)))
++    String *value, buffer, converter;
++    /*
++      Sql_path::from_text() expects utf8mb3 input. Convert explicitly,
++      rather than to latin1 (val_str_ascii()), so that non-ASCII characters
++      in the value are not misinterpreted as multi-byte utf8 sequences.
++    */
++    if (!(value= item->val_str(&buffer, &converter,
++                               &my_charset_utf8mb3_general_ci)))
+       return true;
+     return path->from_text(thd->variables, value);
+   }

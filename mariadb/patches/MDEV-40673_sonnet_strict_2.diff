@@ -1,0 +1,18 @@
+diff --git a/sql/item_strfunc.cc b/sql/item_strfunc.cc
+index b4388f12..2b445903 100644
+--- a/sql/item_strfunc.cc
++++ b/sql/item_strfunc.cc
+@@ -642,7 +642,12 @@ bool Item_func_concat::realloc_result(String *str, uint length) const
+   if (str->alloced_length() >= length)
+     return false; // Alloced space is big enough, nothing to do.
+ 
+-  if (str->alloced_length() == 0)
++  /*
++    alloced_length()==0 does not mean the string is empty: an argument's
++    val_str() may have pointed "str" to bytes it does not own (String::set()).
++    Use alloc() (which discards the value) only if there is nothing to keep.
++  */
++  if (str->alloced_length() == 0 && str->length() == 0)
+     return str->alloc(length);
+ 
+   /*

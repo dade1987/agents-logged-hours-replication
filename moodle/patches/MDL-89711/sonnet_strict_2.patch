@@ -1,0 +1,48 @@
+diff --git a/public/mod/quiz/UPGRADING.md b/public/mod/quiz/UPGRADING.md
+index 25b4b3948a8..b5d3249ea5d 100644
+--- a/public/mod/quiz/UPGRADING.md
++++ b/public/mod/quiz/UPGRADING.md
+@@ -19,6 +19,12 @@
+ 
+   For more information see [MDL-82521](https://tracker.moodle.org/browse/MDL-82521)
+ 
++### Deprecated
++
++- `\mod_quiz\local\override_manager::get_effective_open_close_times()` is deprecated. Use `\mod_quiz\local\override_manager::get_effective_times()` instead (note that it may also return a `duedate` key).
++
++  For more information see [MDL-89711](https://tracker.moodle.org/browse/MDL-89711)
++
+ ### Changed
+ 
+ - If your plugin implements its own quiz report (a subclass of `mod_quiz\local\reports\report_base`), you need to update it to keep the old group selector working, because `report_base::print_header_and_tabs()` no longer prints it, and to pick up the new navigation bar (report selector, group selector, user search and initials filter).
+diff --git a/public/mod/quiz/classes/local/override_manager.php b/public/mod/quiz/classes/local/override_manager.php
+index ea84b8e88de..17eba39bc3e 100644
+--- a/public/mod/quiz/classes/local/override_manager.php
++++ b/public/mod/quiz/classes/local/override_manager.php
+@@ -638,6 +638,26 @@ class override_manager {
+         return $formdata;
+     }
+ 
++    /**
++     * Computes the effective overridden open and close times for a user for a given quiz.
++     *
++     * @param int $quizid The quiz ID.
++     * @param int $userid The user ID.
++     * @return array Array with optional keys 'timeopen' and 'timeclose'.
++     * @deprecated since Moodle 5.3. Use {@see self::get_effective_times()} instead.
++     */
++    #[\core\attribute\deprecated(
++        replacement: 'mod_quiz\local\override_manager::get_effective_times',
++        since: '5.3',
++        mdl: 'MDL-89711',
++        reason: 'Renamed to get_effective_times(), which also returns the duedate.',
++    )]
++    public static function get_effective_open_close_times(int $quizid, int $userid): array {
++        \core\deprecation::emit_deprecation([self::class, __FUNCTION__]);
++        $times = self::get_effective_times($quizid, $userid);
++        return array_intersect_key($times, array_flip(['timeopen', 'timeclose']));
++    }
++
+     /**
+      * Computes the effective overridden times for a user for a given quiz.
+      *

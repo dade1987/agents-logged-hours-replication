@@ -1,0 +1,111 @@
+diff --git a/mysql-test/main/spatial_utility_function_simplify.result b/mysql-test/main/spatial_utility_function_simplify.result
+index b20ca8a9..7cf4ce7b 100644
+--- a/mysql-test/main/spatial_utility_function_simplify.result
++++ b/mysql-test/main/spatial_utility_function_simplify.result
+@@ -594,3 +594,24 @@ ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((10 2,5 2,5 10,-5 10,-5 2,-10 2,-10 -2,-5 -
+ ORDER BY TABLE_SCHEMA + 2 DESC, TABLE_NAME, ORDINAL_POSITION,
+ (SELECT COLUMN_NAME ORDER BY 1);
+ TABLE_SCHEMA	x	ORDINAL_POSITION
++#
++# MDEV-39911 Crash with ST_SIMPLIFY result used as CONCAT_WS separator
++#
++# The simplify methods reserved too little space for the WKB header
++# and wrote past the end of a small caller supplied buffer.
++#
++SELECT CONCAT_WS(ST_SIMPLIFY(ST_GEOMFROMTEXT('MULTILINESTRING((0 0,5 5,0 10),(0 0,-5 5,0 10))'), 5), 7, 5) IS NOT NULL AS r;
++r
++1
++SELECT CONCAT_WS(ST_SIMPLIFY(ST_GEOMFROMTEXT('LINESTRING(0 0,5 5,0 10)'), 5), 7, 5) IS NOT NULL AS r;
++r
++1
++SELECT CONCAT_WS(ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((10 2,5 2,5 10,-5 10,-5 2,-10 2,-10 -2,-5 -2,-5 -10,5 -10,5 -2,10 -2,10 2))'), 3), 7, 5) IS NOT NULL AS r;
++r
++1
++SELECT CONCAT_WS(ST_SIMPLIFY(ST_GEOMFROMTEXT('MULTIPOLYGON(((10 2,5 2,5 10,-5 10,-5 2,-10 2,-10 -2,-5 -2,-5 -10,5 -10,5 -2,10 -2,10 2)))'), 3), 7, 5) IS NOT NULL AS r;
++r
++1
++SELECT CONCAT_WS(ST_SIMPLIFY(ST_GEOMFROMTEXT('GEOMETRYCOLLECTION(LINESTRING(0 0,5 5,0 10))'), 5), 7, 5) IS NOT NULL AS r;
++r
++1
+diff --git a/mysql-test/main/spatial_utility_function_simplify.test b/mysql-test/main/spatial_utility_function_simplify.test
+index 4c4d075b..0dc4af18 100644
+--- a/mysql-test/main/spatial_utility_function_simplify.test
++++ b/mysql-test/main/spatial_utility_function_simplify.test
+@@ -538,3 +538,16 @@ ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((10 2,5 2,5 10,-5 10,-5 2,-10 2,-10 -2,-5 -
+ 'global_status')
+ ORDER BY TABLE_SCHEMA + 2 DESC, TABLE_NAME, ORDINAL_POSITION,
+ (SELECT COLUMN_NAME ORDER BY 1);
++
++--echo #
++--echo # MDEV-39911 Crash with ST_SIMPLIFY result used as CONCAT_WS separator
++--echo #
++--echo # The simplify methods reserved too little space for the WKB header
++--echo # and wrote past the end of a small caller supplied buffer.
++--echo #
++
++SELECT CONCAT_WS(ST_SIMPLIFY(ST_GEOMFROMTEXT('MULTILINESTRING((0 0,5 5,0 10),(0 0,-5 5,0 10))'), 5), 7, 5) IS NOT NULL AS r;
++SELECT CONCAT_WS(ST_SIMPLIFY(ST_GEOMFROMTEXT('LINESTRING(0 0,5 5,0 10)'), 5), 7, 5) IS NOT NULL AS r;
++SELECT CONCAT_WS(ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((10 2,5 2,5 10,-5 10,-5 2,-10 2,-10 -2,-5 -2,-5 -10,5 -10,5 -2,10 -2,10 2))'), 3), 7, 5) IS NOT NULL AS r;
++SELECT CONCAT_WS(ST_SIMPLIFY(ST_GEOMFROMTEXT('MULTIPOLYGON(((10 2,5 2,5 10,-5 10,-5 2,-10 2,-10 -2,-5 -2,-5 -10,5 -10,5 -2,10 -2,10 2)))'), 3), 7, 5) IS NOT NULL AS r;
++SELECT CONCAT_WS(ST_SIMPLIFY(ST_GEOMFROMTEXT('GEOMETRYCOLLECTION(LINESTRING(0 0,5 5,0 10))'), 5), 7, 5) IS NOT NULL AS r;
+diff --git a/sql/spatial.cc b/sql/spatial.cc
+index 5df5a555..0aa18089 100644
+--- a/sql/spatial.cc
++++ b/sql/spatial.cc
+@@ -1686,8 +1686,10 @@ int Gis_line_string::simplify(String *result, double max_distance) const {
+   simplify_RDP(points, max_distance);
+ 
+   result->length(0);
+-  result->reserve(SRID_SIZE + WKB_HEADER_SIZE +
+-                  (POINT_DATA_SIZE * points.size()));
++  /* SRID + byte order + type + number of points + points */
++  if (result->reserve(SRID_SIZE + WKB_HEADER_SIZE + 4 +
++                      (POINT_DATA_SIZE * points.size())))
++    return 1;
+ 
+   result->q_append(SRID_PLACEHOLDER);
+   result->q_append((char) wkb_ndr);
+@@ -2395,7 +2397,9 @@ int Gis_polygon::simplify(String *result, double max_distance) const
+     return 1;
+ 
+   result->length(0);
+-  result->reserve(SRID_SIZE + WKB_HEADER_SIZE);
++  /* SRID + byte order + type + number of elements */
++  if (result->reserve(SRID_SIZE + WKB_HEADER_SIZE + 4))
++    return 1;
+   result->q_append(SRID_PLACEHOLDER);
+   result->q_append((char) wkb_ndr);
+   result->q_append((uint32) wkb_polygon);
+@@ -3500,7 +3504,9 @@ int Gis_multi_line_string::simplify(String *result, double max_distance) const
+     return 1;
+ 
+   result->length(0);
+-  result->reserve(SRID_SIZE + WKB_HEADER_SIZE);
++  /* SRID + byte order + type + number of elements */
++  if (result->reserve(SRID_SIZE + WKB_HEADER_SIZE + 4))
++    return 1;
+   result->q_append(SRID_PLACEHOLDER);
+   result->q_append((char) wkb_ndr);
+   result->q_append((uint32) wkb_multilinestring);
+@@ -4107,7 +4113,9 @@ int Gis_multi_polygon::simplify(String *result, double max_distance) const
+     return 1;
+ 
+   result->length(0);
+-  result->reserve(SRID_SIZE + WKB_HEADER_SIZE);
++  /* SRID + byte order + type + number of elements */
++  if (result->reserve(SRID_SIZE + WKB_HEADER_SIZE + 4))
++    return 1;
+   result->q_append(SRID_PLACEHOLDER);
+   result->q_append((char) wkb_ndr);
+   result->q_append((uint32) wkb_multipolygon);
+@@ -4702,7 +4710,9 @@ int Gis_geometry_collection::simplify(String *result,
+     return 1;
+ 
+   result->length(0);
+-  result->reserve(SRID_SIZE + BYTE_ORDER_SIZE + WKB_HEADER_SIZE);
++  /* SRID + byte order + type + number of elements */
++  if (result->reserve(SRID_SIZE + WKB_HEADER_SIZE + 4))
++    return 1;
+   result->q_append(SRID_PLACEHOLDER);
+   result->q_append((char) wkb_ndr);
+   result->q_append((uint32) wkb_geometrycollection);

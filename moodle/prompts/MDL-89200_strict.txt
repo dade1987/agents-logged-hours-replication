@@ -1,0 +1,24 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot run Moodle's test suite. You may run `php -l <file>` and read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-89200: Run ASAP requests can be clobbered
+
+h2. Background
+
+The ability to run tasks ASAP was added in [https://moodle.atlassian.net/browse/MDL-85548|https://moodle.atlassian.net/browse/MDL-85548|smart-link] but if a scheduled task is already executing, the scheduled tasks page still shows “Run ASAP”.
+
+Running it ASAP while the existing task is running reports success and sets *nextruntime* in the past.  However, when the existing task completes, {{scheduled_task_complete}} recalculates *nextruntime* and overwrites the time from the ASAP request before releasing the task lock.
+
+h2. Expected behaviour
+
+We should either reject Run ASAP while the task is running or preserve the request for a subsequent execution. It shouldn’t report success and silently discard the request.
+
+h2. Replication
+
+A minimal PHPUnit test is attached. Run it with {{vendor/bin/phpunit run_asap_race_test.php}}

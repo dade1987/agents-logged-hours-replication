@@ -1,0 +1,248 @@
+diff --git a/UPGRADING.md b/UPGRADING.md
+index 208e85ac2e3..1aa8340696a 100644
+--- a/UPGRADING.md
++++ b/UPGRADING.md
+@@ -12,6 +12,9 @@ The format of this change log follows the advice given at [Keep a CHANGELOG](htt
+ 
+ #### Added
+ 
++- A standard PHP API for mounting React components has been added. `\core\output\html_writer::react_component()` generates the mount point for a React component from the component identifier and its props, handling prop serialisation and escaping. Renderables can also implement the new `\core\output\react_component_renderable` interface, which is rendered as a React mount point by `render()`. It takes precedence over `named_templatable`, and a `render_[renderable]` method on the renderer takes precedence over it.
++
++  For more information see [MDL-89296](https://tracker.moodle.org/browse/MDL-89296)
+ - `email_to_user()` now emits a hook `before_email_to_user`. This hook allows any subscriber to modify the email contents, add additional headers, or add reasons to block the email. If any block reasons are added, the email is stopped from being sent and the reasons are output.
+ 
+   For more information see [MDL-69724](https://tracker.moodle.org/browse/MDL-69724)
+diff --git a/public/blocks/timeline/block_timeline.php b/public/blocks/timeline/block_timeline.php
+index 9ebb50580c0..2f164633563 100644
+--- a/public/blocks/timeline/block_timeline.php
++++ b/public/blocks/timeline/block_timeline.php
+@@ -50,7 +50,8 @@ class block_timeline extends block_base {
+         $order = get_user_preferences('block_timeline_user_sort_preference') ?: BLOCK_TIMELINE_SORT_BY_DATES;
+         $limit = get_user_preferences('block_timeline_user_limit_preference') ?: BLOCK_TIMELINE_ACTIVITIES_LIMIT_DEFAULT;
+ 
+-        $props = json_encode([
++        // Mount the React Timeline component directly — no renderer, no template.
++        $mount = \html_writer::react_component('@moodle/lms/block_timeline/Timeline', [
+             'midnight'           => usergetmidnight(time()),
+             'filter'             => $filter,
+             'order'              => $order,
+@@ -58,13 +59,6 @@ class block_timeline extends block_base {
+             'nocoursesurl'       => $OUTPUT->image_url('courses', 'block_timeline')->out(false),
+             'noeventsurl'        => $OUTPUT->image_url('activities', 'block_timeline')->out(false),
+             'hasenrolledcourses' => !empty($courses),
+-        ], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG);
+-
+-        // Mount the React Timeline component directly — no renderer, no template.
+-        // core/react_autoinit mounts any element carrying these two attributes.
+-        $mount = \html_writer::div('', '', [
+-            'data-react-component' => '@moodle/lms/block_timeline/Timeline',
+-            'data-react-props'     => $props,
+         ]);
+ 
+         $this->content = (object) [
+diff --git a/public/lib/classes/output/html_writer.php b/public/lib/classes/output/html_writer.php
+index 30b7b303ad7..0809d0ef795 100644
+--- a/public/lib/classes/output/html_writer.php
++++ b/public/lib/classes/output/html_writer.php
+@@ -866,6 +866,47 @@ class html_writer {
+         return self::end_tag('div');
+     }
+ 
++    /**
++     * Generates the mount point for a React component.
++     *
++     * This hides the DOM contract used by the React autoinit system (core/react_autoinit) from feature code.
++     * Callers only provide the component identifier and its props; the props are serialised and escaped here.
++     *
++     * @param string $modulename The fully-qualified component identifier, e.g. '@moodle/lms/block_timeline/Timeline'.
++     * @param array|string|\stdClass|\JsonSerializable $props The component props. A string must already be valid JSON.
++     * @return string HTML fragment for the mount point.
++     * @throws coding_exception If the module name is empty, the props cannot be serialised or the JSON string is invalid.
++     */
++    public static function react_component(
++        string $modulename,
++        array|string|\stdClass|\JsonSerializable $props,
++    ): string {
++        if (trim($modulename) === '') {
++            throw new coding_exception('A React component module name must be provided.');
++        }
++
++        $flags = JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT;
++        if (is_string($props)) {
++            if (!json_validate($props)) {
++                throw new coding_exception('React component props passed as a string must be valid JSON.');
++            }
++            $json = $props;
++        } else if (is_array($props) && empty($props)) {
++            // An empty array would otherwise serialise as a JSON list, but component props must be an object.
++            $json = '{}';
++        } else {
++            $json = json_encode($props, $flags);
++            if ($json === false) {
++                throw new coding_exception('React component props could not be serialised: ' . json_last_error_msg());
++            }
++        }
++
++        return self::div('', '', [
++            'data-react-component' => $modulename,
++            'data-react-props' => $json,
++        ]);
++    }
++
+     /**
+      * Creates a <span> tag. (Shortcut function.)
+      *
+diff --git a/public/lib/classes/output/plugin_renderer_base.php b/public/lib/classes/output/plugin_renderer_base.php
+index 8d1be78b0f2..32c3930fb33 100644
+--- a/public/lib/classes/output/plugin_renderer_base.php
++++ b/public/lib/classes/output/plugin_renderer_base.php
+@@ -78,6 +78,11 @@ class plugin_renderer_base extends renderer_base {
+             return $this->$rendermethod($widget);
+         }
+ 
++        if ($widget instanceof react_component_renderable) {
++            // This is a React component. Note: This has higher priority than the named_templatable.
++            return html_writer::react_component($widget->get_react_component(), $widget->get_react_props());
++        }
++
+         if ($widget instanceof named_templatable) {
+             // This is a named templatable.
+             // Fetch the template name from the get_template_name function instead.
+diff --git a/public/lib/classes/output/react_component_renderable.php b/public/lib/classes/output/react_component_renderable.php
+new file mode 100644
+index 00000000000..3d0b28b6447
+--- /dev/null
++++ b/public/lib/classes/output/react_component_renderable.php
+@@ -0,0 +1,45 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\output;
++
++/**
++ * A renderable which is rendered as a React component mount point.
++ *
++ * When a renderable implementing this interface is passed to a renderer's render() method, the mount point is
++ * generated using {@see \core\output\html_writer::react_component()}. A specific render_[renderable] method on the
++ * renderer takes precedence over this interface, and this interface takes precedence over named_templatable.
++ *
++ * @package   core
++ * @category  output
++ * @copyright 2026 Moodle
++ * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++interface react_component_renderable extends renderable {
++    /**
++     * Get the fully-qualified React component identifier to mount.
++     *
++     * @return string For example '@moodle/lms/block_timeline/Timeline'.
++     */
++    public function get_react_component(): string;
++
++    /**
++     * Get the props to pass to the React component.
++     *
++     * @return array|string|\stdClass|\JsonSerializable A string must already be valid JSON.
++     */
++    public function get_react_props(): array|string|\stdClass|\JsonSerializable;
++}
+diff --git a/public/lib/classes/output/renderer_base.php b/public/lib/classes/output/renderer_base.php
+index 7b840780785..1d7d4ddc5da 100644
+--- a/public/lib/classes/output/renderer_base.php
++++ b/public/lib/classes/output/renderer_base.php
+@@ -242,6 +242,11 @@ class renderer_base {
+             }
+         }
+ 
++        if ($widget instanceof react_component_renderable) {
++            // This is a React component. Note: This has higher priority than the named_templatable.
++            return html_writer::react_component($widget->get_react_component(), $widget->get_react_props());
++        }
++
+         if ($widget instanceof named_templatable) {
+             // This is a named templatable.
+             // Fetch the template name from the get_template_name function instead.
+diff --git a/public/lib/tests/output/html_writer_test.php b/public/lib/tests/output/html_writer_test.php
+index e44b31d355e..a995a88bd2d 100644
+--- a/public/lib/tests/output/html_writer_test.php
++++ b/public/lib/tests/output/html_writer_test.php
+@@ -363,4 +363,66 @@ EOF;
+ EOF;
+         $this->assertSame($expected, $output);
+     }
++
++    /**
++     * @covers ::react_component
++     */
++    public function test_react_component_with_array_props(): void {
++        $output = html_writer::react_component('@moodle/lms/mod_book/viewer', ['label' => 'Save']);
++        $this->assertSame(
++            '<div data-react-component="@moodle/lms/mod_book/viewer" data-react-props="{&quot;label&quot;:&quot;Save&quot;}"></div>',
++            $output
++        );
++    }
++
++    /**
++     * @covers ::react_component
++     */
++    public function test_react_component_with_empty_props(): void {
++        $output = html_writer::react_component('@moodle/lms/mod_book/viewer', []);
++        $this->assertStringContainsString('data-react-props="{}"', $output);
++    }
++
++    /**
++     * @covers ::react_component
++     */
++    public function test_react_component_with_stdclass_props(): void {
++        $props = new \stdClass();
++        $props->title = 'Book';
++        $output = html_writer::react_component('@moodle/lms/mod_book/viewer', $props);
++        $this->assertStringContainsString('data-react-props="{&quot;title&quot;:&quot;Book&quot;}"', $output);
++    }
++
++    /**
++     * @covers ::react_component
++     */
++    public function test_react_component_with_json_string_props(): void {
++        $output = html_writer::react_component('@moodle/lms/mod_book/viewer', '{"title":"Book"}');
++        $this->assertStringContainsString('data-react-props="{&quot;title&quot;:&quot;Book&quot;}"', $output);
++    }
++
++    /**
++     * @covers ::react_component
++     */
++    public function test_react_component_escapes_props(): void {
++        $output = html_writer::react_component('@moodle/lms/mod_book/viewer', ['html' => '<script>alert(1)</script>']);
++        $this->assertStringNotContainsString('<script>', $output);
++        $this->assertStringContainsString('\\u003Cscript\\u003E', $output);
++    }
++
++    /**
++     * @covers ::react_component
++     */
++    public function test_react_component_invalid_json_string_props(): void {
++        $this->expectException(\core\exception\coding_exception::class);
++        html_writer::react_component('@moodle/lms/mod_book/viewer', '{invalid');
++    }
++
++    /**
++     * @covers ::react_component
++     */
++    public function test_react_component_empty_modulename(): void {
++        $this->expectException(\core\exception\coding_exception::class);
++        html_writer::react_component('', []);
++    }
+ }

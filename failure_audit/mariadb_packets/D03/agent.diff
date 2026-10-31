@@ -1,0 +1,22 @@
+diff --git a/sql/structs.h b/sql/structs.h
+index aed4dacb..45206f29 100644
+--- a/sql/structs.h
++++ b/sql/structs.h
+@@ -256,7 +256,16 @@ struct LEX_USER: public AUTHID
+   USER_AUTH *auth;
+   bool has_auth()
+   {
+-    return auth && (auth->plugin.length || auth->auth_str.length || auth->pwtext.length);
++    /*
++      IDENTIFIED VIA may list several alternatives ("plugin1 OR plugin2 ...").
++      The first one may be an empty plugin with no password (e.g. VIA '' OR
++      mysql_native_password USING PASSWORD(...)), so all of them must be
++      examined, not only the head of the list.
++    */
++    for (USER_AUTH *a= auth; a; a= a->next)
++      if (a->plugin.length || a->auth_str.length || a->pwtext.length)
++        return true;
++    return false;
+   }
+ };
+ 

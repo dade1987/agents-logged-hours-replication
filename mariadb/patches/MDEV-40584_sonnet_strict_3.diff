@@ -1,0 +1,28 @@
+diff --git a/sql/item_geofunc.cc b/sql/item_geofunc.cc
+index e332ec22..3f5bb407 100644
+--- a/sql/item_geofunc.cc
++++ b/sql/item_geofunc.cc
+@@ -1512,13 +1512,16 @@ bool Item_func_spatial_precise_rel::val_bool()
+       /* fall through */
+     case SP_OVERLAPS_FUNC:
+     {
+-      // Both geometries must have the same number of dimensions.
+-      uint32 g1_dim, g2_dim;
+-      const char *dummy;
+-      g1.geom->dimension(&g1_dim, &dummy);
+-      g2.geom->dimension(&g2_dim, &dummy);
+-      if (g1_dim != g2_dim)
+-        DBUG_RETURN(0);
++      if (spatial_rel == SP_OVERLAPS_FUNC)
++      {
++        // ST_Overlaps requires both geometries to have the same dimension.
++        uint32 g1_dim, g2_dim;
++        const char *dummy;
++        g1.geom->dimension(&g1_dim, &dummy);
++        g2.geom->dimension(&g2_dim, &dummy);
++        if (g1_dim != g2_dim)
++          DBUG_RETURN(0);
++      }
+       handle_sp_crosses_func_case(func, trn, g1, g2,
+                                   shape_a, shape_b, null_value);
+       break;

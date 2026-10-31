@@ -1,0 +1,65 @@
+Evaluation: the agent's diff (without its own mysql-test changes) was applied on the parent commit, the developers' mysql-test files from the fix were added, the server was built (debug) and the fix's mtr tests were run: ['json.json_table']
+On the parent commit these tests FAIL; with the human fix they PASS.
+
+AGENT RESULT: FAIL
+json.json_table                          w1 [ fail ]
+        Test ended at 2026-10-28 09:46:25
+
+CURRENT_TEST: json.json_table
+--- /home/user/mdb_src/mysql-test/suite/json/r/json_table.result	2026-10-28 09:46:07.726022747 +0000
++++ /home/mtr/var/t/1/log/json_table.reject	2026-10-28 09:46:25.258021959 +0000
+@@ -1316,8 +1316,8 @@
+ 3	255
+ 4	256
+ 5	0
+-6	1
+-7	2
++6	0
++7	1
+ 8	10
+ 9	0
+ SELECT ord, b+0 AS bit_value, b+0 = u AS matches_unsigned
+@@ -1326,7 +1326,7 @@
+ u BIGINT UNSIGNED PATH '$')) AS jt ORDER BY ord;
+ ord	bit_value	matches_unsigned
+ 1	9223372036854775808	1
+-2	18446744073709551615	1
++2	9223372036854775808	0
+ SELECT ord, b+0 AS bit_value, i, s
+ FROM JSON_TABLE('[false,true]', '$[*]'
+   COLUMNS (ord FOR ORDINALITY, b BIT(1) PATH '$',
+@@ -1388,13 +1388,9 @@
+ FROM JSON_TABLE('[-1,18446744073709551616,1e1000]', '$[*]'
+   COLUMNS (ord FOR ORDINALITY, b BIT(64) PATH '$')) AS jt ORDER BY ord;
+ ord	bit_value
+-1	0
+-2	18446744073709551615
+-3	18446744073709551615
+-Warnings:
+-Warning	1264	Out of range value for column 'b' at row 1
+-Warning	1264	Out of range value for column 'b' at row 2
+-Warning	1264	Out of range value for column 'b' at row 3
++1	18446744073709551615
++2	9223372036854775808
++3	9223372036854775808
+ SELECT ord, b+0 AS bit_value
+ FROM JSON_TABLE('[{},[]]', '$[*]'
+   COLUMNS (ord FOR ORDINALITY, b BIT(1) PATH '$' NULL ON ERROR)) AS jt
+
+Result length mismatch
+
+ - saving '/home/mtr/var/t/1/log/json.json_table/' to '/home/mtr/var/t/log/json.json_table/'
+--------------------------------------------------------------------------
+The servers were restarted 0 times
+Spent 0.000 of 3 seconds executing testcases
+
+Completed: Failed 1/1 tests, 0.00% were successful.
+
+Failing test(s): json.json_table
+
+The log files in var/log may give you some hint of what went wrong.
+
+If you want to report this error, MariaDB's bug tracker is found at
+https://jira.mariadb.org
+
+mysql-test-run: *** ERROR: there were failing test cases

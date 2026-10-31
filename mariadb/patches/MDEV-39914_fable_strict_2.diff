@@ -1,0 +1,59 @@
+diff --git a/mysql-test/main/gis.result b/mysql-test/main/gis.result
+index b4d0995c..66f73bfd 100644
+--- a/mysql-test/main/gis.result
++++ b/mysql-test/main/gis.result
+@@ -5717,3 +5717,15 @@ t
+ #
+ # End of 11.6 tests
+ #
++#
++# MDEV-39914 MariaDB crash triggered by INFORMATION_SCHEMA query with
++#            ROW_NUMBER and GIS simplify
++#
++SELECT 'MULTIPOINT(1 189.7654,41,-1032.34324 9,6.4 1,4 9)' IN ('accounts',
++ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((10 2,5 2,5 10,-5 10,-5 2,-10 2,-10 -2,-5 -2,-5 -10,5 -10,5 -2,10 -2,10 2))'), 3),
++'global_status') AS c;
++c
++0
++#
++# End of 12.3 tests
++#
+diff --git a/mysql-test/main/gis.test b/mysql-test/main/gis.test
+index 6355f410..1ef74030 100644
+--- a/mysql-test/main/gis.test
++++ b/mysql-test/main/gis.test
+@@ -3682,3 +3682,16 @@ SELECT ST_ISVALID(ST_GEOMFROMTEXT('POLYGON((0 0, 10 0, 10 10, 0 10, 0 0), (15 15
+ --echo #
+ --echo # End of 11.6 tests
+ --echo #
++
++--echo #
++--echo # MDEV-39914 MariaDB crash triggered by INFORMATION_SCHEMA query with
++--echo #            ROW_NUMBER and GIS simplify
++--echo #
++
++SELECT 'MULTIPOINT(1 189.7654,41,-1032.34324 9,6.4 1,4 9)' IN ('accounts',
++  ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((10 2,5 2,5 10,-5 10,-5 2,-10 2,-10 -2,-5 -2,-5 -10,5 -10,5 -2,10 -2,10 2))'), 3),
++  'global_status') AS c;
++
++--echo #
++--echo # End of 12.3 tests
++--echo #
+diff --git a/sql/item_geofunc.cc b/sql/item_geofunc.cc
+index 307f198c..e797cc19 100644
+--- a/sql/item_geofunc.cc
++++ b/sql/item_geofunc.cc
+@@ -2276,6 +2276,13 @@ String *Item_func_simplify::val_str(String *str)
+   Geometry *geometry;
+   uint32 num_points;
+ 
++  /*
++    The result String may come without a character set (e.g. from
++    in_string::set(), where the String array is zero-initialized).
++    Gis_*::simplify() use String::append(), which dereferences the
++    character set, so it must be set before calling simplify().
++  */
++  str->set_charset(&my_charset_bin);
+   null_value= 1;
+   if ((null_value= (args[0]->null_value || args[1]->null_value)) ||
+        !(geometry= Geometry::construct(&buffer, res->ptr(), res->length())))

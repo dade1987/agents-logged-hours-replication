@@ -1,0 +1,61 @@
+diff --git a/public/lib/classes/task/tag_cron_task.php b/public/lib/classes/task/tag_cron_task.php
+index 5be4bb1a473..5605ff1981a 100644
+--- a/public/lib/classes/task/tag_cron_task.php
++++ b/public/lib/classes/task/tag_cron_task.php
+@@ -30,6 +30,9 @@ use core_tag_collection, core_tag_tag, core_tag_area, stdClass;
+  */
+ class tag_cron_task extends scheduled_task {
+ 
++    /** @var int Maximum number of ids to use as parameters in a single query. */
++    const CHUNK_SIZE = 10000;
++
+     /**
+      * Get a descriptive name for this task (shown to admins).
+      *
+@@ -138,9 +141,14 @@ class tag_cron_task extends scheduled_task {
+             // There are no tag correlations.
+             $DB->delete_records('tag_correlation');
+         } else {
+-            list($sql, $params) = $DB->get_in_or_equal($correlations,
+-                    SQL_PARAMS_NAMED, 'param0000', false);
+-            $DB->delete_records_select('tag_correlation', 'id '.$sql, $params);
++            // Find the existing correlations that weren't just identified, and delete them in chunks to avoid
++            // exceeding the maximum number of query parameters supported by the database.
++            $existing = $DB->get_fieldset_select('tag_correlation', 'id', '1 = 1');
++            $todelete = array_values(array_diff($existing, $correlations));
++            foreach (array_chunk($todelete, self::CHUNK_SIZE) as $chunk) {
++                list($sql, $params) = $DB->get_in_or_equal($chunk);
++                $DB->delete_records_select('tag_correlation', 'id ' . $sql, $params);
++            }
+         }
+     }
+ 
+@@ -199,8 +207,10 @@ class tag_cron_task extends scheduled_task {
+         $tagareas->close();
+ 
+         // Get instances for each of the ids to be deleted.
+-        if (count($tagarray) > 0) {
+-            list($sqlin, $params) = $DB->get_in_or_equal($tagarray);
++        // Process them in chunks to avoid exceeding the maximum number of query parameters supported by the database.
++        $tagarray = array_unique($tagarray);
++        foreach (array_chunk($tagarray, self::CHUNK_SIZE) as $chunk) {
++            list($sqlin, $params) = $DB->get_in_or_equal($chunk);
+             $sql = "SELECT ti.*, COALESCE(t.name, 'deleted') AS name, COALESCE(t.rawname, 'deleted') AS rawname
+                       FROM {tag_instance} ti
+                  LEFT JOIN {tag} t ON t.id = ti.tagid
+@@ -257,9 +267,12 @@ class tag_cron_task extends scheduled_task {
+ 
+         // This is a multi db compatible method of creating the correct sql when using the 'IN' value.
+         // $insql is the sql statement, $params are the id numbers.
+-        list($insql, $params) = $DB->get_in_or_equal($instanceids);
+-        $sql = 'id ' . $insql;
+-        $DB->delete_records_select('tag_instance', $sql, $params);
++        // Process in chunks to avoid exceeding the maximum number of query parameters supported by the database.
++        foreach (array_chunk($instanceids, self::CHUNK_SIZE) as $chunk) {
++            list($insql, $params) = $DB->get_in_or_equal($chunk);
++            $sql = 'id ' . $insql;
++            $DB->delete_records_select('tag_instance', $sql, $params);
++        }
+ 
+         // Now go through and record each tag individually with the event system.
+         foreach ($instances as $instance) {

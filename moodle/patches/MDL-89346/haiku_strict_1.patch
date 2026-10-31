@@ -1,0 +1,159 @@
+diff --git a/public/mod/assign/externallib.php b/public/mod/assign/externallib.php
+index a97ea97e385..2892d54171c 100644
+--- a/public/mod/assign/externallib.php
++++ b/public/mod/assign/externallib.php
+@@ -676,9 +676,10 @@ class mod_assign_external extends \mod_assign\external\external_api {
+      * @param  assign $assign the assignment object
+      * @param  array $assignplugins array of assignment plugins (submission or feedback)
+      * @param  stdClass $item the item object (submission or grade)
++     * @param  int|null $markid the mark id if the plugins data is the feedback given by a marker (null for overall data)
+      * @return array an array containing the plugins returned information
+      */
+-    private static function get_plugins_data($assign, $assignplugins, $item) {
++    private static function get_plugins_data($assign, $assignplugins, $item, ?int $markid = null) {
+         global $CFG;
+ 
+         $plugins = array();
+@@ -697,7 +698,14 @@ class mod_assign_external extends \mod_assign\external\external_api {
+             // Subtype is 'assignsubmission', type is currently 'file' or 'onlinetext'.
+             $component = $assignplugin->get_subtype().'_'.$assignplugin->get_type();
+ 
+-            $fileareas = $assignplugin->get_file_areas();
++            // Marker feedback is stored against the assign_mark record, so its file areas use the mark id as item id.
++            if (is_null($markid)) {
++                $fileareas = $assignplugin->get_file_areas();
++                $itemid = $item->id;
++            } else {
++                $fileareas = $assignplugin->get_marker_file_areas();
++                $itemid = $markid;
++            }
+             foreach ($fileareas as $filearea => $name) {
+                 $fileareainfo = array('area' => $filearea);
+ 
+@@ -705,7 +713,7 @@ class mod_assign_external extends \mod_assign\external\external_api {
+                     $assign->get_context()->id,
+                     $component,
+                     $filearea,
+-                    $item->id
++                    $itemid
+                 );
+ 
+                 $plugin['fileareas'][] = $fileareainfo;
+@@ -716,7 +724,7 @@ class mod_assign_external extends \mod_assign\external\external_api {
+                 $editorfieldinfo = array(
+                     'name' => $name,
+                     'description' => $description,
+-                    'text' => $assignplugin->get_editor_text($name, $item->id),
++                    'text' => $assignplugin->get_editor_text($name, $item->id, $markid),
+                     'format' => $assignplugin->get_editor_format($name, $item->id)
+                 );
+ 
+@@ -724,7 +732,7 @@ class mod_assign_external extends \mod_assign\external\external_api {
+                 foreach ($fileareas as $filearea => $name) {
+                     list($editorfieldinfo['text'], $editorfieldinfo['format']) = \core_external\util::format_text(
+                         $editorfieldinfo['text'], $editorfieldinfo['format'], $assign->get_context(),
+-                        $component, $filearea, $item->id);
++                        $component, $filearea, $itemid);
+                 }
+ 
+                 $plugin['editorfields'][] = $editorfieldinfo;
+@@ -2499,6 +2507,9 @@ class mod_assign_external extends \mod_assign\external\external_api {
+                 }
+                 $feedbackplugins = $assign->get_feedback_plugins();
+                 $feedback->plugins = self::get_plugins_data($assign, $feedbackplugins, $feedback->grade);
++                // The feedback given by each marker (only for assignments with multiple markers).
++                $feedback->markerfeedback = self::get_marker_feedback_data($assign, $feedbackplugins, $feedback->grade,
++                                                                           $user->id, $showgradername);
+             } else {
+                 unset($feedback->plugins);
+                 unset($feedback->grade);
+@@ -2579,6 +2590,29 @@ class mod_assign_external extends \mod_assign\external\external_api {
+         return $result;
+     }
+ 
++    /**
++     * Return the feedback given by each marker of the assignment for the grade of a user.
++     *
++     * @param assign $assign the assignment object
++     * @param array $assignplugins array of assignment feedback plugins
++     * @param stdClass $grade the grade object
++     * @param int $userid the id of the student the grade belongs to
++     * @param bool $showgradername whether the identity of the markers can be shown
++     * @return array an array with the feedback of each marker
++     */
++    private static function get_marker_feedback_data($assign, $assignplugins, $grade, $userid, $showgradername) {
++        $markerfeedback = array();
++
++        foreach ($assign->get_mark_records($grade->id, $userid) as $mark) {
++            $markerfeedback[] = array(
++                'marker' => $showgradername ? $mark->marker : -1,
++                'plugins' => self::get_plugins_data($assign, $assignplugins, $grade, $mark->id),
++            );
++        }
++
++        return $markerfeedback;
++    }
++
+     /**
+      * Describes the get_submission_status return value.
+      *
+@@ -2633,6 +2667,16 @@ class mod_assign_external extends \mod_assign\external\external_api {
+                         'gradefordisplay' => new external_value(PARAM_RAW, 'Grade rendered into a format suitable for display.'),
+                         'gradeddate' => new external_value(PARAM_INT, 'The date the user was graded.'),
+                         'plugins' => new external_multiple_structure(self::get_plugin_structure(), 'Plugins info.', VALUE_OPTIONAL),
++                        'markerfeedback' => new external_multiple_structure(
++                            new external_single_structure(
++                                array(
++                                    'marker' => new external_value(PARAM_INT,
++                                        'The marker user id (-1 if the identity of the marker cannot be shown).'),
++                                    'plugins' => new external_multiple_structure(self::get_plugin_structure(),
++                                        'Plugins info with the feedback given by this marker.'),
++                                )
++                            ), 'Feedback given by each marker (only for assignments with multiple markers).', VALUE_OPTIONAL
++                        ),
+                     ), 'Feedback for the last attempt.', VALUE_OPTIONAL
+                 ),
+                 'previousattempts' => new external_multiple_structure(
+diff --git a/public/mod/assign/feedback/file/locallib.php b/public/mod/assign/feedback/file/locallib.php
+index 0e2fd656444..4ed252b2072 100644
+--- a/public/mod/assign/feedback/file/locallib.php
++++ b/public/mod/assign/feedback/file/locallib.php
+@@ -443,6 +443,17 @@ class assign_feedback_file extends assign_feedback_plugin {
+         ];
+     }
+ 
++    /**
++     * Get file areas for marker files.
++     *
++     * @return array An array of file areas (keys) and descriptions (values)
++     */
++    public function get_marker_file_areas(): array {
++        return [
++            ASSIGNFEEDBACK_FILE_FILEAREA_MARKER => $this->get_name(),
++        ];
++    }
++
+     /**
+      * Return true if this plugin can upgrade an old Moodle 2.2 assignment of this type
+      * and version.
+diff --git a/public/mod/assign/feedbackplugin.php b/public/mod/assign/feedbackplugin.php
+index 1bc114f628a..de5c3698d8d 100644
+--- a/public/mod/assign/feedbackplugin.php
++++ b/public/mod/assign/feedbackplugin.php
+@@ -260,6 +260,16 @@ abstract class assign_feedback_plugin extends assign_plugin {
+         return false;
+     }
+ 
++    /**
++     * Get the file areas this plugin uses to store files given by a marker.
++     * The item id of these file areas is the mark record id.
++     *
++     * @return array An array of file areas (keys) and descriptions (values). Default: empty.
++     */
++    public function get_marker_file_areas(): array {
++        return [];
++    }
++
+     /**
+      * Does this feedback plugin have marker columns which can be downloaded in the assignfeedback_offline spreadsheet?
+      *

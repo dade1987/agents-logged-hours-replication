@@ -1,0 +1,100 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot run Moodle's test suite. You may run `php -l <file>` and read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-89756: Administration: Correct copy and link scheme on the Notifications page
+
+h2. Problem statement
+
+MDL-89290 introduced the "From Moodle" CTA cards and reordered severity notices on the site administration Notifications page (/admin/index.php). Following review by the content team, several pieces of card copy need correcting and the outbound tracking/link scheme for the external CTAs needs to be aligned to the marketing team's current UTM convention. This ticket captures those copy and link corrections only; no layout, ordering, or structural changes are required.
+
+h2. Current behaviour
+
+On /admin/index.php, the "From Moodle" CTA cards currently show:
+
+* Marketplace card: body text "Discover trusted plugins and integrations built for Moodle" (no product qualifier, no full stop); tick bullets without full stops.
+* MoodleCloud card: tick bullets without full stops.
+* Certified Moodle Partners card: titled "Certified Moodle Partners"; body text "Work with a Moodle Certified Service Provider near you for hosting, upgrades, integrations or custom development."; button labelled "Find a Partner"; links to https://moodle.com/services/certified-service-providers/; tick bullets without full stops.
+* Feedback survey card: body text ends "...Turning it on takes one setting."; tick bullets without full stops.
+
+The three external CTA links (Marketplace, MoodleCloud, Partners) are built by {{notification_ctas::build_tracked_cta_url()}} with {{utm_source=moodle_admin}} and {{utm_campaign=<cta key>}} (for example {{utm_campaign=marketplace}}), alongside the existing base64-encoded "site" parameter.
+
+h2. Expected behaviour
+
+h3. Copy changes ({{lang/en/admin.php}})
+
+* {{notificationctamarketplacebody}}: change to "Discover trusted plugins and integrations built for Moodle LMS."
+* {{notificationctamarketplacetick1}}: change to "1,500+ plugins, themes and integrations."
+* {{notificationctamarketplacetick2}}: change to "Certified integrations, vetted by Moodle."
+* {{notificationctamarketplacetick3}}: change to "Free and paid listings in one catalogue."
+* {{notificationctamoodlecloudbody}}: change to "Need a second site for a pilot, a course build or a client? Get Moodle LMS hosted by Moodle, with nothing to maintain." (adds "LMS"; confirmed as final wording during ticket triage)
+* {{notificationctamoodlecloudtick1}}: change to "Easy setup and no site maintenance."
+* {{notificationctamoodlecloudtick2}}: change to "Unlimited courses and activities."
+* {{notificationctamoodlecloudtick3}}: change to "Always on the latest supported release."
+* {{notificationctapartnerstitle}}: change to "Moodle Services"
+* {{notificationctapartnersbody}}: change to "Explore trustworthy, Moodle-approved options for hosting, upgrades, integrations and custom development."
+* {{notificationctapartnerscta}}: change to "Find a Moodle service provider"
+* {{notificationctapartnerstick1}}: change to "Full-service support and technical partnership."
+* {{notificationctapartnerstick2}}: change to "Bespoke theming and custom development."
+* {{notificationctapartnerstick3}}: change to "Scaled and audited for large institutions."
+* {{notificationctafeedbackbody}}: change to "The site feedback survey is how admins tell Moodle HQ what to fix and what to build. Turning it on is easy."
+* {{notificationctafeedbacktick1}}: change to "Shapes the roadmap for every Moodle site."
+* {{notificationctafeedbacktick2}}: change to "No user-identifying information is sent."
+* {{notificationctafeedbacktick3}}: change to "Takes about 5 minutes, twice a year."
+
+h3. Link changes ({{public/admin/classes/output/notification_ctas.php}})
+
+The Partners CTA base URL changes from https://moodle.com/services/certified-service-providers/ to https://moodle.com/get-moodle/. Only the root URL changes; the existing base64 "site" parameter and the utm parameters below continue to be appended the same way as for the other two external CTAs.
+
+The UTM parameters appended by {{build_tracked_cta_url()}} for all three external CTAs (Marketplace, MoodleCloud, Partners) change from the current {{utm_source=moodle_admin}} / {{utm_campaign=<cta key>}} pair to:
+
+* {{utm_source}} = the site's own hostname (host part of {{$CFG->wwwroot}})
+* {{utm_medium}} = {{lms_referral}}
+* {{utm_campaign}} = {{000_lms_cta}} (fixed value, the same for all three CTAs)
+* {{utm_content}} = the CTA key ({{marketplace}}, {{moodlecloud}}, or {{partners}}), replacing the identifying role previously played by {{utm_campaign}}
+
+The existing base64-encoded "site" parameter (fullname, wwwroot, major version) is unchanged and continues to be appended alongside the new utm parameters. The feedback survey CTA remains an internal link with no query parameters, unchanged.
+
+h2. Value
+
+* Corrected, brand-accurate copy avoids referring to "Moodle" (the organisation) as something a site can be "hosted by" in a confusing way, uses consistent product naming (Moodle LMS) where appropriate, and gives more customer-friendly framing for the feedback survey prompt.
+* Full stops on all CTA card bullet points meet the content team's accessibility guidance for bulleted lists (screen readers announce list items more clearly as complete sentences).
+* The reworked UTM scheme ({{utm_source}}/{{utm_medium}}/{{utm_campaign}}/{{utm_content}}) aligns the Notifications page CTAs with Moodle HQ's marketing team's standard tracking convention (source = where, medium = how, campaign = what), replacing an ad hoc scheme that was inconsistent with links used elsewhere on moodle.com properties.
+* Renaming the Partners card to "Moodle Services" and pointing it at the general https://moodle.com/get-moodle/ landing page matches how Moodle HQ consistently drives this kind of CTA traffic on other properties, per the content team's review.
+
+h2. Scope
+
+h3. In scope
+
+* Updating the lang strings listed above in {{lang/en/admin.php}}.
+* Updating the Partners CTA base URL and the UTM parameter construction in {{notification_ctas::build_tracked_cta_url()}} in {{public/admin/classes/output/notification_ctas.php}}.
+* Updating or adding PHPUnit coverage in {{public/admin/tests/output/notification_ctas_test.php}} for the new UTM parameter names/values and the new Partners URL.
+* Applies to the current development branch (main/5.3) only; no backport to earlier stable branches, since MDL-89290 has not been backported.
+
+h3. Out of scope
+
+* Any change to card layout, severity ordering, the summary count line, or the {{$CFG->disablenotificationctas}} mechanism introduced by MDL-89290.
+* Any change to the Marketplace or MoodleCloud CTA base URLs (only their tick/body copy and shared UTM scheme change).
+* Any change to the feedback survey CTA copy beyond the single body string listed above, its URL, or its (absence of) tracking parameters.
+* Any change to the "Browse new plugins" link or {{tool_installaddon_installer::get_external_service_url()}}, which are unrelated to this page.
+
+h2. Acceptance criteria
+
+* On /admin/index.php, the Marketplace, MoodleCloud, Partners, and feedback survey CTA cards show the exact copy listed under Expected behaviour above, including the "LMS" addition to the MoodleCloud body and full stops on every tick bullet across all four cards.
+* The Partners card title reads "Moodle Services" and its button reads "Find a Moodle service provider".
+* The Partners CTA button's href has https://moodle.com/get-moodle/ as its base path, with the base64 "site" parameter and the new {{utm_source}}/{{utm_medium}}/{{utm_campaign}}/{{utm_content}} parameters appended.
+* The Marketplace and MoodleCloud CTA buttons keep their existing base URLs (https://marketplace.moodle.com/ and https://www.moodlecloud.com/standard-plans/ respectively) but carry the same new {{utm_source}}/{{utm_medium}}/{{utm_campaign}}/{{utm_content}} parameters as the Partners CTA, alongside the unchanged base64 "site" parameter.
+* {{utm_source}} on all three external CTA links equals the hostname portion of {{$CFG->wwwroot}} for the current site (not the literal string "moodle_admin").
+* {{utm_medium}} equals {{lms_referral}} and {{utm_campaign}} equals {{000_lms_cta}} on all three external CTA links.
+* {{utm_content}} equals the CTA's key ({{marketplace}}, {{moodlecloud}}, or {{partners}}) on the corresponding link.
+* The feedback survey CTA href is unchanged: it still points directly at /admin/settings.php?section=userfeedback with no query parameters added.
+* Existing PHPUnit coverage for {{notification_ctas}} continues to pass, extended to assert the new URL and UTM parameter values.
+
+h2. Notes
+
+This is a copy and link-only correction to the CTA cards introduced by MDL-89290; no new admin-facing functionality, settings, or layout changes are introduced.

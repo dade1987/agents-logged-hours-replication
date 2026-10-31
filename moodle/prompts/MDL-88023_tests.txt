@@ -1,0 +1,54 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You CAN run Moodle's existing PHPUnit tests: `cd {WS} && vendor/bin/phpunit <path/to/some_test.php>` (the test environment is already initialised). You may also run `php -l <file>` and read code with grep/find/cat. Use absolute paths starting with {WS} in every command.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-88023: BBB subplugin page shows plugins enabled when BBB activity is disabled
+
+When {{mod_bigbluebuttonbn}} is disabled, Moodle correctly treats all {{bbbext}} subplugins as disabled in the global plugins UI.
+However, the BigBlueButton-specific management page (adminmanageplugins.php) can still display those same subplugins as enabled.
+
+This creates an inconsistent admin state between:
+
+* Global plugin manager (plugins.php)
+* BigBlueButton subplugin manager (adminmanageplugins.php)
+
+*Steps to reproduce:*
+
+# Install/enable BigBlueButton and at least one {{bbbext}} subplugin (e.g. {{bbbext_bnx}}).
+# Ensure the subplugin itself is enabled (no {{disabled}} config set for that subplugin).
+# Disable {{mod_bigbluebuttonbn}} from Site administration > Plugins > Activity modules > Manage activities.
+# Open plugins.php and observe {{bbbext}} subplugins are effectively disabled.
+# Open adminmanageplugins.php.
+
+*Actual result:*
+The BBB subplugin management page may show subplugins as enabled (not dimmed / showing “hide” action), even though parent module is disabled.
+
+*Expected result:*
+When {{mod_bigbluebuttonbn}} is disabled, all {{bbbext}} subplugins must be shown as disabled consistently across all admin pages.
+
+*Root cause:*
+The BBB subplugin management page determines visibility from direct per-subplugin {{disabled}} config state, instead of using the canonical enabled list logic in {{bbbext::get_enabled_plugins()}}, which already returns no enabled subplugins if BBB is disabled.
+
+*Proposed fix:*
+In BBB admin subplugin listing logic, derive visibility from {{bbbext::get_enabled_plugins()}} rather than direct {{get_config(..., 'disabled')}} checks.
+
+*Impact:*
+
+* Admin UI inconsistency / misleading status
+* Potential incorrect admin decisions (appears plugin is active when it cannot be used)
+
+*Regression risk:* Low
+
+* Scope limited to display/status logic in BBB subplugin admin page
+* Uses existing canonical enablement logic already used elsewhere
+
+*Acceptance criteria:*
+
+# Disable {{mod_bigbluebuttonbn}}.
+# plugins.php and adminmanageplugins.php both show all {{bbbext}} subplugins as disabled.
+# Re-enable {{mod_bigbluebuttonbn}}; subplugins reflect their own stored enabled/disabled flags again.

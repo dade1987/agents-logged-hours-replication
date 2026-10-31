@@ -1,0 +1,94 @@
+diff --git a/public/enrol/imsenterprise/lib.php b/public/enrol/imsenterprise/lib.php
+index ac1c38fa050..6a50cb4d829 100644
+--- a/public/enrol/imsenterprise/lib.php
++++ b/public/enrol/imsenterprise/lib.php
+@@ -547,6 +547,10 @@ class enrol_imsenterprise_plugin extends enrol_plugin {
+             if ($imsupdateusers) {
+                 if ($id = $DB->get_field('user', 'id', array('idnumber' => $person->idnumber))) {
+                     $person->id = $id;
++                    if (isset($person->email) && $DB->get_field('user', 'email', ['id' => $id]) !== $person->email) {
++                        // Invalidate any outstanding forgot-password tokens, as they were sent to the old email address.
++                        $DB->delete_records('user_password_resets', ['userid' => $id]);
++                    }
+                     $DB->update_record('user', $person);
+                     $this->log_line("Updated user $person->username");
+                 } else {
+diff --git a/public/lib/classes/authentication/password.php b/public/lib/classes/authentication/password.php
+index 2cefe53755f..6a0738a2997 100644
+--- a/public/lib/classes/authentication/password.php
++++ b/public/lib/classes/authentication/password.php
+@@ -171,6 +171,9 @@ class password {
+      * Updating the password will modify the $user object and the database record to use the
+      * current hashing algorithm. It will remove Web Services user tokens too.
+      *
++     * If the password itself has actually changed (not just a rehash to the current algorithm),
++     * any outstanding forgot-password tokens for the user are also invalidated.
++     *
+      * @param \stdClass $user User object (password property may be updated)
+      * @param string|null $password Plain text password
+      * @param bool $fasthash If true, use a low cost factor when generating the hash
+@@ -230,6 +233,13 @@ class password {
+                 require_once($CFG->dirroot . '/webservice/lib.php');
+                 \webservice::delete_user_ws_tokens($user->id);
+             }
++
++            if ($passwordchanged) {
++                // Invalidate any outstanding forgot-password tokens, as the password has now changed.
++                // Note: this deliberately excludes a rehash-only update ($algorithmchanged), which can
++                // happen during a normal login and does not mean the password itself has changed.
++                $DB->delete_records('user_password_resets', ['userid' => $user->id]);
++            }
+         }
+ 
+         return true;
+diff --git a/public/lib/classes/user.php b/public/lib/classes/user.php
+index 09c9e0b0627..3a3b7971439 100644
+--- a/public/lib/classes/user.php
++++ b/public/lib/classes/user.php
+@@ -1943,6 +1943,11 @@ class user {
+             $updaterecord = (object) $changedattributes;
+             $updaterecord->id = $currentrecord->id;
+             $DB->update_record('user', $updaterecord);
++
++            if (array_key_exists('email', $changedattributes)) {
++                // Invalidate any outstanding forgot-password tokens, as they were sent to the old email address.
++                $DB->delete_records('user_password_resets', ['userid' => $currentrecord->id]);
++            }
+         }
+ 
+         if ($updatepassword) {
+diff --git a/public/login/lib.php b/public/login/lib.php
+index 4d4820fbe17..158d1a7eab0 100644
+--- a/public/login/lib.php
++++ b/public/login/lib.php
+@@ -149,9 +149,8 @@ function core_login_process_password_reset($username, $email) {
+                 $resetrecord = core_login_generate_password_reset($user);
+                 $sendemail = true;
+             } else if ($resetinprogress->timerequested < (time() - $CFG->pwresettime)) {
+-                // Preexisting, but expired request - delete old record & create new one.
++                // Preexisting, but expired request.
+                 // Uncommon case - expired requests are cleaned up by cron.
+-                $DB->delete_records('user_password_resets', array('id' => $resetinprogress->id));
+                 $resetrecord = core_login_generate_password_reset($user);
+                 $sendemail = true;
+             } else if (empty($resetinprogress->timererequested)) {
+@@ -321,11 +320,19 @@ function core_login_process_password_set($token) {
+ }
+ 
+ /** Create a new record in the database to track a new password set request for user.
++ *
++ * Any existing outstanding password reset tokens for this user are removed first, so only the
++ * newly generated token remains valid.
++ *
+  * @param object $user the user record, the requester would like a new password set for.
+  * @return record created.
+  */
+ function core_login_generate_password_reset ($user) {
+     global $DB;
++
++    // Remove any existing tokens for this user, as they are being superseded by the new one.
++    $DB->delete_records('user_password_resets', ['userid' => $user->id]);
++
+     $resetrecord = new stdClass();
+     $resetrecord->timerequested = time();
+     $resetrecord->userid = $user->id;

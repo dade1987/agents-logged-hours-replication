@@ -1,0 +1,195 @@
+diff --git a/mysql-test/suite/versioning/r/partition.result b/mysql-test/suite/versioning/r/partition.result
+index 99daa433..35890379 100644
+--- a/mysql-test/suite/versioning/r/partition.result
++++ b/mysql-test/suite/versioning/r/partition.result
+@@ -3641,5 +3641,104 @@ Table	Op	Msg_type	Msg_text
+ test.t	repair	status	OK
+ drop table t;
+ set timestamp=default;
++#
++# MDEV-41543 Changing INTERVAL of SYSTEM_TIME partitioning does not move history to the new partitions
++#
++set @@session.time_zone='+00:00';
++create table t1 (x int,
++row_start timestamp(6) as row start invisible,
++row_end timestamp(6) as row end invisible,
++period for system_time (row_start, row_end)) with system versioning
++partition by system_time interval 1 hour
++starts '2000-01-01 00:00:00' partitions 4;
++set timestamp= unix_timestamp('2000-01-01 00:30:00');
++insert t1 values (0);
++set timestamp= unix_timestamp('2000-01-01 01:30:00');
++update t1 set x= 1;
++set timestamp= unix_timestamp('2000-01-01 02:30:00');
++update t1 set x= 2;
++select x, row_end from t1 partition (p0);
++x	row_end
++select x, row_end from t1 partition (p1);
++x	row_end
++0	2000-01-01 01:30:00.000000
++select x, row_end from t1 partition (p2);
++x	row_end
++1	2000-01-01 02:30:00.000000
++select x from t1 partition (pn);
++x
++2
++alter table t1 partition by system_time interval 2 hour
++starts '2000-01-01 00:00:00';
++show create table t1;
++Table	Create Table
++t1	CREATE TABLE `t1` (
++  `x` int(11) DEFAULT NULL,
++  `row_start` timestamp(6) GENERATED ALWAYS AS ROW START INVISIBLE,
++  `row_end` timestamp(6) GENERATED ALWAYS AS ROW END INVISIBLE,
++  PERIOD FOR SYSTEM_TIME (`row_start`, `row_end`)
++) ENGINE=DEFAULT_ENGINE DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci WITH SYSTEM VERSIONING
++ PARTITION BY SYSTEM_TIME INTERVAL 2 HOUR STARTS TIMESTAMP'2000-01-01 00:00:00'
++PARTITIONS 4
++select x, row_end from t1 partition (p0);
++x	row_end
++0	2000-01-01 01:30:00.000000
++select x, row_end from t1 partition (p1);
++x	row_end
++1	2000-01-01 02:30:00.000000
++select x, row_end from t1 partition (p2);
++x	row_end
++select x from t1 partition (pn);
++x
++2
++alter table t1 partition by system_time interval 2 hour
++starts '2000-01-01 01:00:00';
++show create table t1;
++Table	Create Table
++t1	CREATE TABLE `t1` (
++  `x` int(11) DEFAULT NULL,
++  `row_start` timestamp(6) GENERATED ALWAYS AS ROW START INVISIBLE,
++  `row_end` timestamp(6) GENERATED ALWAYS AS ROW END INVISIBLE,
++  PERIOD FOR SYSTEM_TIME (`row_start`, `row_end`)
++) ENGINE=DEFAULT_ENGINE DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci WITH SYSTEM VERSIONING
++ PARTITION BY SYSTEM_TIME INTERVAL 2 HOUR STARTS TIMESTAMP'2000-01-01 01:00:00'
++PARTITIONS 4
++select x, row_end from t1 partition (p0);
++x	row_end
++0	2000-01-01 01:30:00.000000
++1	2000-01-01 02:30:00.000000
++select x, row_end from t1 partition (p1);
++x	row_end
++select x, row_end from t1 partition (p2);
++x	row_end
++select x from t1 partition (pn);
++x
++2
++alter table t1 partition by system_time interval 2 hour
++starts '2000-01-01 01:00:00';
++show create table t1;
++Table	Create Table
++t1	CREATE TABLE `t1` (
++  `x` int(11) DEFAULT NULL,
++  `row_start` timestamp(6) GENERATED ALWAYS AS ROW START INVISIBLE,
++  `row_end` timestamp(6) GENERATED ALWAYS AS ROW END INVISIBLE,
++  PERIOD FOR SYSTEM_TIME (`row_start`, `row_end`)
++) ENGINE=DEFAULT_ENGINE DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci WITH SYSTEM VERSIONING
++ PARTITION BY SYSTEM_TIME INTERVAL 2 HOUR STARTS TIMESTAMP'2000-01-01 01:00:00'
++PARTITIONS 4
++select x, row_end from t1 partition (p0);
++x	row_end
++0	2000-01-01 01:30:00.000000
++1	2000-01-01 02:30:00.000000
++select x, row_end from t1 partition (p1);
++x	row_end
++select x, row_end from t1 partition (p2);
++x	row_end
++select x from t1 partition (pn);
++x
++2
++drop table t1;
++set timestamp= default;
++set @@session.time_zone= default;
+ # End of 10.11 tests
+ set global innodb_stats_persistent= @save_persistent;
+diff --git a/mysql-test/suite/versioning/t/partition.test b/mysql-test/suite/versioning/t/partition.test
+index 0cb6cc14..2592da49 100644
+--- a/mysql-test/suite/versioning/t/partition.test
++++ b/mysql-test/suite/versioning/t/partition.test
+@@ -2868,7 +2868,59 @@ repair table t;
+ drop table t;
+ set timestamp=default;
+ 
+---echo # End of 10.11 tests
++--echo #
++--echo # MDEV-41543 Changing INTERVAL of SYSTEM_TIME partitioning does not move history to the new partitions
++--echo #
++
++set @@session.time_zone='+00:00';
++create table t1 (x int,
++  row_start timestamp(6) as row start invisible,
++  row_end timestamp(6) as row end invisible,
++  period for system_time (row_start, row_end)) with system versioning
++partition by system_time interval 1 hour
++starts '2000-01-01 00:00:00' partitions 4;
++set timestamp= unix_timestamp('2000-01-01 00:30:00');
++insert t1 values (0);
++set timestamp= unix_timestamp('2000-01-01 01:30:00');
++update t1 set x= 1;
++set timestamp= unix_timestamp('2000-01-01 02:30:00');
++update t1 set x= 2;
++select x, row_end from t1 partition (p0);
++select x, row_end from t1 partition (p1);
++select x, row_end from t1 partition (p2);
++select x from t1 partition (pn);
++# Changed INTERVAL must rebuild the table and redistribute the history
++alter table t1 partition by system_time interval 2 hour
++starts '2000-01-01 00:00:00';
++--replace_result $default_engine DEFAULT_ENGINE
++show create table t1;
++select x, row_end from t1 partition (p0);
++select x, row_end from t1 partition (p1);
++select x, row_end from t1 partition (p2);
++select x from t1 partition (pn);
++# Changed STARTS must rebuild the table as well
++alter table t1 partition by system_time interval 2 hour
++starts '2000-01-01 01:00:00';
++--replace_result $default_engine DEFAULT_ENGINE
++show create table t1;
++select x, row_end from t1 partition (p0);
++select x, row_end from t1 partition (p1);
++select x, row_end from t1 partition (p2);
++select x from t1 partition (pn);
++# Unchanged INTERVAL and STARTS: fast alter, history stays in place
++alter table t1 partition by system_time interval 2 hour
++starts '2000-01-01 01:00:00';
++--replace_result $default_engine DEFAULT_ENGINE
++show create table t1;
++select x, row_end from t1 partition (p0);
++select x, row_end from t1 partition (p1);
++select x, row_end from t1 partition (p2);
++select x from t1 partition (pn);
++drop table t1;
++set timestamp= default;
++set @@session.time_zone= default;
++
++# End of 10.11 tests
+ 
+ set global innodb_stats_persistent= @save_persistent;
+ --source suite/versioning/common_finish.inc
+diff --git a/sql/sql_partition.cc b/sql/sql_partition.cc
+index 2d1ca554..59d6aa64 100644
+--- a/sql/sql_partition.cc
++++ b/sql/sql_partition.cc
+@@ -6096,9 +6096,14 @@ the generated partition syntax in a correct manner.
+       {
+         if (part_info->vers_info->interval.is_set() && (
+             !tab_part_info->vers_info->interval.is_set() ||
+-            part_info->vers_info->interval == tab_part_info->vers_info->interval))
++            !(part_info->vers_info->interval ==
++              tab_part_info->vers_info->interval)))
+         {
+-          /* If interval is changed we can not do fast alter */
++          /*
++            If interval is added or changed we can not do fast alter: the
++            table must be rebuilt so that the history rows are redistributed
++            according to the new partition layout.
++          */
+           tab_part_info= tab_part_info->get_clone(thd);
+         }
+         else

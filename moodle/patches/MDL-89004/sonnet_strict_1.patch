@@ -1,0 +1,65 @@
+diff --git a/public/reportbuilder/classes/local/report/column.php b/public/reportbuilder/classes/local/report/column.php
+index 06ffeaf4298..9bfb20bf078 100644
+--- a/public/reportbuilder/classes/local/report/column.php
++++ b/public/reportbuilder/classes/local/report/column.php
+@@ -308,17 +308,19 @@ final class column {
+     }
+ 
+     /**
+-     * Add a list of comma-separated fields
++     * Add a list of fields, either as a comma-separated string or as an array of field strings
+      *
+-     * @param string $sql
++     * Each field uses the syntax: table.field, table.field alias, or table.field AS alias
++     *
++     * @param string|array $sql
+      * @param array $params
+      * @return self
+      */
+-    public function add_fields(string $sql, array $params = []): self {
++    public function add_fields(string|array $sql, array $params = []): self {
+         database::validate_params($params);
+ 
+         // Split SQL into separate fields (separated by comma).
+-        $fields = preg_split('/\s*,\s*/', $sql);
++        $fields = is_array($sql) ? array_map('trim', $sql) : preg_split('/\s*,\s*/', $sql);
+         foreach ($fields as $field) {
+             // Split each field into expression, <field> <as> <alias> where "as" and "alias" are optional.
+             $fieldparts = preg_split('/\s+/', $field);
+diff --git a/public/reportbuilder/classes/local/systemreports/reports_list.php b/public/reportbuilder/classes/local/systemreports/reports_list.php
+index b4325bf9a0f..f34cddb6674 100644
+--- a/public/reportbuilder/classes/local/systemreports/reports_list.php
++++ b/public/reportbuilder/classes/local/systemreports/reports_list.php
+@@ -126,13 +126,13 @@ class reports_list extends system_report {
+         ))
+             ->set_type(column::TYPE_TEXT)
+             // We need enough fields to re-create the persistent and pass to the editable component.
+-            ->add_fields(implode(', ', [
++            ->add_fields([
+                 "{$tablealias}.id",
+                 "{$tablealias}.name",
+                 "{$tablealias}.contextid",
+                 "{$tablealias}.type",
+                 "{$tablealias}.usercreated",
+-            ]))
++            ])
+             ->set_is_sortable(true, ["{$tablealias}.name"])
+             ->add_callback(static function(string $value, stdClass $report): string {
+                 global $PAGE;
+diff --git a/public/webservice/classes/reportbuilder/local/systemreports/tokens.php b/public/webservice/classes/reportbuilder/local/systemreports/tokens.php
+index 8b90a19cdb2..9fb155ff4a6 100644
+--- a/public/webservice/classes/reportbuilder/local/systemreports/tokens.php
++++ b/public/webservice/classes/reportbuilder/local/systemreports/tokens.php
+@@ -136,10 +136,10 @@ class tokens extends system_report {
+         ))
+             ->set_type(column::TYPE_TEXT)
+             ->add_field("{$entityuseralias}.id", 'userid')
+-            ->add_fields(implode(', ', [
++            ->add_fields([
+                 "{$entityservicealias}.id",
+                 "{$entityservicealias}.shortname",
+-            ]))
++            ])
+             ->add_callback(static function($value, \stdClass $row): string {
+                 global $OUTPUT;
+ 

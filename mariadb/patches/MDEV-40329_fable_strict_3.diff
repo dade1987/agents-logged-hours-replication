@@ -1,0 +1,63 @@
+diff --git a/mysql-test/main/gis.result b/mysql-test/main/gis.result
+index 171803ec..091e3a5d 100644
+--- a/mysql-test/main/gis.result
++++ b/mysql-test/main/gis.result
+@@ -5613,4 +5613,10 @@ NULL
+ select  glength(x'0000000001050000000100000001020000');
+ glength(x'0000000001050000000100000001020000')
+ NULL
++#
++# MDEV-40329 Binary_string::qs_append(char): Assertion
++# `str_length + (uint32) (1) <= Alloced_length' failed in AsText
++#
++len
++4010
+ # End of 10.6 tests
+diff --git a/mysql-test/main/gis.test b/mysql-test/main/gis.test
+index 4cb51fdc..1cabc5d7 100644
+--- a/mysql-test/main/gis.test
++++ b/mysql-test/main/gis.test
+@@ -3582,5 +3582,12 @@ select st_centroid(x'0000000001060000000100000001030000');
+ # similar on multilinestring
+ select  glength(x'0000000001050000000100000001020000');
+ 
++--echo #
++--echo # MDEV-40329 Binary_string::qs_append(char): Assertion
++--echo # `str_length + (uint32) (1) <= Alloced_length' failed in AsText
++--echo #
++--disable_query_log
++eval SELECT LENGTH(ST_AsText(x'000000000$(repeat('107000000010000000', 200))10100000000000000000000000000000000000000')) as len;
++--enable_query_log
+ 
+ --echo # End of 10.6 tests
+diff --git a/sql/spatial.cc b/sql/spatial.cc
+index e3ce5786..6defe417 100644
+--- a/sql/spatial.cc
++++ b/sql/spatial.cc
+@@ -3007,7 +3007,7 @@ bool Gis_multi_polygon::get_data_as_wkt(String *txt, const char **end) const
+   {
+     uint32 n_linear_rings;
+     if (no_data(data, 4 + WKB_HEADER_SIZE) ||
+-	txt->reserve(1, 512))
++	txt->reserve(2, 512))
+       return 1;
+     n_linear_rings= uint4korr(data+WKB_HEADER_SIZE);
+     data+= 4 + WKB_HEADER_SIZE;
+@@ -3494,6 +3494,8 @@ bool Gis_geometry_collection::get_data_as_wkt(String *txt,
+     goto exit;
+   }
+ 
++  if (txt->reserve(1, 512))
++    return 1;
+   txt->qs_append('(');
+   while (n_objects--)
+   {
+@@ -3512,6 +3514,8 @@ bool Gis_geometry_collection::get_data_as_wkt(String *txt,
+     if (n_objects && txt->append(STRING_WITH_LEN(","), 512))
+       return 1;
+   }
++  if (txt->reserve(1, 512))
++    return 1;
+   txt->qs_append(')');
+ exit:
+   *end= data;

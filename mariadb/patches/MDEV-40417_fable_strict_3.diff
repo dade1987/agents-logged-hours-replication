@@ -1,0 +1,150 @@
+diff --git a/mysql-test/main/column_compression.result b/mysql-test/main/column_compression.result
+index 5b35d70a..b0654fa4 100644
+--- a/mysql-test/main/column_compression.result
++++ b/mysql-test/main/column_compression.result
+@@ -1323,7 +1323,7 @@ LENGTH(a)
+ SHOW CREATE TABLE t1;
+ Table	Create Table
+ t1	CREATE TABLE `t1` (
+-  `a` blob /*M!100301 COMPRESSED*/ NOT NULL DEFAULT ''
++  `a` blob /*M!100301 COMPRESSED*/ NOT NULL
+ ) ENGINE=CSV DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+ "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+ DROP TABLE t1;
+@@ -3050,4 +3050,67 @@ CREATE TABLE t (c VARCHAR(255) COMPRESSED);
+ REPLACE INTO t VALUES ('abcdefghijklm');
+ UPDATE t SET c=MID(c,2,4);
+ DROP TABLE t;
++#
++# MDEV-40417 Compressed column always gets default value added
++#
++CREATE TABLE t (c1 LONGTEXT COMPRESSED NOT NULL,
++nc1 LONGTEXT NOT NULL,
++c2 LONGTEXT COMPRESSED NOT NULL DEFAULT '',
++nc2 LONGTEXT NOT NULL DEFAULT '',
++c3 VARCHAR(10) COMPRESSED NOT NULL,
++nc3 VARCHAR(10) NOT NULL);
++SHOW CREATE TABLE t;
++Table	Create Table
++t	CREATE TABLE `t` (
++  `c1` longtext /*M!100301 COMPRESSED*/ NOT NULL,
++  `nc1` longtext NOT NULL,
++  `c2` longtext /*M!100301 COMPRESSED*/ NOT NULL DEFAULT '',
++  `nc2` longtext NOT NULL DEFAULT '',
++  `c3` varchar(10) /*M!100301 COMPRESSED*/ NOT NULL,
++  `nc3` varchar(10) NOT NULL
++) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
++SELECT COLUMN_NAME, COLUMN_DEFAULT FROM INFORMATION_SCHEMA.COLUMNS
++WHERE TABLE_SCHEMA='test' AND TABLE_NAME='t' ORDER BY ORDINAL_POSITION;
++COLUMN_NAME	COLUMN_DEFAULT
++c1	NULL
++nc1	NULL
++c2	''
++nc2	''
++c3	NULL
++nc3	NULL
++INSERT INTO t (nc1, nc3) VALUES ('x', 'y');
++ERROR HY000: Field 'c1' doesn't have a default value
++INSERT INTO t (c1, nc3) VALUES ('x', 'y');
++ERROR HY000: Field 'nc1' doesn't have a default value
++INSERT INTO t (c1, nc1) VALUES ('x', 'y');
++ERROR HY000: Field 'c3' doesn't have a default value
++INSERT INTO t (c1, nc1, c3, nc3) VALUES ('x', 'y', 'z', 'w');
++ALTER TABLE t MODIFY c2 LONGTEXT COMPRESSED NOT NULL;
++SHOW CREATE TABLE t;
++Table	Create Table
++t	CREATE TABLE `t` (
++  `c1` longtext /*M!100301 COMPRESSED*/ NOT NULL,
++  `nc1` longtext NOT NULL,
++  `c2` longtext /*M!100301 COMPRESSED*/ NOT NULL,
++  `nc2` longtext NOT NULL DEFAULT '',
++  `c3` varchar(10) /*M!100301 COMPRESSED*/ NOT NULL,
++  `nc3` varchar(10) NOT NULL
++) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
++ALTER TABLE t ALTER c1 SET DEFAULT 'd';
++SHOW CREATE TABLE t;
++Table	Create Table
++t	CREATE TABLE `t` (
++  `c1` longtext /*M!100301 COMPRESSED*/ NOT NULL DEFAULT 'd',
++  `nc1` longtext NOT NULL,
++  `c2` longtext /*M!100301 COMPRESSED*/ NOT NULL,
++  `nc2` longtext NOT NULL DEFAULT '',
++  `c3` varchar(10) /*M!100301 COMPRESSED*/ NOT NULL,
++  `nc3` varchar(10) NOT NULL
++) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
++INSERT INTO t (nc1, c3, nc3) VALUES ('x', 'y', 'z');
++SELECT c1 FROM t ORDER BY c1;
++c1
++d
++x
++DROP TABLE t;
+ # End of 10.6 tests
+diff --git a/mysql-test/main/column_compression.test b/mysql-test/main/column_compression.test
+index 2aba8862..879c537d 100644
+--- a/mysql-test/main/column_compression.test
++++ b/mysql-test/main/column_compression.test
+@@ -593,4 +593,32 @@ REPLACE INTO t VALUES ('abcdefghijklm');
+ UPDATE t SET c=MID(c,2,4);
+ DROP TABLE t;
+ 
++--echo #
++--echo # MDEV-40417 Compressed column always gets default value added
++--echo #
++
++CREATE TABLE t (c1 LONGTEXT COMPRESSED NOT NULL,
++                nc1 LONGTEXT NOT NULL,
++                c2 LONGTEXT COMPRESSED NOT NULL DEFAULT '',
++                nc2 LONGTEXT NOT NULL DEFAULT '',
++                c3 VARCHAR(10) COMPRESSED NOT NULL,
++                nc3 VARCHAR(10) NOT NULL);
++SHOW CREATE TABLE t;
++SELECT COLUMN_NAME, COLUMN_DEFAULT FROM INFORMATION_SCHEMA.COLUMNS
++  WHERE TABLE_SCHEMA='test' AND TABLE_NAME='t' ORDER BY ORDINAL_POSITION;
++--error ER_NO_DEFAULT_FOR_FIELD
++INSERT INTO t (nc1, nc3) VALUES ('x', 'y');
++--error ER_NO_DEFAULT_FOR_FIELD
++INSERT INTO t (c1, nc3) VALUES ('x', 'y');
++--error ER_NO_DEFAULT_FOR_FIELD
++INSERT INTO t (c1, nc1) VALUES ('x', 'y');
++INSERT INTO t (c1, nc1, c3, nc3) VALUES ('x', 'y', 'z', 'w');
++ALTER TABLE t MODIFY c2 LONGTEXT COMPRESSED NOT NULL;
++SHOW CREATE TABLE t;
++ALTER TABLE t ALTER c1 SET DEFAULT 'd';
++SHOW CREATE TABLE t;
++INSERT INTO t (nc1, c3, nc3) VALUES ('x', 'y', 'z');
++SELECT c1 FROM t ORDER BY c1;
++DROP TABLE t;
++
+ --echo # End of 10.6 tests
+diff --git a/sql/field.cc b/sql/field.cc
+index 5dac5414..629cb963 100644
+--- a/sql/field.cc
++++ b/sql/field.cc
+@@ -10937,7 +10937,7 @@ bool Column_definition::check(THD *thd)
+     We need to do this check here and in mysql_create_prepare_table() as
+     sp_head::fill_field_definition() calls this function.
+   */
+-  if (!default_value && unireg_check == Field::NONE && (flags & NOT_NULL_FLAG))
++  if (!default_value && !has_default_function() && (flags & NOT_NULL_FLAG))
+   {
+     /*
+       TIMESTAMP columns get implicit DEFAULT value when
+diff --git a/sql/field.h b/sql/field.h
+index ae407e47..868a2445 100644
+--- a/sql/field.h
++++ b/sql/field.h
+@@ -5487,7 +5487,13 @@ class Column_definition: public Sql_alloc,
+ 
+   bool has_default_function() const
+   {
+-    return unireg_check != Field::NONE;
++    /*
++      TMYSQL_COMPRESSED is stored in unireg_check for compatibility reasons,
++      but it only marks a compressed column and does not imply any
++      implicit DEFAULT value.
++    */
++    return unireg_check != Field::NONE &&
++           unireg_check != Field::TMYSQL_COMPRESSED;
+   }
+ 
+   Field *make_field(TABLE_SHARE *share, MEM_ROOT *mem_root,

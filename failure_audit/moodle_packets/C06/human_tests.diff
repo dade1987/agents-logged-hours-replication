@@ -1,0 +1,97 @@
+diff --git a/public/admin/tool/task/tests/behat/run_task.feature b/public/admin/tool/task/tests/behat/run_task.feature
+index 003ec1266b1..3cc85eb64d3 100644
+--- a/public/admin/tool/task/tests/behat/run_task.feature
++++ b/public/admin/tool/task/tests/behat/run_task.feature
+@@ -53,6 +53,16 @@ Feature: Run scheduled tasks from the administration UI
+     When I reload the page
+     Then I should not see "Run ASAP" in the "Send new user passwords" "table_row"
+ 
++  Scenario: A running task shows its status instead of run actions
++    Given the scheduled task "\core\task\send_new_user_passwords_task" has a next run time in the future
++    And the following "tool_task > scheduled tasks" exist:
++      | classname                               | seconds | hostname     | pid  |
++      | \core\task\send_new_user_passwords_task | 60      | c69335460f7f | 1914 |
++    When I reload the page
++    Then I should see "Running" in the "Send new user passwords" "table_row"
++    And I should not see "Run now" in the "Send new user passwords" "table_row"
++    And I should not see "Run ASAP" in the "Send new user passwords" "table_row"
++
+   @javascript
+   Scenario: Confirming Run ASAP schedules the task and shows a success message
+     Given the scheduled task "\core\task\send_new_user_passwords_task" has a next run time in the future
+@@ -63,6 +73,18 @@ Feature: Run scheduled tasks from the administration UI
+     And I click on "Run ASAP" "button" in the ".modal-dialog" "css_element"
+     And I should see "has been scheduled to run ASAP"
+ 
++  @javascript
++  Scenario: Run ASAP is rejected if the task starts after the page loads
++    Given the scheduled task "\core\task\send_new_user_passwords_task" has a next run time in the future
++    When I reload the page
++    And I click on "Run ASAP" "link" in the "Send new user passwords" "table_row"
++    And the following "tool_task > scheduled tasks" exist:
++      | classname                               | seconds | hostname     | pid  |
++      | \core\task\send_new_user_passwords_task | 60      | c69335460f7f | 1914 |
++    And I click on "Run ASAP" "button" in the "Run ASAP" "dialogue"
++    Then I should see "is already running and cannot be scheduled to run ASAP"
++    But I should not see "has been scheduled to run ASAP"
++
+   @javascript
+   Scenario: Cancelling Run ASAP returns to the scheduled tasks list without changes
+     Given the scheduled task "\core\task\send_new_user_passwords_task" has a next run time in the future
+diff --git a/public/lib/tests/task/manager_test.php b/public/lib/tests/task/manager_test.php
+index 7e28d285776..f9caf2f25b5 100644
+--- a/public/lib/tests/task/manager_test.php
++++ b/public/lib/tests/task/manager_test.php
+@@ -696,10 +696,51 @@ final class manager_test extends \advanced_testcase {
+         $next = \core\task\manager::get_next_scheduled_task($clock->time() + 10);
+         $this->assertNull($next);
+ 
+-        manager::set_scheduled_task_nextruntime($first, $clock->time() + 20);
++        $this->assertTrue(manager::set_scheduled_task_nextruntime($first, $clock->time() + 20));
+ 
+         $next = \core\task\manager::get_next_scheduled_task($clock->time() + 30);
+         $this->assertNotNull($next);
+         manager::scheduled_task_complete($next);
+     }
++
++    /**
++     * Test that a running task cannot have its next run time changed.
++     */
++    public function test_set_scheduled_task_nextruntime_rejects_running_task(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $clock = $this->mock_clock_with_frozen();
++        set_config('lock_factory', '\core\lock\db_record_lock_factory');
++
++        // Disable all the tasks, so we can insert our own and be sure it is the only one being run.
++        $DB->set_field('task_scheduled', 'disabled', 1);
++
++        $task = new scheduled_test_task();
++        $originalnextruntime = $clock->time() + HOURSECS;
++        $task->set_next_run_time($originalnextruntime);
++        $classname = manager::get_canonical_class_name($task);
++        $DB->insert_record('task_scheduled', manager::record_from_scheduled_task($task));
++
++        // Reject the change when the task has running metadata, even if its execution lock has gone stale.
++        $DB->set_field('task_scheduled', 'timestarted', $clock->time(), ['classname' => $classname]);
++        $this->assertFalse(manager::set_scheduled_task_nextruntime($task, $clock->time() - HOURSECS));
++        $DB->set_field('task_scheduled', 'timestarted', null, ['classname' => $classname]);
++
++        // Also reject the change during the window after the execution lock is acquired but before metadata is recorded.
++        $lockfactory = \core\lock\lock_config::get_lock_factory('cron');
++        $lock = $lockfactory->get_lock($classname, 10);
++        $this->assertNotFalse($lock);
++        try {
++            $result = manager::set_scheduled_task_nextruntime($task, $clock->time() - HOURSECS);
++        } finally {
++            $lock->release();
++        }
++
++        $this->assertFalse($result);
++        $this->assertSame(
++            $originalnextruntime,
++            (int)$DB->get_field('task_scheduled', 'nextruntime', ['classname' => $classname]),
++        );
++    }
+ }

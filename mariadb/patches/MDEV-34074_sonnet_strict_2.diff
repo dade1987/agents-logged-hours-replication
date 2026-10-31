@@ -1,0 +1,36 @@
+diff --git a/plugin/server_audit/server_audit.c b/plugin/server_audit/server_audit.c
+index 5d37186a..d20a7ebf 100644
+--- a/plugin/server_audit/server_audit.c
++++ b/plugin/server_audit/server_audit.c
+@@ -839,7 +839,7 @@ static struct connection_info *get_loc_info(MYSQL_THD thd)
+   return (struct connection_info *) THDVAR(thd, loc_info);
+   */
+   struct connection_info *ci= (struct connection_info *) THDVAR(thd, loc_info);
+-  if ((size_t) ci->user_length > sizeof(ci->user))
++  if (ci && (size_t) ci->user_length > sizeof(ci->user))
+   {
+     ci->user_length= 0;
+     ci->host_length= 0;
+@@ -2073,6 +2073,13 @@ void auditing(MYSQL_THD thd, unsigned int event_class, const void *ev)
+     cn= get_loc_info(thd);
+   }
+ 
++  /*
++    The thread local variable can be NULL if the plugin was installed
++    while this THD was already running (its THDVARs aren't allocated yet).
++  */
++  if (!cn)
++    return;
++
+   update_connection_info(thd, cn, event_class, ev, &after_action);
+ 
+   if (!logging)
+@@ -2631,7 +2638,7 @@ static void log_current_query(MYSQL_THD thd)
+   if (!thd)
+     return;
+   cn= get_loc_info(thd);
+-  if (!ci_needs_setup(cn) && cn->query_length)
++  if (cn && !ci_needs_setup(cn) && cn->query_length)
+   {
+     cn->log_always= 1;
+     log_statement_ex(cn, cn->query_time, thd_get_thread_id(thd),

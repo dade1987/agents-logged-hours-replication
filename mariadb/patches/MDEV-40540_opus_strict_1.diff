@@ -1,0 +1,78 @@
+diff --git a/mysql-test/main/lotofstack.result b/mysql-test/main/lotofstack.result
+index 6f776eb6..9598727e 100644
+--- a/mysql-test/main/lotofstack.result
++++ b/mysql-test/main/lotofstack.result
+@@ -103,4 +103,14 @@ drop table t3|
+ # MDEV-40409 ST_GeomFromText stack overrun on deeply nested GeometryCollection
+ #
+ SELECT ST_GeomFromText(CONCAT(REPEAT('GEOMETRYCOLLECTION(',5000),'POINT(1 1)',REPEAT(')',5000)));
++#
++# MDEV-40540 ST_GeomFromWKB stack overrun on deeply nested GeometryCollection
++#
++set @a=concat(0x0107000000, repeat(0x010000000107000000, 120000), 0x00000000);
++SELECT ST_GeomFromWKB(@a);
++SELECT ST_AsText(ST_GeomFromWKB(@a));
++create table t1 (g geometry);
++insert into t1 values (concat(0x00000000, @a));
++ERROR HY000: Thread stack overrun:  'used bytes' used of a 'available' byte stack, and 'X' bytes needed. Consider increasing the thread_stack system variable.
++drop table t1;
+ # End of 10.6 tests
+diff --git a/mysql-test/main/lotofstack.test b/mysql-test/main/lotofstack.test
+index 10b3e762..f061c4e8 100644
+--- a/mysql-test/main/lotofstack.test
++++ b/mysql-test/main/lotofstack.test
+@@ -140,4 +140,20 @@ delimiter ;|
+ SELECT ST_GeomFromText(CONCAT(REPEAT('GEOMETRYCOLLECTION(',5000),'POINT(1 1)',REPEAT(')',5000)));
+ --enable_result_log
+ 
++--echo #
++--echo # MDEV-40540 ST_GeomFromWKB stack overrun on deeply nested GeometryCollection
++--echo #
++set @a=concat(0x0107000000, repeat(0x010000000107000000, 120000), 0x00000000);
++--disable_result_log
++--error ER_STACK_OVERRUN_NEED_MORE
++SELECT ST_GeomFromWKB(@a);
++--error ER_STACK_OVERRUN_NEED_MORE
++SELECT ST_AsText(ST_GeomFromWKB(@a));
++--enable_result_log
++create table t1 (g geometry);
++--replace_regex /overrun:  [0-9]* bytes used of a [0-9]* byte stack, and [0-9]* bytes needed/overrun:  'used bytes' used of a 'available' byte stack, and 'X' bytes needed/
++--error ER_STACK_OVERRUN_NEED_MORE
++insert into t1 values (concat(0x00000000, @a));
++drop table t1;
++
+ --echo # End of 10.6 tests
+diff --git a/sql/spatial.cc b/sql/spatial.cc
+index 20b8a551..d6cf08bf 100644
+--- a/sql/spatial.cc
++++ b/sql/spatial.cc
+@@ -3270,6 +3270,9 @@ uint32 Gis_geometry_collection::get_data_size() const
+   Geometry_buffer buffer;
+   Geometry *geom;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, (uchar*) &buffer))
++    return GET_SIZE_ERROR;
++
+   if (no_data(data, 4))
+     return GET_SIZE_ERROR;
+   n_objects= uint4korr(data);
+@@ -3402,6 +3405,9 @@ uint Gis_geometry_collection::init_from_wkb(const char *wkb, uint len,
+   uint32 n_geom;
+   const char *wkb_orig= wkb;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, (uchar*) &n_geom))
++    return 0;
++
+   if (len < 4)
+     return 0;
+   n_geom= wkb_get_uint(wkb, bo);
+@@ -3445,6 +3451,9 @@ bool Gis_geometry_collection::init_from_json(json_engine_t *je, bool er_on_3D,
+   Geometry_buffer buffer;
+   Geometry *g;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, (uchar*) &buffer))
++    return TRUE;
++
+   if (json_read_value(je))
+     return TRUE;
+ 

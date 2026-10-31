@@ -1,0 +1,55 @@
+# Performance regression after implementing MDL-60912
+
+MDL-60912 (integrated in 5.0.7 / 5.1.4 / main) changed \core_completion\progress::get_course_progress_percentage() to call the new completion_info::get_user_activities_with_completion() instead of the lightweight get_activities().
+
+
+For every course module with completion enabled, get_user_activities_with_completion() now constructs a \core_availability\info_module and calls filter_user_list(), which in turn calls capability_checker::get_users_by_capability('moodle/course:ignoreavailabilityrestrictions') on the module context.
+
+
+This availability + capability resolution runs per module, per course, per request. On pages that summarise many courses via course_summary_exporter — Dashboard, Calendar block, Timeline block, Starred courses, My overview — the cost multiplies (courses × completion-enabled modules × capability resolution) and produces a noticeable performance regression compared with 5.0.6. The expensive work is also repeated because get_course_progress_percentage() is called multiple times per request for the same (course, user) pair (e.g. calendar/classes/external/event_exporter_base.php instantiates a new course_summary_exporter per event).
+
+
++*_This was anticipated during the MDL-60912 review (performance concern was raised in the comments) but no follow-up optimisation was integrated._*+
+
+
+
+*Steps to reproduce*
+
+# Site with completion tracking enabled.
+# A user enrolled in many courses, each with several completion-tracked activities (with few or no availability/group restrictions — the common case).
+# Load the Dashboard (or a page with the Calendar / Timeline / Starred courses blocks).
+# Profile the request (e.g. $CFG->perfdebug = 15, or an APM/DB-query profiler).
+
+Expected result
+Course progress percentages are calculated with overhead comparable to 5.0.6; unrestricted activities do not incur per-module availability/capability resolution.
+
+
+*Actual result*
+Each completion-tracked module triggers an info_module + get_users_by_capability() resolution, repeated across courses and repeated per call within the same request, measurably increasing DB load and page render time.
+
+
+*Affected code*
+
+* completion/classes/progress.php — get_course_progress_percentage()
+* lib/completionlib.php — get_user_activities_with_completion() (introduced by MDL-51447, used by MDL-60912)
+* Callers via core_course\external\course_summary_exporter (Dashboard, block_calendar_*, block_timeline, block_starredcourses, block_myoverview, enrol/externallib.php, report builder completion formatter)
+
+
+
+*Proposed solution*
+Two complementary, behaviour-preserving optimisations (correctness of MDL-60912 fully retained):
+
+# Fast path in get_user_activities_with_completion() — when a module has no availability rule (empty($cm->availability)), is not in separate-groups mode ($cm->groupmode !== SEPARATEGROUPS), and has no grouping restriction (empty($cm->groupingid)), the module is accessible to every enrolled user. Skip the info_module + capability_checker work and count it directly. This is mathematically equivalent to the existing slow path for unrestricted modules (the overwhelming majority). Modules that actually carry a restriction still take the full slow path, so hidden/unavailable/group-restricted activities continue to be excluded correctly.
+# Per-request memoisation in get_course_progress_percentage() — cache the computed percentage per (course, user) in a MODE_REQUEST cache so repeated calls within one request (multiple exporters) reuse the result. Cheap pre-checks (is_enabled(), is_tracked_user()) stay outside the cache so capability/setting changes are always honoured. The cache key embeds $course->cacherev (so structural / visibility / availability / grouping changes invalidate it automatically), and the cache is purged in completion_info::internal_set_data() so completion-state changes within the same request are reflected.
+No DB schema change, no version.php bump, no new cache definition, no new events/observers required.
+
+Steps to reproduce
+
+# Site with completion tracking enabled.
+# A user enrolled in many courses, each with several completion-tracked activities (with few or no availability/group restrictions — the common case).
+# Load the Dashboard (or a page with the Calendar / Timeline / Starred courses blocks).
+# Profile the request (e.g. $CFG->perfdebug = 15, or an APM/DB-query profiler).
+
+
+
+*At Moxis, we have already implemented a fix and it works. It keeps the fix from MDL-60912 but skips unnecessary steps and caches where relevant. I have added the patch for this issue as an attachment.*

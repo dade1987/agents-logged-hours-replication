@@ -1,0 +1,22 @@
+diff --git a/sql/item_sum.cc b/sql/item_sum.cc
+index 1c2789f8..f745da19 100644
+--- a/sql/item_sum.cc
++++ b/sql/item_sum.cc
+@@ -2654,7 +2654,7 @@ bool Item_sum_bit::clear_as_window()
+ bool Item_sum_bit::remove_as_window(ulonglong value)
+ {
+   DBUG_ASSERT(as_window_function);
+-  if (num_values_added == 0)
++  if (num_values_added == 0 || args[0]->null_value)
+     return 0; // Nothing to remove.
+ 
+   for (int i= 0; i < NUM_BIT_COUNTERS; i++)
+@@ -2714,7 +2714,7 @@ void Item_sum_xor::set_bits_from_counters()
+   ulonglong value= 0;
+   for (int i= 0; i < NUM_BIT_COUNTERS; i++)
+   {
+-    value|= (bit_counters[i] % 2) ? (1 << i) : 0;
++    value|= (bit_counters[i] % 2) ? (1ULL << i) : 0ULL;
+   }
+   bits= value ^ reset_bits;
+ }

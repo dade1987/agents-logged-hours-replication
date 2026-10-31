@@ -1,0 +1,107 @@
+diff --git a/plugin/type_mysql_json/mysql_json.cc b/plugin/type_mysql_json/mysql_json.cc
+index c28a403a..31940055 100644
+--- a/plugin/type_mysql_json/mysql_json.cc
++++ b/plugin/type_mysql_json/mysql_json.cc
+@@ -281,6 +281,10 @@ static bool parse_mysql_scalar(String *buffer, size_t value_json_type,
+   }
+   case JSONB_TYPE_OPAQUE:
+   {
++    /* At least the one byte field type must be present. */
++    if (len < 1)
++      return true;
++
+     /* The field_type maps directly to enum_field_types. */
+     const uchar type_value= *data;
+     const enum_field_types field_type= static_cast<enum_field_types>(type_value);
+@@ -288,8 +292,9 @@ static bool parse_mysql_scalar(String *buffer, size_t value_json_type,
+     size_t UNINIT_VAR(blob_length), length_bytes;
+     const uchar *blob_start;
+ 
+-    if (read_variable_length(data + 1, len, &blob_length, &length_bytes) ||
+-        len < length_bytes + blob_length)
++    /* Everything after the field type byte is available for the length. */
++    if (read_variable_length(data + 1, len - 1, &blob_length, &length_bytes) ||
++        len - 1 < length_bytes + blob_length)
+       return true;
+     blob_start= data + length_bytes + 1;
+ 
+@@ -309,6 +314,11 @@ static bool parse_mysql_scalar(String *buffer, size_t value_json_type,
+       const int precision= blob_start[0];
+       const int scale= blob_start[1];
+ 
++      /* Reject precision/scale values that a corrupted document may carry. */
++      if (precision > DECIMAL_MAX_PRECISION || precision < 1 ||
++          scale > DECIMAL_MAX_SCALE || scale > precision)
++        return true;
++
+       my_decimal d;
+ 
+       /* The decimal value is encoded after the two prec/scale bytes. */
+@@ -366,6 +376,10 @@ static bool parse_mysql_scalar_or_value(String *buffer, const uchar *data,
+                                         size_t len, size_t value_type_offset,
+                                         bool large, size_t depth)
+ {
++  /* The type byte of the value must lie within the buffer. */
++  if (value_type_offset >= len)
++    return true;
++
+   /* Get the type of the value stored at the key. */
+   const JSONB_TYPES value_type=
+     static_cast<JSONB_TYPES>(data[value_type_offset]);
+@@ -373,16 +387,25 @@ static bool parse_mysql_scalar_or_value(String *buffer, const uchar *data,
+   if (type_is_stored_inline(value_type, large))
+   {
+     const size_t value_start = value_type_offset + 1;
++    if (value_start > len)
++      return true;
+     if (parse_mysql_scalar(buffer, value_type, data + value_start,
+                            len - value_start))
+       return true;
+   }
+   else
+   {
++    /* The offset field itself must lie within the buffer. */
++    const size_t offset_size= large ? LARGE_OFFSET_SIZE : SMALL_OFFSET_SIZE;
++    if (value_type_offset + 1 > len || len - (value_type_offset + 1) < offset_size)
++      return true;
++
+     /* The offset to where the value is stored is relative to the start
+        of the Object / Array */
+     const size_t value_start= read_offset_or_size(
+                                       data + value_type_offset + 1, large);
++    if (value_start >= len)
++      return true;
+     if (parse_mysql_json_value(buffer, value_type, data + value_start,
+                                len - value_start, depth))
+       return true;
+@@ -419,7 +442,18 @@ static bool parse_array_or_object(String *buffer, const uchar *data, size_t len,
+   const size_t bytes= read_offset_or_size(data + offset_size, large);
+ 
+   /* The value can't have more bytes than what's available in the buffer. */
+-  if (bytes > len)
++  if (bytes > len || bytes < 2 * offset_size)
++    return true;
++
++  /*
++    The whole header (counts plus key and value entries) must fit inside
++    the number of bytes claimed by this object / array. Check it up front so
++    that the per-element reads below stay in bounds. Divide rather than
++    multiply to avoid overflow on a corrupted element_count.
++  */
++  const size_t per_element= (handle_as_object ? key_size(large) : 0) +
++                            value_size(large);
++  if (element_count > (bytes - 2 * offset_size) / per_element)
+     return true;
+ 
+   if (buffer->append(handle_as_object ? '{' : '['))
+@@ -448,6 +482,10 @@ static bool parse_array_or_object(String *buffer, const uchar *data, size_t len,
+       const size_t key_len= read_offset_or_size(
+                                    data + key_offset + offset_size, false);
+ 
++      /* The key data must lie within this object's bytes. */
++      if (key_start > bytes || key_len > bytes - key_start)
++        return true;
++
+       const size_t value_type_offset=(2 * offset_size +
+                                       element_count * key_size(large) +
+                                       i * value_size(large));

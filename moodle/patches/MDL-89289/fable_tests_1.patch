@@ -1,0 +1,589 @@
+diff --git a/.upgradenotes/MDL-89289-2026102600000000.yml b/.upgradenotes/MDL-89289-2026102600000000.yml
+new file mode 100644
+index 00000000000..212f3a04deb
+--- /dev/null
++++ b/.upgradenotes/MDL-89289-2026102600000000.yml
+@@ -0,0 +1,13 @@
++issueNumber: MDL-89289
++notes:
++  core:
++    - message: >-
++        A new ad-hoc task `\core\task\uninstall_plugin_task` and the helper
++        `upgrade_queue_uninstall_plugin_task()` in `lib/db/upgradelib.php`
++        have been added. Core plugins which were removed from Moodle (for
++        example `mod_chat`, `mod_survey` and `editor_atto`) are no longer
++        uninstalled synchronously during the core upgrade. Instead, the
++        upgrade queues an ad-hoc task for each plugin which is no longer
++        present on disk, and the uninstallation is performed by cron once
++        the upgrade has completed.
++      type: changed
+diff --git a/public/lang/en/admin.php b/public/lang/en/admin.php
+index c59f0ae188e..71f0ca97d10 100644
+--- a/public/lang/en/admin.php
++++ b/public/lang/en/admin.php
+@@ -1535,6 +1535,7 @@ $string['unattendedoperation'] = 'Unattended operation';
+ $string['unbookmarkthispage'] = 'Unbookmark this page';
+ $string['unicoderequired'] = 'All data must be stored in Unicode format (UTF-8). For new installations, the database must have UTF-8 as default character set. If you are upgrading, you need to follow the UTF-8 migration process.';
+ $string['uninstallplugin'] = 'Uninstall';
++$string['uninstallplugintask'] = 'Uninstall plugin removed from core';
+ $string['unlockaccount'] = 'Unlock account';
+ $string['unoconvwarning'] = 'The version of unoconv you have installed is not supported.';
+ $string['unsupported'] = 'Unsupported';
+diff --git a/public/lib/classes/task/uninstall_plugin_task.php b/public/lib/classes/task/uninstall_plugin_task.php
+new file mode 100644
+index 00000000000..9f84e432db9
+--- /dev/null
++++ b/public/lib/classes/task/uninstall_plugin_task.php
+@@ -0,0 +1,145 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\task;
++
++use core_component;
++use core_plugin_manager;
++
++/**
++ * Ad-hoc task that uninstalls a plugin which is no longer present on disk.
++ *
++ * Plugins which have been removed from core are uninstalled as part of the core upgrade. Uninstalling a plugin can be
++ * a lengthy process (for example, removing every activity instance of a removed module from every course), so instead
++ * of running synchronously during the upgrade, the uninstallation is queued as an instance of this ad-hoc task and
++ * performed after the upgrade has completed.
++ *
++ * The task expects the following custom data:
++ *  - plugintype: the type of the plugin to uninstall, e.g. 'mod'.
++ *  - pluginname: the name of the plugin to uninstall, e.g. 'survey'.
++ *  - subplugintypes: (optional) a list of subplugin types declared by the plugin being removed. Because the plugin is
++ *    no longer on disk its subplugin types are unknown to core, so all installed subplugins of these types are
++ *    uninstalled first.
++ *
++ * If the plugin is found to be present on disk when the task runs, nothing is uninstalled.
++ *
++ * @package    core
++ * @copyright  2026 onwards Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class uninstall_plugin_task extends adhoc_task {
++    /**
++     * Create a new instance of the task for the given plugin.
++     *
++     * @param string $plugintype the plugin type, e.g. 'mod'
++     * @param string $pluginname the plugin name, e.g. 'survey'
++     * @param string[] $subplugintypes subplugin types belonging to the plugin which must be uninstalled first
++     * @return self
++     */
++    public static function instance(string $plugintype, string $pluginname, array $subplugintypes = []): self {
++        $task = new self();
++        $task->set_component('core');
++        $task->set_custom_data([
++            'plugintype' => $plugintype,
++            'pluginname' => $pluginname,
++            'subplugintypes' => array_values($subplugintypes),
++        ]);
++        return $task;
++    }
++
++    #[\Override]
++    public function get_name() {
++        return get_string('uninstallplugintask', 'admin');
++    }
++
++    #[\Override]
++    public function execute(): void {
++        global $CFG;
++        require_once($CFG->libdir . '/adminlib.php');
++        require_once($CFG->libdir . '/upgradelib.php');
++        require_once($CFG->dirroot . '/course/lib.php');
++
++        $customdata = $this->get_custom_data();
++        $plugintype = (string) ($customdata->plugintype ?? '');
++        $pluginname = (string) ($customdata->pluginname ?? '');
++        $subplugintypes = (array) ($customdata->subplugintypes ?? []);
++
++        if ($plugintype === '' || $pluginname === '') {
++            mtrace('Invalid plugin type or name provided, nothing to uninstall.');
++            return;
++        }
++
++        $component = "{$plugintype}_{$pluginname}";
++
++        if (self::plugin_exists_on_disk($plugintype, $pluginname)) {
++            mtrace("Plugin {$component} is present on disk, it will not be uninstalled.");
++            return;
++        }
++
++        // Uninstall any orphaned subplugins first. These are no longer known to core because their parent plugin has
++        // been removed from disk, so the standard uninstall process of the parent would not remove them.
++        foreach ($subplugintypes as $subplugintype) {
++            $subplugintype = (string) $subplugintype;
++            if ($subplugintype === '') {
++                continue;
++            }
++            core_plugin_manager::reset_caches();
++            $subplugins = core_plugin_manager::instance()->get_plugins_of_type($subplugintype, true);
++            foreach (array_keys($subplugins) as $subpluginname) {
++                if (self::plugin_exists_on_disk($subplugintype, $subpluginname)) {
++                    mtrace("Subplugin {$subplugintype}_{$subpluginname} is present on disk, it will not be uninstalled.");
++                    continue;
++                }
++                mtrace("Uninstalling subplugin {$subplugintype}_{$subpluginname}.");
++                uninstall_plugin($subplugintype, $subpluginname);
++            }
++        }
++
++        core_plugin_manager::reset_caches();
++        if (!self::plugin_is_installed($plugintype, $pluginname)) {
++            mtrace("Plugin {$component} is not installed, nothing to uninstall.");
++            return;
++        }
++
++        mtrace("Uninstalling plugin {$component}.");
++        uninstall_plugin($plugintype, $pluginname);
++        mtrace("Plugin {$component} has been uninstalled.");
++    }
++
++    /**
++     * Check whether the given plugin is present on disk.
++     *
++     * @param string $plugintype
++     * @param string $pluginname
++     * @return bool
++     */
++    protected static function plugin_exists_on_disk(string $plugintype, string $pluginname): bool {
++        $directory = core_component::get_plugin_directory($plugintype, $pluginname);
++        return $directory !== null && file_exists("{$directory}/version.php");
++    }
++
++    /**
++     * Check whether the given plugin is recorded as installed in the database.
++     *
++     * @param string $plugintype
++     * @param string $pluginname
++     * @return bool
++     */
++    protected static function plugin_is_installed(string $plugintype, string $pluginname): bool {
++        $installed = core_plugin_manager::instance()->get_installed_plugins($plugintype);
++        return array_key_exists($pluginname, $installed);
++    }
++}
+diff --git a/public/lib/db/upgrade.php b/public/lib/db/upgrade.php
+index 480f7d2f671..118daf0d181 100644
+--- a/public/lib/db/upgrade.php
++++ b/public/lib/db/upgrade.php
+@@ -698,7 +698,7 @@ function xmldb_main_upgrade($oldversion) {
+     // Uninstall auth_cas and remove dependencies.
+     if ($oldversion < 2025030500.00) {
+         if (!file_exists($CFG->dirroot . "/auth/cas/version.php")) {
+-            uninstall_plugin('auth', 'cas');
++            upgrade_queue_uninstall_plugin_task('auth', 'cas');
+ 
+             // Remove the sensiblesettings config for auth_cas.
+             $sensiblesettingsraw = explode(',', get_config('adminpresets', 'sensiblesettings'));
+@@ -718,17 +718,10 @@ function xmldb_main_upgrade($oldversion) {
+     if ($oldversion < 2025030500.01) {
+         // If atto is no longer present, remove it.
+         if (!file_exists("{$CFG->dirroot}/lib/editor/atto/version.php")) {
+-            // Remove each of the subplugins first. These are no longer on disk so the standard `uninstall_plugin` approach
+-            // on atto itself will not remove them.
+-            $plugins = array_keys(core_plugin_manager::instance()->get_plugins_of_type('atto'));
+-
+-            // Now remove each.
+-            foreach ($plugins as $pluginname) {
+-                uninstall_plugin('atto', $pluginname);
+-            }
+-
+-            // Finally uninstall the actual plugin.
+-            uninstall_plugin('editor', 'atto');
++            // Queue the uninstallation of atto to run after the upgrade. The atto subplugins are no longer on disk so
++            // the standard `uninstall_plugin` approach on atto itself will not remove them, so they are passed to the
++            // task to be removed first.
++            upgrade_queue_uninstall_plugin_task('editor', 'atto', ['atto']);
+         }
+ 
+         upgrade_main_savepoint(true, 2025030500.01);
+@@ -737,7 +730,7 @@ function xmldb_main_upgrade($oldversion) {
+     // Remove portfolio_mahara.
+     if ($oldversion < 2025030600.02) {
+         if (!file_exists($CFG->dirroot . "/portfolio/mahara/version.php")) {
+-            uninstall_plugin('portfolio', 'mahara');
++            upgrade_queue_uninstall_plugin_task('portfolio', 'mahara');
+         }
+         // Main savepoint reached.
+         upgrade_main_savepoint(true, 2025030600.02);
+@@ -746,7 +739,7 @@ function xmldb_main_upgrade($oldversion) {
+     // Remove enrol_mnet.
+     if ($oldversion < 2025030600.03) {
+         if (!file_exists($CFG->dirroot . "/enrol/mnet/version.php")) {
+-            uninstall_plugin('enrol', 'mnet');
++            upgrade_queue_uninstall_plugin_task('enrol', 'mnet');
+         }
+         // Main savepoint reached.
+         upgrade_main_savepoint(true, 2025030600.03);
+@@ -755,7 +748,7 @@ function xmldb_main_upgrade($oldversion) {
+     // Remove block_mnet_hosts.
+     if ($oldversion < 2025030600.04) {
+         if (!file_exists($CFG->dirroot . "/blocks/mnet_hosts/version.php")) {
+-            uninstall_plugin('block', 'mnet_hosts');
++            upgrade_queue_uninstall_plugin_task('block', 'mnet_hosts');
+ 
+             // Delete all the admin preset plugin states concerning mnet_hosts in adminpresets_plug table.
+             $DB->delete_records('adminpresets_plug', ['name' => 'mnet_hosts']);
+@@ -768,7 +761,7 @@ function xmldb_main_upgrade($oldversion) {
+     // Remove auth_mnet.
+     if ($oldversion < 2025030600.05) {
+         if (!file_exists($CFG->dirroot . "/auth/mnet/version.php")) {
+-            uninstall_plugin('auth', 'mnet');
++            upgrade_queue_uninstall_plugin_task('auth', 'mnet');
+         }
+         // Main savepoint reached.
+         upgrade_main_savepoint(true, 2025030600.05);
+@@ -777,8 +770,8 @@ function xmldb_main_upgrade($oldversion) {
+     if ($oldversion < 2025030600.06) {
+         // If mlbackend_php is no longer present, remove it.
+         if (!file_exists($CFG->dirroot . '/lib/mlbackend/php/version.php')) {
+-            // Clean config.
+-            uninstall_plugin('mlbackend', 'php');
++            // Queue the uninstallation to run after the upgrade.
++            upgrade_queue_uninstall_plugin_task('mlbackend', 'php');
+ 
+             // Change the processor if mlbackend_php is set.
+             if (get_config('analytics', 'predictionsprocessor') === '\mlbackend_php\processor') {
+@@ -817,7 +810,7 @@ function xmldb_main_upgrade($oldversion) {
+     // Remove mnetservice_enrol.
+     if ($oldversion < 2025030600.08) {
+         if (!file_exists($CFG->dirroot . "/mnet/service/enrol/version.php")) {
+-            uninstall_plugin('mnetservice', 'enrol');
++            upgrade_queue_uninstall_plugin_task('mnetservice', 'enrol');
+         }
+         // Main savepoint reached.
+         upgrade_main_savepoint(true, 2025030600.08);
+@@ -882,7 +875,7 @@ function xmldb_main_upgrade($oldversion) {
+         $sqlparams = [];
+ 
+         if (!file_exists($CFG->dirroot . "/mod/survey/version.php")) {
+-            uninstall_plugin('mod', 'survey');
++            upgrade_queue_uninstall_plugin_task('mod', 'survey');
+             $DB->delete_records('adminpresets_plug', ['plugin' => 'mod', 'name' => 'survey']);
+             $indicatorstoremove['survey'] = [
+                 '\mod_survey\analytics\indicator\cognitive_depth',
+@@ -892,7 +885,7 @@ function xmldb_main_upgrade($oldversion) {
+             $sqllikes['survey'] = $DB->sql_like('indicators', ':surveypluginname');
+         }
+         if (!file_exists($CFG->dirroot . "/mod/chat/version.php")) {
+-            uninstall_plugin('mod', 'chat');
++            upgrade_queue_uninstall_plugin_task('mod', 'chat');
+             $DB->delete_records('adminpresets_plug', ['plugin' => 'mod', 'name' => 'chat']);
+             $indicatorstoremove['chat'] = [
+                 '\mod_chat\analytics\indicator\cognitive_depth',
+@@ -1249,7 +1242,7 @@ function xmldb_main_upgrade($oldversion) {
+         // Remove section_links block.
+ 
+         if (!file_exists($CFG->dirroot . "/blocks/section_links/version.php")) {
+-            uninstall_plugin('block', 'section_links');
++            upgrade_queue_uninstall_plugin_task('block', 'section_links');
+             // Delete all the admin preset plugin references to section_links.
+             $DB->delete_records('adminpresets_plug', ['plugin' => 'block', 'name' => 'section_links']);
+             // Remove the section_links block from the unaddableblocks setting.
+@@ -1683,8 +1676,8 @@ function xmldb_main_upgrade($oldversion) {
+                 $lastid = end($questionids);
+             }
+         } while ($recordcount === $batchsize);
+-        // Finally, uninstall qtype_random as it's been removed.
+-        uninstall_plugin('qtype', 'random');
++        // Finally, queue the uninstallation of qtype_random as it's been removed.
++        upgrade_queue_uninstall_plugin_task('qtype', 'random');
+         upgrade_main_savepoint(true, 2026010900.02);
+     }
+ 
+@@ -1692,7 +1685,7 @@ function xmldb_main_upgrade($oldversion) {
+         // Remove activity_modules block.
+ 
+         if (!file_exists($CFG->dirroot . "/blocks/activity_modules/version.php")) {
+-            uninstall_plugin('block', 'activity_modules');
++            upgrade_queue_uninstall_plugin_task('block', 'activity_modules');
+             // Delete all the admin preset plugin references to activity_modules.
+             $DB->delete_records('adminpresets_plug', ['plugin' => 'block', 'name' => 'activity_modules']);
+         }
+@@ -1856,7 +1849,7 @@ function xmldb_main_upgrade($oldversion) {
+             }
+ 
+             // Uninstall the plugin.
+-            uninstall_plugin('tool', 'moodlenet');
++            upgrade_queue_uninstall_plugin_task('tool', 'moodlenet');
+         }
+ 
+         // Main savepoint reached.
+@@ -1866,8 +1859,8 @@ function xmldb_main_upgrade($oldversion) {
+     if ($oldversion < 2026032700.01) {
+         // If h5plib_v127 is no longer present, remove it.
+         if (!file_exists($CFG->dirroot . '/h5p/h5plib/v127/version.php')) {
+-            // Clean config.
+-            uninstall_plugin('h5plib', 'v127');
++            // Queue the uninstallation to run after the upgrade.
++            upgrade_queue_uninstall_plugin_task('h5plib', 'v127');
+         }
+ 
+         // If h5plib_v128 is present, set it as the default one.
+diff --git a/public/lib/db/upgradelib.php b/public/lib/db/upgradelib.php
+index f1f6d832bb2..03def6131d3 100644
+--- a/public/lib/db/upgradelib.php
++++ b/public/lib/db/upgradelib.php
+@@ -2114,6 +2114,38 @@ function upgrade_create_async_mimetype_upgrade_task(string $mimetype, array $ext
+     $DB->insert_record('task_adhoc', $record);
+ }
+ 
++/**
++ * Queues an ad-hoc task to uninstall a plugin which has been removed from core and is no longer present on disk.
++ *
++ * Uninstalling a plugin may take a very long time (for example, deleting every instance of a removed activity module
++ * from every course), so rather than running synchronously during the upgrade, the uninstallation is queued as an
++ * ad-hoc task to be performed once the upgrade has completed. This considerably reduces the time an upgrade takes.
++ *
++ * If the plugin is still present on disk when this is called, no task is queued and nothing is uninstalled.
++ *
++ * @param string $plugintype the plugin type, e.g. 'mod'
++ * @param string $pluginname the plugin name, e.g. 'survey'
++ * @param string[] $subplugintypes subplugin types declared by the removed plugin. As the plugin is no longer on disk
++ *      these are unknown to core, so any installed subplugins of these types are uninstalled by the task first.
++ * @return bool true if the task was queued, false if the plugin is still present on disk
++ */
++function upgrade_queue_uninstall_plugin_task(string $plugintype, string $pluginname, array $subplugintypes = []): bool {
++    global $CFG;
++    require_once($CFG->libdir . '/upgradelib.php');
++
++    $directory = core_component::get_plugin_directory($plugintype, $pluginname);
++    if ($directory !== null && file_exists("{$directory}/version.php")) {
++        // The plugin is still present on disk, so it must not be uninstalled.
++        return false;
++    }
++
++    $task = \core\task\uninstall_plugin_task::instance($plugintype, $pluginname, $subplugintypes);
++    \core\task\manager::queue_adhoc_task($task);
++    upgrade_log(UPGRADE_LOG_NORMAL, null, "Queued ad-hoc task to uninstall {$plugintype}_{$pluginname} after the upgrade.");
++
++    return true;
++}
++
+ /**
+  * Creates MoodleNet profile field and migrates data from user.moodlenetprofile.
+  */
+diff --git a/public/lib/tests/db/upgradelib_test.php b/public/lib/tests/db/upgradelib_test.php
+index b3f97c757ae..c4516cbdd22 100644
+--- a/public/lib/tests/db/upgradelib_test.php
++++ b/public/lib/tests/db/upgradelib_test.php
+@@ -573,4 +573,34 @@ final class upgradelib_test extends \advanced_testcase {
+         $this->assertEquals(expected: 'type/subtype', actual: $customdata->mimetype);
+         $this->assertEquals(expected: ['extension1', 'extension2'], actual: $customdata->extensions);
+     }
++
++    /**
++     * Ensure that the upgrade_queue_uninstall_plugin_task function performs as expected.
++     *
++     * @covers ::upgrade_queue_uninstall_plugin_task
++     */
++    public function test_upgrade_queue_uninstall_plugin_task(): void {
++        global $DB;
++        $this->resetAfterTest();
++        $clock = $this->mock_clock_with_frozen();
++
++        $conditions = ['component' => 'core', 'classname' => '\\core\\task\\uninstall_plugin_task'];
++
++        // A plugin which is present on disk must not be queued for uninstallation.
++        $this->assertFalse(upgrade_queue_uninstall_plugin_task('block', 'html'));
++        $this->assertEquals(0, $DB->count_records('task_adhoc', $conditions));
++
++        // A plugin which is not present on disk is queued for uninstallation.
++        $this->assertTrue(upgrade_queue_uninstall_plugin_task('editor', 'removededitor', ['removededitorsub']));
++        $record = $DB->get_record('task_adhoc', $conditions, '*', MUST_EXIST);
++
++        // Ensure that the task was created with correct next runtime.
++        $this->assertEquals(expected: $clock->time() - 1, actual: $record->nextruntime);
++
++        // Ensure that the task has the correct custom data.
++        $customdata = json_decode($record->customdata);
++        $this->assertEquals(expected: 'editor', actual: $customdata->plugintype);
++        $this->assertEquals(expected: 'removededitor', actual: $customdata->pluginname);
++        $this->assertEquals(expected: ['removededitorsub'], actual: $customdata->subplugintypes);
++    }
+ }
+diff --git a/public/lib/tests/task/uninstall_plugin_task_test.php b/public/lib/tests/task/uninstall_plugin_task_test.php
+new file mode 100644
+index 00000000000..837f13292d8
+--- /dev/null
++++ b/public/lib/tests/task/uninstall_plugin_task_test.php
+@@ -0,0 +1,161 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\task;
++
++/**
++ * Tests for the uninstall_plugin_task ad-hoc task.
++ *
++ * @package   core
++ * @category  test
++ * @copyright 2026 onwards Moodle Pty Ltd
++ * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ * @covers    \core\task\uninstall_plugin_task
++ */
++final class uninstall_plugin_task_test extends \advanced_testcase {
++    /**
++     * Test that the task instance is created with the expected custom data.
++     */
++    public function test_instance(): void {
++        $task = uninstall_plugin_task::instance('editor', 'atto', ['atto']);
++
++        $this->assertInstanceOf(uninstall_plugin_task::class, $task);
++        $this->assertEquals('core', $task->get_component());
++
++        $customdata = $task->get_custom_data();
++        $this->assertEquals('editor', $customdata->plugintype);
++        $this->assertEquals('atto', $customdata->pluginname);
++        $this->assertEquals(['atto'], $customdata->subplugintypes);
++
++        $task = uninstall_plugin_task::instance('mod', 'survey');
++        $this->assertEquals([], $task->get_custom_data()->subplugintypes);
++    }
++
++    /**
++     * Test that a plugin which is no longer present on disk is uninstalled by the task.
++     */
++    public function test_execute_uninstalls_missing_plugin(): void {
++        global $DB;
++        $this->resetAfterTest();
++
++        // Pretend that a block plugin which does not exist on disk is installed.
++        set_config('version', 2026010100, 'block_removedplugin');
++        set_config('somesetting', 'somevalue', 'block_removedplugin');
++        $DB->insert_record('block', (object) ['name' => 'removedplugin', 'cron' => 0, 'lastcron' => 0, 'visible' => 1]);
++
++        \core_plugin_manager::reset_caches();
++        $this->assertArrayHasKey('removedplugin', \core_plugin_manager::instance()->get_installed_plugins('block'));
++
++        $task = uninstall_plugin_task::instance('block', 'removedplugin');
++        manager::queue_adhoc_task($task);
++
++        $this->expectOutputRegex('/Plugin block_removedplugin has been uninstalled/');
++        $this->runAdhocTasks(uninstall_plugin_task::class);
++
++        \core_plugin_manager::reset_caches();
++        $this->assertArrayNotHasKey('removedplugin', \core_plugin_manager::instance()->get_installed_plugins('block'));
++        $this->assertFalse(get_config('block_removedplugin', 'version'));
++        $this->assertFalse(get_config('block_removedplugin', 'somesetting'));
++        $this->assertFalse($DB->record_exists('block', ['name' => 'removedplugin']));
++    }
++
++    /**
++     * Test that an activity module which is no longer present on disk is uninstalled, including its course modules.
++     */
++    public function test_execute_uninstalls_missing_module(): void {
++        global $DB;
++        $this->resetAfterTest();
++
++        // Pretend that an activity module which does not exist on disk is installed, with an instance in a course.
++        set_config('version', 2026010100, 'mod_removedmod');
++        $moduleid = $DB->insert_record('modules', (object) ['name' => 'removedmod', 'cron' => 0, 'lastcron' => 0, 'visible' => 1]);
++        $course = $this->getDataGenerator()->create_course();
++        $section = $DB->get_record('course_sections', ['course' => $course->id, 'section' => 0], '*', MUST_EXIST);
++        $cmid = $DB->insert_record('course_modules', (object) [
++            'course' => $course->id,
++            'module' => $moduleid,
++            'instance' => 1,
++            'section' => $section->id,
++            'added' => time(),
++        ]);
++        $DB->set_field('course_sections', 'sequence', (string) $cmid, ['id' => $section->id]);
++        \context_module::instance($cmid);
++
++        $task = uninstall_plugin_task::instance('mod', 'removedmod');
++        manager::queue_adhoc_task($task);
++
++        $this->expectOutputRegex('/Plugin mod_removedmod has been uninstalled/');
++        $this->runAdhocTasks(uninstall_plugin_task::class);
++
++        $this->assertFalse(get_config('mod_removedmod', 'version'));
++        $this->assertFalse($DB->record_exists('modules', ['name' => 'removedmod']));
++        $this->assertFalse($DB->record_exists('course_modules', ['id' => $cmid]));
++        $this->assertFalse($DB->record_exists('context', ['contextlevel' => CONTEXT_MODULE, 'instanceid' => $cmid]));
++        $this->assertEquals('', $DB->get_field('course_sections', 'sequence', ['id' => $section->id]));
++    }
++
++    /**
++     * Test that orphaned subplugins of a removed plugin are uninstalled along with it.
++     */
++    public function test_execute_uninstalls_orphaned_subplugins(): void {
++        $this->resetAfterTest();
++
++        // Pretend that a plugin with subplugins which no longer exists on disk is installed.
++        set_config('version', 2026010100, 'editor_removededitor');
++        set_config('version', 2026010100, 'removededitorsub_one');
++        set_config('version', 2026010100, 'removededitorsub_two');
++
++        $task = uninstall_plugin_task::instance('editor', 'removededitor', ['removededitorsub']);
++        manager::queue_adhoc_task($task);
++
++        $this->expectOutputRegex('/Plugin editor_removededitor has been uninstalled/');
++        $this->runAdhocTasks(uninstall_plugin_task::class);
++
++        $this->assertFalse(get_config('editor_removededitor', 'version'));
++        $this->assertFalse(get_config('removededitorsub_one', 'version'));
++        $this->assertFalse(get_config('removededitorsub_two', 'version'));
++    }
++
++    /**
++     * Test that a plugin which is present on disk is never uninstalled by the task.
++     */
++    public function test_execute_plugin_present_on_disk(): void {
++        $this->resetAfterTest();
++
++        $task = uninstall_plugin_task::instance('block', 'html');
++        manager::queue_adhoc_task($task);
++
++        $this->expectOutputRegex('/Plugin block_html is present on disk, it will not be uninstalled/');
++        $this->runAdhocTasks(uninstall_plugin_task::class);
++
++        \core_plugin_manager::reset_caches();
++        $this->assertArrayHasKey('html', \core_plugin_manager::instance()->get_installed_plugins('block'));
++        $this->assertNotFalse(get_config('block_html', 'version'));
++    }
++
++    /**
++     * Test that the task does nothing when the plugin is not installed.
++     */
++    public function test_execute_plugin_not_installed(): void {
++        $this->resetAfterTest();
++
++        $task = uninstall_plugin_task::instance('block', 'doesnotexist');
++        manager::queue_adhoc_task($task);
++
++        $this->expectOutputRegex('/Plugin block_doesnotexist is not installed, nothing to uninstall/');
++        $this->runAdhocTasks(uninstall_plugin_task::class);
++    }
++}

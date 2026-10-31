@@ -1,0 +1,62 @@
+diff --git a/public/lib/moodlelib.php b/public/lib/moodlelib.php
+index cb9b3a28389..6e5d0424566 100644
+--- a/public/lib/moodlelib.php
++++ b/public/lib/moodlelib.php
+@@ -2750,12 +2750,13 @@ function require_logout() {
+     // Clone of $USER object to be used by auth plugins.
+     $user = fullclone($USER);
+ 
++    // Trigger event BEFORE terminating the session, so that observers (e.g. log writers)
++    // can still access session information such as the real user when logged in as.
++    $event->trigger();
++
+     // Delete session record and drop $_SESSION content.
+     \core\session\manager::terminate_current();
+ 
+-    // Trigger event AFTER action.
+-    $event->trigger();
+-
+     // Hook to execute auth plugins redirection after event trigger.
+     foreach ($authplugins as $authplugin) {
+         $authplugin->postlogout_hook($user);
+diff --git a/public/lib/tests/moodlelib_test.php b/public/lib/tests/moodlelib_test.php
+index 13f57ffd9e8..33a87ada6cb 100644
+--- a/public/lib/tests/moodlelib_test.php
++++ b/public/lib/tests/moodlelib_test.php
+@@ -2943,6 +2943,36 @@ EOF;
+         $this->assertEventContextNotUsed($event);
+     }
+ 
++    /**
++     * Test require_logout logs the correct real user when logged in as another user.
++     *
++     * @covers ::require_logout
++     */
++    public function test_require_logout_loginas_realuserid(): void {
++        global $DB, $USER;
++        $this->resetAfterTest();
++
++        // Enable the standard log store with no buffering.
++        set_config('enabled_stores', 'logstore_standard', 'tool_log');
++        set_config('buffersize', 0, 'logstore_standard');
++        get_log_manager(true);
++
++        $user = $this->getDataGenerator()->create_user();
++        $this->setAdminUser();
++        $adminid = $USER->id;
++        \core\session\manager::loginas($user->id, \context_system::instance());
++        $this->assertTrue(\core\session\manager::is_loggedinas());
++
++        require_logout();
++        $this->assertFalse(isloggedin());
++
++        $log = $DB->get_record('logstore_standard_log', ['eventname' => '\core\event\user_loggedout'], '*', MUST_EXIST);
++        $this->assertEquals($user->id, $log->userid);
++        $this->assertEquals($adminid, $log->realuserid);
++
++        get_log_manager(true);
++    }
++
+     /**
+      * A data provider for testing email messageid
+      */

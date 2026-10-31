@@ -1,0 +1,112 @@
+diff --git a/public/lib/classes/api/repository/api_token_repository.php b/public/lib/classes/api/repository/api_token_repository.php
+index 8773ba7243f..8163220f4f2 100644
+--- a/public/lib/classes/api/repository/api_token_repository.php
++++ b/public/lib/classes/api/repository/api_token_repository.php
+@@ -53,7 +53,7 @@ class api_token_repository {
+ 
+         $record = new \stdClass();
+         $record->name = $name;
+-        $record->token = password_hash($secret, PASSWORD_DEFAULT);
++        $record->token = password_hash($this->prehash_secret($secret), PASSWORD_DEFAULT);
+         $record->userid = $userid;
+         $record->scopes = implode(' ', $scopes);
+         $record->description = $description;
+@@ -186,10 +186,14 @@ class api_token_repository {
+      * @throws \core\exception\expired_api_token_exception If the token has expired.
+      * @throws \core\exception\revoked_api_token_exception If the token has been revoked.
+      */
+-    public function validate_token(int $tokenid, string $secret): api_token_entity {
++    public function validate_token(
++        int $tokenid,
++        #[\SensitiveParameter]
++        string $secret,
++    ): api_token_entity {
+         $tokenentity = $this->get_by_id($tokenid);
+ 
+-        if (!password_verify($secret, $tokenentity->get_token())) {
++        if (!password_verify($this->prehash_secret($secret), $tokenentity->get_token())) {
+             throw new \core\exception\invalid_api_token_exception();
+         }
+ 
+@@ -204,6 +208,23 @@ class api_token_repository {
+         return $tokenentity;
+     }
+ 
++    /**
++     * Pre-hash a raw secret before it is passed to password_hash() or password_verify().
++     *
++     * The bcrypt algorithm used by PASSWORD_DEFAULT silently truncates its input at 72 bytes, so
++     * the secret is first reduced to a fixed-length digest. This guarantees that the whole secret
++     * contributes to the stored hash regardless of its length.
++     *
++     * @param string $secret The raw secret.
++     * @return string The pre-hashed secret.
++     */
++    protected function prehash_secret(
++        #[\SensitiveParameter]
++        string $secret,
++    ): string {
++        return hash('sha256', $secret);
++    }
++
+     /**
+      * Record that a token was just used, and where from.
+      *
+diff --git a/public/lib/classes/api/token_manager.php b/public/lib/classes/api/token_manager.php
+index 5a59145f171..9e9dfe5f905 100644
+--- a/public/lib/classes/api/token_manager.php
++++ b/public/lib/classes/api/token_manager.php
+@@ -58,7 +58,7 @@ class token_manager {
+     /** @var int How close to expiry a token is flagged as expiring soon, in days. */
+     public const int EXPIRY_IMMINENT_DAYS = 3;
+ 
+-    /** @var int The length of the generated secret, in characters. */
++    /** @var int The number of random bytes in the generated secret. */
+     protected const int SECRET_LENGTH = 32;
+ 
+     /**
+@@ -103,7 +103,9 @@ class token_manager {
+         $this->validate_expiry($expirytime);
+         $this->validate_scopes($scopes);
+ 
+-        $secret = random_string(self::SECRET_LENGTH);
++        // The secret is never read by a person, so it needs no human-readable alphabet: raw random bytes,
++        // hex encoded, as is done for OAuth2 client secrets.
++        $secret = bin2hex(random_bytes(self::SECRET_LENGTH));
+ 
+         $token = $this->repository->create_token(
+             $name,
+diff --git a/public/lib/tests/api/repository/api_token_repository_test.php b/public/lib/tests/api/repository/api_token_repository_test.php
+index 11bbdeb5cac..f2978a7a2be 100644
+--- a/public/lib/tests/api/repository/api_token_repository_test.php
++++ b/public/lib/tests/api/repository/api_token_repository_test.php
+@@ -55,7 +55,10 @@ final class api_token_repository_test extends \advanced_testcase {
+         $record = $DB->get_record('rest_api_tokens', ['id' => $token->get_id()], '*', MUST_EXIST);
+ 
+         $this->assertEquals('Token 1', $record->name);
+-        $this->assertTrue(password_verify('secret', $record->token));
++        // The secret is pre-hashed before being stored, so the raw secret alone does not verify.
++        $prehash = new \ReflectionMethod($repository, 'prehash_secret');
++        $this->assertFalse(password_verify('secret', $record->token));
++        $this->assertTrue(password_verify($prehash->invoke($repository, 'secret'), $record->token));
+         $this->assertEquals($user->id, $record->userid);
+         $this->assertEquals('scope', $record->scopes);
+         $this->assertEquals('A description', $record->description);
+diff --git a/public/lib/tests/api/token_manager_test.php b/public/lib/tests/api/token_manager_test.php
+index 615dfe7cef2..e24ad20bfb2 100644
+--- a/public/lib/tests/api/token_manager_test.php
++++ b/public/lib/tests/api/token_manager_test.php
+@@ -79,7 +79,12 @@ final class token_manager_test extends \advanced_testcase {
+ 
+         // Only a hash is stored, and it must verify against the secret half of the string.
+         $this->assertNotEquals($secret, $record->token);
+-        $this->assertTrue(password_verify($secret, $record->token));
++        $repository = new api_token_repository();
++        $prehash = new \ReflectionMethod($repository, 'prehash_secret');
++        $this->assertTrue(password_verify($prehash->invoke($repository, $secret), $record->token));
++
++        // The secret is the hex encoding of random bytes.
++        $this->assertMatchesRegularExpression('/^[0-9a-f]{64}$/', $secret);
+     }
+ 
+     /**

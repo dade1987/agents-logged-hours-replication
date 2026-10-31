@@ -1,0 +1,211 @@
+You are a software engineer fixing an issue in MariaDB Server (C/C++). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot build MariaDB or run its test suite. Read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update mysql-test tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDEV-34074: plugins.thread_pool_server_audit crashes in get_loc_info() with null pointer dereference
+
+Found in buildbot ,e.g 
+
+Windows:
+https://buildbot.mariadb.org/#/builders/239/builds/20511/steps/10/logs/stdio for 10.5
+https://buildbot.mariadb.org/#/builders/239/builds/19547/steps/10/logs/stdio for 10.4
+
+Linux:
+https://buildbot.mariadb.org/#/builders/497/builds/21712/steps/6/logs/stdio 
+
+
+The exception analysis points to null pointer deference.
+*Note1:* Crash happens on a 3rd rerun of plugins.thread_pool_server_audit  - the first attempt failed with a diff similar to below, the second retry succeeded.
+{noformat}
+CURRENT_TEST: plugins.thread_pool_server_audit
+--- D:/Buildbot/amd64-windows-packages/build/mysql-test/suite/plugins/r/thread_pool_server_audit.result	2024-05-03 23:05:21.000000000 +0200
++++ D:\Buildbot\amd64-windows-packages\build\mysql-test\suite\plugins\r\thread_pool_server_audit.reject	2024-05-03 23:39:27.543299600 +0200
+@@ -241,8 +241,8 @@
+ Warning	1620	Plugin is busy and will be uninstalled on shutdown
+ TIME,HOSTNAME,root,localhost,ID,ID,QUERY,test,'set global server_audit_logging=on',0
+ TIME,HOSTNAME,root,localhost,ID,0,CONNECT,mysql,,0
+-TIME,HOSTNAME,root,localhost,ID,0,DISCONNECT,mysql,,0
+ TIME,HOSTNAME,no_such_user,localhost,ID,0,FAILED_CONNECT,,,ID
++TIME,HOSTNAME,root,localhost,ID,0,DISCONNECT,mysql,,0
+ TIME,HOSTNAME,no_such_user,localhost,ID,0,DISCONNECT,,,0
+ TIME,HOSTNAME,root,localhost,ID,ID,QUERY,test,'set global server_audit_incl_users=\'odin, dva, tri\'',0
+ TIME,HOSTNAME,root,localhost,ID,ID,QUERY,test,'set global server_audit_incl_users=\'odin, root, dva, tri\'',0
+{noformat}
+
+
+*Note3*: the null pointer is returned by THDVAR(thd, loc_info) (see below, under FAULTING_SOURCE_CODE)
+
+*Note4*: The query that causes crash is 
+{code:sql}
+ install plugin server_audit soname 'server_audit'
+{code}
+
+Excerpt from crash analysis
+{noformat}
+CONTEXT:  (.ecxr)
+rax=000001c38e9225c0 rbx=0000003c49afe2f0 rcx=000001c38e7468c8
+rdx=0000000000000058 rsi=0000000000000000 rdi=0000000000000000
+rip=00007ffa25922256 rsp=0000003c49afdd70 rbp=0000000000000000
+ r8=0000003c49afe201  r9=00007ffa25930f50 r10=0000003c49afe2e0
+r11=0000003c49afdd60 r12=000001c38e7497f8 r13=000000000000022c
+r14=0000000000000003 r15=000001c38e74fe00
+iopl=0         nv up ei pl nz ac po nc
+cs=0033  ss=002b  ds=002b  es=002b  fs=0053  gs=002b             efl=00010216
+server_audit!get_loc_info [inlined in server_audit!auditing]:
+ cmp     dword ptr [rsi+154h],40h ds:00000000`00000154=????????
+Resetting default scope
+EXCEPTION_RECORD:  (.exr -1)
+ExceptionAddress: 00007ffa25922256 (server_audit!get_loc_info)
+   ExceptionCode: c0000005 (Access violation)
+  ExceptionFlags: 00000000
+NumberParameters: 2
+   Parameter[0]: 0000000000000000
+   Parameter[1]: 0000000000000154
+Attempt to read from address 0000000000000154
+
+....
+STACK_TEXT:  
+server_audit!auditing
+server!mysql_audit_notify
+server!mysql_audit_general
+server!dispatch_command
+server!do_command
+server!tp_callback
+ntdll!RtlInitializeCriticalSection
+ntdll!RtlAcquireSRWLockExclusive
+kernel32!BaseThreadInitThunk
+ntdll!RtlUserThreadStart
+STACK_COMMAND:  .ecxr ; kb ; ** Pseudo Context ** Pseudo ** Value: 165766b0c80 ** ; kb
+FAULTING_SOURCE_LINE:  D:\Buildbot\amd64-windows-packages\build\plugin\server_audit\server_audit.c
+FAULTING_SOURCE_FILE:  D:\Buildbot\amd64-windows-packages\build\plugin\server_audit\server_audit.c
+FAULTING_SOURCE_LINE_NUMBER:  2157
+FAULTING_SOURCE_CODE:  
+   951:     bach to this as the MENT-1438 is finally understood/resolved.
+   952:   return (struct connection_info *) THDVAR(thd, loc_info);
+   953:   */
+   954:   struct connection_info *ci= (struct connection_info *) THDVAR(thd, loc_info);
+>  955:   if ((size_t) ci->user_length > sizeof(ci->user))
+   956:   {
+   957:     ci->user_length= 0;
+   958:     ci->host_length= 0;
+   959:     ci->ip_length= 0;
+   960:   }
+
+
+.....
+rax=000001c38e9225c0 rbx=0000003c49afe2f0 rcx=000001c38e7468c8
+rdx=0000000000000058 rsi=0000000000000000 rdi=0000000000000000
+rip=00007ffa25922256 rsp=0000003c49afdd70 rbp=0000000000000000
+ r8=0000003c49afe201  r9=00007ffa25930f50 r10=0000003c49afe2e0
+r11=0000003c49afdd60 r12=000001c38e7497f8 r13=000000000000022c
+r14=0000000000000003 r15=000001c38e74fe00
+iopl=0         nv up ei pl nz ac po nc
+cs=0033  ss=002b  ds=002b  es=002b  fs=0053  gs=002b             efl=00010216
+server_audit!get_loc_info [inlined in server_audit!auditing]:
+ cmp     dword ptr [rsi+154h],40h ds:00000000`00000154=????????
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+(Inline Function) --------`-------- server_audit!get_loc_info [D:\Buildbot\amd64-windows-packages\build\plugin\server_audit\server_audit.c @ 955]
+struct connection_info * ci = 0x00000000`00000000
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+server_audit!auditing [D:\Buildbot\amd64-windows-packages\build\plugin\server_audit\server_audit.c @ 2157]
+void * thd = <value unavailable>
+unsigned int event_class = 0
+void * ev = 0x0000003c`49afe2f0
+int after_action = 0n0
+struct connection_info * cn = <value unavailable>
+unsigned int64 events = <value unavailable>
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+(Inline Function) --------`-------- server!plugins_dispatch [D:\Buildbot\amd64-windows-packages\build\sql\sql_audit.cc @ 399]
+struct st_mysql_audit * data = 0x00007ffa`25930f50
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+server!mysql_audit_notify [D:\Buildbot\amd64-windows-packages\build\sql\sql_audit.cc @ 437]
+class THD * thd = 0x000001c3`8e7468c8
+unsigned int event_class = 0x58
+void * event = 0x0000003c`49afe201
+struct st_mysql_event_generic event_generic = struct st_mysql_event_generic
+struct st_plugin_int ** plugins_last = 0x000001c3`8e922110
+struct st_plugin_int ** plugins = 0x000001c3`8e922108
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+server!mysql_audit_general [D:\Buildbot\amd64-windows-packages\build\sql\sql_audit.h @ 195]
+class THD * thd = 0x000001c3`8e7468c8
+unsigned int event_subtype = 0x58
+int error_code = 0n1236263425
+char * msg = 0x00000000`00000000 ""
+char [513] user_buff = char [513] "root[root] @ localhost [::1]"
+struct mysql_event_general event = struct mysql_event_general
+struct st_mysql_const_lex_string null_clex_str = <value unavailable>
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+server!dispatch_command [D:\Buildbot\amd64-windows-packages\build\sql\sql_parse.cc @ 2494]
+enum_server_command command = COM_QUERY (0n3)
+class THD * thd = 0x000001c3`8e7468c8
+char * packet = <value unavailable>
+unsigned int packet_length = <value unavailable>
+bool is_com_multi = false
+bool is_next_command = true
+bool error = false
+struct st_net * net = <value unavailable>
+struct st_mysql_const_lex_string tmp = struct st_mysql_const_lex_string
+struct charset_info_st * save_character_set_results = 0x00000000`00000003
+struct charset_info_st * save_character_set_client = 0x000001c3`8e7497f8
+struct user_conn * save_user_connect = <value unavailable>
+int auth_rc = 0n0
+class Security_context save_security_ctx = class Security_context
+struct st_mysql_const_lex_string save_db = struct st_mysql_const_lex_string
+struct charset_info_st * save_collation_connection = 0x00000000`0000022c
+char * packet_end = 0x000001c3`8e74fe91 "--- memory read error at address 0x000001c3`8e74fe91 ---"
+class Parser_state parser_state = class Parser_state
+unsigned long length = <value unavailable>
+char * beginning_of_next_stmt = 0x00000000`00000000 ""
+char * fields = 0x00000000`00000000 ""
+char * packet_end = 0x00000000`00000003 "--- memory read error at address 0x00000000`00000003 ---"
+struct TABLE_LIST table_list = struct TABLE_LIST
+class MDL_savepoint mdl_savepoint = class MDL_savepoint
+struct st_mysql_const_lex_string db = struct st_mysql_const_lex_string
+char * arg_end = <value unavailable>
+struct st_mysql_lex_string table_name = struct st_mysql_lex_string
+struct st_schema_table * schema_table = <value unavailable>
+unsigned short flags = 0x97f8
+unsigned int64 nlen = <value unavailable>
+unsigned int slave_server_id = <value unavailable>
+unsigned long pos = <value unavailable>
+unsigned int64 options = 0
+int not_used = 0n3
+unsigned long uptime = <value unavailable>
+char [250] buff = char [250] ""
+unsigned int64 length = <value unavailable>
+unsigned int64 queries_per_second1000 = <value unavailable>
+struct system_status_var * current_global_status_var = <value unavailable>
+unsigned int opt_command = <value unavailable>
+unsigned int current_com = 0x8e7497f8
+char * packet_start = 0x00000000`00000004 "--- memory read error at address 0x00000000`00000004 ---"
+struct PSI_statement_locker * save_locker = 0x0000003c`49afe724
+unsigned char * readbuff = 0x645c7473`65745c2e "--- memory read error at address 0x645c7473`65745c2e ---"
+unsigned int64 next_length_length = 3
+unsigned int64 next_subpacket_length = 0x00007ff9`ecc63478
+struct sql_digest_state * save_digest = 0x00000000`00000000
+unsigned int64 subpacket_length = <value unavailable>
+unsigned int64 length_length = 0x000001c3`8e74fe91
+struct st_mysql_const_lex_string empty_clex_str = <value unavailable>
+struct charset_info_st * files_charset_info = <value unavailable>
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+server!do_command [D:\Buildbot\amd64-windows-packages\build\sql\sql_parse.cc @ 1375]
+class THD * thd = 0x000001c3`8e7468c8
+bool return_value = true
+unsigned long packet_length = 0x32
+char * packet = 0x000001c3`8f830098 "--- memory read error at address 0x000001c3`8f830098 ---"
+struct st_net * net = 0x000001c3`8e746b38
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+(Inline Function) --------`-------- server!threadpool_process_request [D:\Buildbot\amd64-windows-packages\build\sql\threadpool_common.cc @ 365]
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+server!tp_callback [D:\Buildbot\amd64-windows-packages\build\sql\threadpool_common.cc @ 199]
+struct TP_connection * c = 0x000001c3`8e85eff0
+struct Worker_thread_context worker_context = struct Worker_thread_context
+class THD * thd = 0x000001c3`8e7468c8
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+{noformat}

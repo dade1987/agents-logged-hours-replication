@@ -1,0 +1,65 @@
+diff --git a/public/mod/quiz/amd/build/searchwidget/user.min.js b/public/mod/quiz/amd/build/searchwidget/user.min.js
+index 8e7ddee74a1710aa6dce3fef3fbfe96be4047dc6..b27500b3b045e2a93a383fb5b48a7da8947e26ce 100644
+GIT binary patch
+delta 166
+zcmew&vO{!(H=Bq~e343OMM+U&T4riaN={-@YEJQHZ#Ff?`n=Md97S7O4J-<5i}cX-
+vXsW4|<!7cS7yz|k(P588%nI3*V(X&RlG36)g_4ZSV!eW*{LKg0w=e+!;Y~gt
+
+delta 81
+zcmdlX`bA`eH{0fTHZ?~3#PY<<5)A{L_~Mcxz4X+Q;F6-uy!2vCjUv6&ijtzlw9M3;
+glw!Ty!~zYC?9@tIJB?}}Wd+2wnn1Am3;Pi!0HKQ=4*&oF
+
+diff --git a/public/mod/quiz/amd/src/searchwidget/user.js b/public/mod/quiz/amd/src/searchwidget/user.js
+index 563c4f05ba5..cb23a8a4eec 100644
+--- a/public/mod/quiz/amd/src/searchwidget/user.js
++++ b/public/mod/quiz/amd/src/searchwidget/user.js
+@@ -23,7 +23,6 @@
+ import UserSearch from 'core_user/comboboxsearch/user';
+ import Url from 'core/url';
+ import * as Repository from 'mod_quiz/searchwidget/repository';
+-import {getStrings} from 'core/str';
+ 
+ export default class QuizUserSearch extends UserSearch {
+ 
+@@ -49,8 +48,8 @@ export default class QuizUserSearch extends UserSearch {
+         // Await the user fetch request
+         const r = await Repository.userFetch(params);
+ 
+-        // Await the result of getStrings
+-        const stringArray = await getStrings(r.extrafields.map((key) => ({key})));
++        // The display names are resolved server side, because custom profile fields (profile_field_*) have no core string.
++        const stringArray = r.extrafieldlabels ?? r.extrafields;
+ 
+         // Map the extrafields to profilestringmap
+         this.profilestringmap = new Map(
+diff --git a/public/mod/quiz/classes/external/get_users_in_report.php b/public/mod/quiz/classes/external/get_users_in_report.php
+index 74bf72596af..197488f9fa8 100644
+--- a/public/mod/quiz/classes/external/get_users_in_report.php
++++ b/public/mod/quiz/classes/external/get_users_in_report.php
+@@ -150,8 +150,14 @@ class get_users_in_report extends external_api {
+         // We don't want the filter to strip out the picture field and other name fields,
+         // since we already have the full name field.
+         $allowfields = array_merge(['fullname'], $userfieldsapi->get_required_fields([\core_user\fields::PURPOSE_IDENTITY]));
++        // Resolve display names server side, so custom profile fields are not looked up as core strings.
++        $extrafieldlabels = array_map(
++            fn(string $field): string => \core_user\fields::get_display_name($field),
++            $allowfields,
++        );
+         return [
+             'extrafields' => $allowfields,
++            'extrafieldlabels' => $extrafieldlabels,
+             'users' => $users,
+             'warnings' => $warnings,
+         ];
+@@ -171,6 +177,11 @@ class get_users_in_report extends external_api {
+ 
+         return new external_single_structure([
+             'extrafields' => new external_multiple_structure(new external_value(PARAM_RAW, 'List of extra fields')),
++            'extrafieldlabels' => new external_multiple_structure(
++                new external_value(PARAM_RAW, 'Display name of the extra field at the same position'),
++                'Display names matching the list of extra fields',
++                VALUE_OPTIONAL,
++            ),
+             'users' => new external_multiple_structure(core_user_external::user_description($additionalfields)),
+             'warnings' => new external_warnings(),
+         ]);

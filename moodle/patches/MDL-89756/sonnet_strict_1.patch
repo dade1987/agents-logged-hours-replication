@@ -1,0 +1,140 @@
+diff --git a/public/admin/classes/output/notification_ctas.php b/public/admin/classes/output/notification_ctas.php
+index 94703fff9c7..b3225067a31 100644
+--- a/public/admin/classes/output/notification_ctas.php
++++ b/public/admin/classes/output/notification_ctas.php
+@@ -145,7 +145,7 @@ class notification_ctas implements renderable, templatable {
+                 ],
+                 'cta' => get_string('notificationctapartnerscta', 'admin'),
+                 'caption' => get_string('notificationctapartnerscaption', 'admin'),
+-                'url' => 'https://moodle.com/services/certified-service-providers/',
++                'url' => 'https://moodle.com/get-moodle/',
+                 'internal' => false,
+             ],
+             'feedback' => [
+@@ -173,12 +173,11 @@ class notification_ctas implements renderable, templatable {
+      * (see tool_installaddon_installer::get_external_service_url()), so the marketplace can
+      * match on site URL instead of relying on a new registration-based lookup.
+      *
+-     * A minimal utm_source/utm_campaign pair is also kept for on-site analytics; utm_medium,
+-     * version and a separate site-identifier hash are no longer sent, since the site param
+-     * already carries the site URL and Moodle version.
++     * Standard utm parameters are also appended: utm_source is the site hostname, utm_medium is
++     * lms_referral, utm_campaign is the fixed value 000_lms_cta and utm_content is the CTA key.
+      *
+      * @param string $url The base CTA URL.
+-     * @param string $ctakey The CTA key, used as the utm_campaign value.
++     * @param string $ctakey The CTA key, used as the utm_content value.
+      * @return moodle_url
+      */
+     protected function build_tracked_cta_url(string $url, string $ctakey): moodle_url {
+@@ -192,8 +191,10 @@ class notification_ctas implements renderable, templatable {
+ 
+         return new moodle_url($url, [
+             'site' => $site,
+-            'utm_source' => 'moodle_admin',
+-            'utm_campaign' => $ctakey,
++            'utm_source' => parse_url($CFG->wwwroot, PHP_URL_HOST),
++            'utm_medium' => 'lms_referral',
++            'utm_campaign' => '000_lms_cta',
++            'utm_content' => $ctakey,
+         ]);
+     }
+ }
+diff --git a/public/admin/tests/output/notification_ctas_test.php b/public/admin/tests/output/notification_ctas_test.php
+index f3fe87ca900..5661a9d6534 100644
+--- a/public/admin/tests/output/notification_ctas_test.php
++++ b/public/admin/tests/output/notification_ctas_test.php
+@@ -60,8 +60,8 @@ final class notification_ctas_test extends \advanced_testcase {
+      * The external marketplace-style CTAs (marketplace, moodlecloud, partners) carry a base64
+      * "site" param following the same pattern already used and tested for the "Browse new
+      * plugins" link (see tool_installaddon_installer::get_external_service_url()), so the
+-     * marketplace can match on site URL instead of a new registration-based lookup. A minimal
+-     * utm_source/utm_campaign pair is also kept for on-site analytics.
++     * marketplace can match on site URL instead of a new registration-based lookup. The
++     * standard utm_source/utm_medium/utm_campaign/utm_content parameters are also appended.
+      */
+     public function test_marketplace_ctas_carry_site_info_and_utm_params(): void {
+         global $CFG, $SITE, $PAGE;
+@@ -78,9 +78,11 @@ final class notification_ctas_test extends \advanced_testcase {
+             $query = [];
+             parse_str((string) parse_url($bykey[$key]->href, PHP_URL_QUERY), $query);
+ 
+-            $this->assertSame(['site', 'utm_source', 'utm_campaign'], array_keys($query));
+-            $this->assertSame('moodle_admin', $query['utm_source']);
+-            $this->assertSame($key, $query['utm_campaign']);
++            $this->assertSame(['site', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_content'], array_keys($query));
++            $this->assertSame(parse_url($CFG->wwwroot, PHP_URL_HOST), $query['utm_source']);
++            $this->assertSame('lms_referral', $query['utm_medium']);
++            $this->assertSame('000_lms_cta', $query['utm_campaign']);
++            $this->assertSame($key, $query['utm_content']);
+ 
+             $site = json_decode(base64_decode($query['site']), true);
+             $this->assertSame(strip_tags($SITE->fullname), $site['fullname']);
+@@ -91,7 +93,7 @@ final class notification_ctas_test extends \advanced_testcase {
+         $this->assertStringStartsWith('https://marketplace.moodle.com/', $bykey['marketplace']->href);
+         $this->assertStringStartsWith('https://www.moodlecloud.com/standard-plans/', $bykey['moodlecloud']->href);
+         $this->assertStringStartsWith(
+-            'https://moodle.com/services/certified-service-providers/',
++            'https://moodle.com/get-moodle/',
+             $bykey['partners']->href
+         );
+     }
+diff --git a/public/lang/en/admin.php b/public/lang/en/admin.php
+index 0f7b388fc18..24e854c0913 100644
+--- a/public/lang/en/admin.php
++++ b/public/lang/en/admin.php
+@@ -1000,36 +1000,36 @@ $string['noreplydomain'] = 'No-reply and domain';
+ $string['noreplydomaindetail'] = 'Settings for No-reply and configured domains';
+ $string['noresults'] = 'No results found.';
+ $string['noroles'] = 'No roles';
+-$string['notificationctafeedbackbody'] = 'The site feedback survey is how admins tell Moodle HQ what to fix and what to build. Turning it on takes one setting.';
++$string['notificationctafeedbackbody'] = 'The site feedback survey is how admins tell Moodle HQ what to fix and what to build. Turning it on is easy.';
+ $string['notificationctafeedbackcaption'] = 'You can review exactly what’s collected first.';
+ $string['notificationctafeedbackcta'] = 'Enable the feedback survey';
+-$string['notificationctafeedbacktick1'] = 'Shapes the roadmap for every Moodle site';
+-$string['notificationctafeedbacktick2'] = 'No user-identifying information is sent';
+-$string['notificationctafeedbacktick3'] = 'Takes about 5 minutes, twice a year';
++$string['notificationctafeedbacktick1'] = 'Shapes the roadmap for every Moodle site.';
++$string['notificationctafeedbacktick2'] = 'No user-identifying information is sent.';
++$string['notificationctafeedbacktick3'] = 'Takes about 5 minutes, twice a year.';
+ $string['notificationctafeedbacktitle'] = 'Help decide what we build next';
+ $string['notificationctafromhqheading'] = 'From Moodle';
+ $string['notificationctafromhqsubtitle'] = 'Services, plugins and ways to shape the software you’re running.';
+-$string['notificationctamarketplacebody'] = 'Discover trusted plugins and integrations built for Moodle';
++$string['notificationctamarketplacebody'] = 'Discover trusted plugins and integrations built for Moodle LMS.';
+ $string['notificationctamarketplacecaption'] = 'Opens marketplace.moodle.com in a new window.';
+ $string['notificationctamarketplacecta'] = 'Browse Moodle Marketplace';
+-$string['notificationctamarketplacetick1'] = '1,500+ plugins, themes and integrations';
+-$string['notificationctamarketplacetick2'] = 'Certified integrations, vetted by Moodle';
+-$string['notificationctamarketplacetick3'] = 'Free and paid listings in one catalogue';
++$string['notificationctamarketplacetick1'] = '1,500+ plugins, themes and integrations.';
++$string['notificationctamarketplacetick2'] = 'Certified integrations, vetted by Moodle.';
++$string['notificationctamarketplacetick3'] = 'Free and paid listings in one catalogue.';
+ $string['notificationctamarketplacetitle'] = 'Moodle Marketplace';
+-$string['notificationctamoodlecloudbody'] = 'Need a second site for a pilot, a course build or a client? Get Moodle hosted by Moodle, with nothing to maintain.';
++$string['notificationctamoodlecloudbody'] = 'Need a second site for a pilot, a course build or a client? Get Moodle LMS hosted by Moodle, with nothing to maintain.';
+ $string['notificationctamoodlecloudcaption'] = 'Free 28-day trial · No credit card required.';
+ $string['notificationctamoodlecloudcta'] = 'Start your free trial';
+-$string['notificationctamoodlecloudtick1'] = 'Easy setup and no site maintenance';
+-$string['notificationctamoodlecloudtick2'] = 'Unlimited courses and activities';
+-$string['notificationctamoodlecloudtick3'] = 'Always on the latest supported release';
++$string['notificationctamoodlecloudtick1'] = 'Easy setup and no site maintenance.';
++$string['notificationctamoodlecloudtick2'] = 'Unlimited courses and activities.';
++$string['notificationctamoodlecloudtick3'] = 'Always on the latest supported release.';
+ $string['notificationctamoodlecloudtitle'] = 'MoodleCloud';
+-$string['notificationctapartnersbody'] = 'Work with a Moodle Certified Service Provider near you for hosting, upgrades, integrations or custom development.';
++$string['notificationctapartnersbody'] = 'Explore trustworthy, Moodle-approved options for hosting, upgrades, integrations and custom development.';
+ $string['notificationctapartnerscaption'] = 'Certified and continuously assessed by Moodle.';
+-$string['notificationctapartnerscta'] = 'Find a Partner';
+-$string['notificationctapartnerstick1'] = 'Full-service support and technical partnership';
+-$string['notificationctapartnerstick2'] = 'Bespoke theming and custom development';
+-$string['notificationctapartnerstick3'] = 'Scaled and audited for large institutions';
+-$string['notificationctapartnerstitle'] = 'Certified Moodle Partners';
++$string['notificationctapartnerscta'] = 'Find a Moodle service provider';
++$string['notificationctapartnerstick1'] = 'Full-service support and technical partnership.';
++$string['notificationctapartnerstick2'] = 'Bespoke theming and custom development.';
++$string['notificationctapartnerstick3'] = 'Scaled and audited for large institutions.';
++$string['notificationctapartnerstitle'] = 'Moodle Services';
+ $string['notificationctaupdateschecked'] = 'Available updates were last checked {$a} ago.';
+ $string['notificationctaupdatesnotchecked'] = 'Available updates have never been checked.';
+ $string['notificationlabelcritical'] = 'Critical';

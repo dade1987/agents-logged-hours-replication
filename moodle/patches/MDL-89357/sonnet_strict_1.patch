@@ -1,0 +1,74 @@
+diff --git a/public/ai/classes/aiactions/base.php b/public/ai/classes/aiactions/base.php
+index 3a764df9ac1..72bfaf91fbd 100644
+--- a/public/ai/classes/aiactions/base.php
++++ b/public/ai/classes/aiactions/base.php
+@@ -68,7 +68,7 @@ abstract class base {
+      * @return string
+      */
+     public static function get_name(): string {
+-        $stringid = 'action_' . self::get_basename();
++        $stringid = 'action_' . static::get_basename();
+         return get_string($stringid, 'core_ai');
+     }
+ 
+@@ -80,7 +80,7 @@ abstract class base {
+      * @return string
+      */
+     public static function get_description(): string {
+-        $stringid = 'action_' . self::get_basename() . '_desc';
++        $stringid = 'action_' . static::get_basename() . '_desc';
+         return get_string($stringid, 'core_ai');
+     }
+ 
+@@ -90,7 +90,7 @@ abstract class base {
+      * @return string The system instruction for the action.
+      */
+     public static function get_system_instruction(): string {
+-        $stringid = 'action_' . self::get_basename() . '_instruction';
++        $stringid = 'action_' . static::get_basename() . '_instruction';
+ 
+         // If the string doesn't exist, return an empty string.
+         if (!get_string_manager()->string_exists($stringid, 'core_ai')) {
+@@ -126,6 +126,6 @@ abstract class base {
+      * @return string The class name of the response object.
+      */
+     public static function get_response_classname(): string {
+-        return responses::class . '\\response_' . self::get_basename();
++        return responses::class . '\\response_' . static::get_basename();
+     }
+ }
+diff --git a/public/ai/tests/aiactions/base_test.php b/public/ai/tests/aiactions/base_test.php
+index f9894e3493e..80d10a83c62 100644
+--- a/public/ai/tests/aiactions/base_test.php
++++ b/public/ai/tests/aiactions/base_test.php
+@@ -29,6 +29,30 @@ use ReflectionClass;
+  * @covers     \core_ai\aiactions\base
+  */
+ final class base_test extends \advanced_testcase {
++    /**
++     * Test that static methods of the base class use late static binding.
++     */
++    public function test_late_static_binding(): void {
++        $action = new class (1, 1, 'test') extends generate_text {
++            /**
++             * Override basename.
++             *
++             * @return string
++             */
++            public static function get_basename(): string {
++                return 'summarise_text';
++            }
++        };
++        $class = get_class($action);
++        $this->assertEquals('summarise_text', $class::get_basename());
++        $this->assertEquals(summarise_text::get_name(), $class::get_name());
++        $this->assertEquals(summarise_text::get_description(), $class::get_description());
++        $this->assertEquals(
++            responses\response_summarise_text::class,
++            $class::get_response_classname(),
++        );
++    }
++
+     /**
+      * Test get_basename.
+      */

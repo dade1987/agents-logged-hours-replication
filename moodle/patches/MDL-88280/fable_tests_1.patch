@@ -1,0 +1,108 @@
+diff --git a/public/question/classes/local/bank/question_bank_helper.php b/public/question/classes/local/bank/question_bank_helper.php
+index f6b6befbc72..6771c095aad 100644
+--- a/public/question/classes/local/bank/question_bank_helper.php
++++ b/public/question/classes/local/bank/question_bank_helper.php
+@@ -269,20 +269,25 @@ class question_bank_helper {
+         // Build the left joins for all modules of the type requested i.e. those that do or do not share questions.
+         $pluginjoins = [];
+         $pluginfields = [];
++        $excludepreviewsql = '';
+         foreach ($plugins as $key => $plugin) {
+-            $join = "LEFT JOIN {{$plugin}} p{$key} ON p{$key}.id = cm.instance
++            $pluginjoins[] = "LEFT JOIN {{$plugin}} p{$key} ON p{$key}.id = cm.instance
+                      AND m.name = '{$plugin}'";
++            $pluginfields[] = "p{$key}.name";
+             if ($plugin === self::get_default_question_bank_activity_name()) {
+-                $join .= " AND p{$key}.type <> '" . self::TYPE_PREVIEW . "'";
++                // The preview bank must never be visible to users, so exclude it from the results. This has to be done in the
++                // WHERE clause rather than the LEFT JOIN condition, otherwise the course module row is still returned (with a
++                // NULL joined instance) rather than being filtered out.
++                $excludepreviewsql = "AND (m.name <> :previewmodname OR p{$key}.type <> :previewtype)";
++                $params['previewmodname'] = $plugin;
++                $params['previewtype'] = self::TYPE_PREVIEW;
+             }
+-            $pluginjoins[] = $join;
+-            $pluginfields[] = "p{$key}.name";
+         }
+         $pluginjoinsql = implode(' ', $pluginjoins);
+ 
+         // Build the SQL to filter by module name and exclude deleted course modules.
+         [$modulenamesql, $modulenameparams] = $DB->get_in_or_equal($plugins, SQL_PARAMS_NAMED, 'modname');
+-        $wheremodulesql = "AND m.name $modulenamesql AND cm.deletioninprogress = 0";
++        $wheremodulesql = "AND m.name $modulenamesql AND cm.deletioninprogress = 0 {$excludepreviewsql}";
+         $params = array_merge($params, $modulenameparams);
+ 
+         // Build the search condition using COALESCE only if there are multiple plugin fields.
+diff --git a/public/question/tests/external/search_shared_banks_test.php b/public/question/tests/external/search_shared_banks_test.php
+index 145f67466ec..46adcd64480 100644
+--- a/public/question/tests/external/search_shared_banks_test.php
++++ b/public/question/tests/external/search_shared_banks_test.php
+@@ -17,6 +17,7 @@
+ namespace core_question\external;
+ 
+ use core\context\module;
++use core_question\local\bank\question_bank_helper;
+ 
+ /**
+  * Unit tests for core_question\external\search_shared_banks
+@@ -214,4 +215,60 @@ final class search_shared_banks_test extends \advanced_testcase {
+             $lastresult
+         );
+     }
++
++    /**
++     * The preview question bank must never be returned, even when it exists on the site and the user is an admin.
++     */
++    public function test_preview_bank_not_returned(): void {
++        global $DB;
++        $this->resetAfterTest();
++        [
++            ,
++            $course2,
++            $course3,
++            ,
++            $quizcontext,
++            $qbank1,
++            $qbank2,
++            $qbank3,
++            $qbank4,
++        ] = $this->create_banks();
++
++        $this->setAdminUser();
++        $previewbank = question_bank_helper::get_preview_open_instance_type(true);
++        $this->assertNotNull($previewbank);
++
++        $expected = [
++            [
++                'label' => "{$course2->shortname} - {$qbank1->name}",
++                'value' => $qbank1->cmid,
++            ],
++            [
++                'label' => "{$course2->shortname} - {$qbank2->name}",
++                'value' => $qbank2->cmid,
++            ],
++            [
++                'label' => "{$course2->shortname} - {$qbank3->name}",
++                'value' => $qbank3->cmid,
++            ],
++            [
++                'label' => "{$course3->shortname} - {$qbank4->name}",
++                'value' => $qbank4->cmid,
++            ],
++        ];
++
++        $result = search_shared_banks::execute($quizcontext->id);
++        $this->assertEquals($expected, $result['sharedbanks']);
++        $this->assertNotContains($previewbank->id, array_column($result['sharedbanks'], 'value'));
++
++        // Searching by the preview bank's name must not return it either.
++        $result = search_shared_banks::execute($quizcontext->id, $previewbank->name);
++        $this->assertNotContains($previewbank->id, array_column($result['sharedbanks'], 'value'));
++
++        // A preview bank with an empty name (see MDL-86099) must not be returned, nor cause an error.
++        $DB->set_field('qbank', 'name', '', ['id' => $previewbank->instance]);
++        rebuild_course_cache($previewbank->course, true);
++        $result = search_shared_banks::execute($quizcontext->id);
++        $this->assertEquals($expected, $result['sharedbanks']);
++    }
+ }

@@ -1,0 +1,51 @@
+diff --git a/mysql-test/suite/innodb/r/fk_backtick_name.result b/mysql-test/suite/innodb/r/fk_backtick_name.result
+new file mode 100644
+index 00000000..447a1f9f
+--- /dev/null
++++ b/mysql-test/suite/innodb/r/fk_backtick_name.result
+@@ -0,0 +1,13 @@
++#
++# MDEV-39818 backtick in FK names breaks SHOW CREATE TABLE
++#
++CREATE TABLE p (a INT PRIMARY KEY) ENGINE=InnoDB;
++CREATE TABLE t1 (a INT, CONSTRAINT `foo `` bar` FOREIGN KEY (a) REFERENCES p(a)) ENGINE=InnoDB;
++SHOW CREATE TABLE t1;
++Table	Create Table
++t1	CREATE TABLE `t1` (
++  `a` int(11) DEFAULT NULL,
++  KEY `foo `` bar` (`a`),
++  CONSTRAINT `foo `` bar` FOREIGN KEY (`a`) REFERENCES `p` (`a`)
++) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
++DROP TABLE t1, p;
+diff --git a/mysql-test/suite/innodb/t/fk_backtick_name.test b/mysql-test/suite/innodb/t/fk_backtick_name.test
+new file mode 100644
+index 00000000..1c14b055
+--- /dev/null
++++ b/mysql-test/suite/innodb/t/fk_backtick_name.test
+@@ -0,0 +1,8 @@
++--source include/have_innodb.inc
++--echo #
++--echo # MDEV-39818 backtick in FK names breaks SHOW CREATE TABLE
++--echo #
++CREATE TABLE p (a INT PRIMARY KEY) ENGINE=InnoDB;
++CREATE TABLE t1 (a INT, CONSTRAINT `foo `` bar` FOREIGN KEY (a) REFERENCES p(a)) ENGINE=InnoDB;
++SHOW CREATE TABLE t1;
++DROP TABLE t1, p;
+diff --git a/storage/innobase/handler/ha_innodb.cc b/storage/innobase/handler/ha_innodb.cc
+index 02649112..1a4f1583 100644
+--- a/storage/innobase/handler/ha_innodb.cc
++++ b/storage/innobase/handler/ha_innodb.cc
+@@ -3501,7 +3501,12 @@ innobase_quote_identifier(
+ 		quoted_identifier.append(id);
+ 	} else {
+ 		quoted_identifier += char(q);
+-		quoted_identifier.append(id);
++		for (; *id; id++) {
++			if (*id == q) {
++				quoted_identifier += char(q);
++			}
++			quoted_identifier += *id;
++		}
+ 		quoted_identifier += char(q);
+ 	}
+ 

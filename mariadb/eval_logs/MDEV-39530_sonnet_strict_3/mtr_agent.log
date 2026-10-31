@@ -1,0 +1,93 @@
+Logging: /home/user/mdb_src/mysql-test/mariadb-test-run.pl  --vardir=/home/mtr/var/t --force --parallel=4 --retry=0 main.ctype_collate main.user_var
+VS config: 
+vardir: /home/mtr/var/t
+Removing old var directory...
+Creating var directory '/home/mtr/var/t'...
+Checking supported features...
+MariaDB Version 12.3.4-MariaDB-debug
+ - SSL connections supported
+ - binaries are debug compiled
+Collecting tests...
+Installing system database...
+
+==============================================================================
+
+TEST                                  WORKER RESULT   TIME (ms) or COMMENT
+--------------------------------------------------------------------------
+
+worker[03] Using MTR_BUILD_THREAD 301, with reserved ports 19030..19059
+worker[02] Using MTR_BUILD_THREAD 300, with reserved ports 19000..19029
+worker[04] Using MTR_BUILD_THREAD 302, with reserved ports 19060..19089
+worker[01] Using MTR_BUILD_THREAD 303, with reserved ports 19090..19119
+main.ctype_collate                       w3 [ fail ]
+        Test ended at 2026-10-28 13:11:04
+
+CURRENT_TEST: main.ctype_collate
+mysqltest: At line 401: query 'SELECT IF((@p:=(SELECT f.Path FROM file f WHERE f.ID=1 AND f.Path REGEXP "^xx"))!="",1,2)' failed: ER_CANT_AGGREGATE_2COLLATIONS (1267): Illegal mix of collations (utf8mb3_unicode_ci,COERCIBLE) and (utf8mb3_uca1400_ai_ci,COERCIBLE) for operation '<>'
+
+The result from queries just before the failure was:
+< snip >
+drop table t1;
+# End of 10.6 tests
+#
+# MDEV-39530: Collation mix issue after update
+#
+# Reproduce the environment from the report: character_set_collations
+# maps utf8mb3 to utf8mb3_uca1400_ai_ci and the connection uses that
+# collation.
+SET NAMES utf8mb3 COLLATE utf8mb3_uca1400_ai_ci;
+SELECT @@character_set_collations, @@collation_connection;
+@@character_set_collations	@@collation_connection
+utf8mb3=utf8mb3_uca1400_ai_ci,ucs2=ucs2_uca1400_ai_ci,utf8mb4=utf8mb4_uca1400_ai_ci,utf16=utf16_uca1400_ai_ci,utf32=utf32_uca1400_ai_ci	utf8mb3_uca1400_ai_ci
+CREATE TABLE file (
+`ID` int(10) unsigned NOT NULL AUTO_INCREMENT PRIMARY KEY,
+`Path` varchar(800) NOT NULL DEFAULT ''
+) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_unicode_ci;
+INSERT INTO file VALUES (1,"text");
+# This query used to work in 11.4 but raises
+# ER_CANT_AGGREGATE_2COLLATIONS in 12.1+
+SELECT IF((@p:=(SELECT f.Path FROM file f WHERE f.ID=1 AND f.Path REGEXP "^xx"))!="",1,2);
+
+More results from queries before failure can be found in /home/mtr/var/t/3/log/ctype_collate.log
+
+ - saving '/home/mtr/var/t/3/log/main.ctype_collate/' to '/home/mtr/var/t/log/main.ctype_collate/'
+main.user_var                            w1 [ fail ]
+        Test ended at 2026-10-28 13:11:04
+
+CURRENT_TEST: main.user_var
+--- /home/user/mdb_src/mysql-test/main/user_var.result	2026-10-28 13:10:34.981471838 +0000
++++ /home/mtr/var/t/1/log/user_var.reject	2026-10-28 13:11:04.475490853 +0000
+@@ -162,13 +162,13 @@
+ latin2_general_ci
+ select coercibility(@a:=_latin2'test');
+ coercibility(@a:=_latin2'test')
+-5
++6
+ select collation(@a:=_latin2'test' collate latin2_bin);
+ collation(@a:=_latin2'test' collate latin2_bin)
+ latin2_bin
+ select coercibility(@a:=_latin2'test' collate latin2_bin);
+ coercibility(@a:=_latin2'test' collate latin2_bin)
+-5
++6
+ select (@a:=_latin2'test' collate latin2_bin) = _latin2'TEST';
+ (@a:=_latin2'test' collate latin2_bin) = _latin2'TEST'
+ 0
+
+Result content mismatch
+
+ - saving '/home/mtr/var/t/1/log/main.user_var/' to '/home/mtr/var/t/log/main.user_var/'
+--------------------------------------------------------------------------
+The servers were restarted 0 times
+Spent 0.000 of 2 seconds executing testcases
+
+Completed: Failed 2/2 tests, 0.00% were successful.
+
+Failing test(s): main.ctype_collate main.user_var
+
+The log files in var/log may give you some hint of what went wrong.
+
+If you want to report this error, MariaDB's bug tracker is found at
+https://jira.mariadb.org
+
+mysql-test-run: *** ERROR: there were failing test cases

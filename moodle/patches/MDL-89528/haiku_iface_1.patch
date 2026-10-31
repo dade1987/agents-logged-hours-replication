@@ -1,0 +1,47 @@
+diff --git a/public/lib/classes/di.php b/public/lib/classes/di.php
+index 46dd11354eb..c0bf25e55f1 100644
+--- a/public/lib/classes/di.php
++++ b/public/lib/classes/di.php
+@@ -62,6 +62,29 @@ class di {
+         return self::get_container()->get($id);
+     }
+ 
++    /**
++     * Create a new instance of the given class, resolving its dependencies from the container.
++     *
++     * This is a shortcut helper for \core\di::get_container()->make($name, $params).
++     *
++     * Note: the make method is not a part of the PSR-11 standard.
++     * We currently make use of PHP-DI which does have this method, but its use is not guaranteed.
++     * If Moodle switches to alternative DI resolution, this method _must_ be updated to work with it.
++     *
++     * @param string $name The class or entry name to instantiate.
++     * @param array $params Optional parameters to use when creating the instance.
++     * @return mixed The new instance.
++     */
++    public static function make(string $name, array $params = []): mixed {
++        // Please note that the `make` method is not a part of the PSR-11 standard.
++        // We currently make use of PHP-DI which does have this method, but its use is not guaranteed.
++        // If Moodle switches to alternative DI resolution, this method _must_ be updated to work with it.
++
++        /** @var \DI\Container */
++        $container = self::get_container();
++        return $container->make($name, $params);
++    }
++
+     /**
+      * Set an entry in the container by its identifier.
+      *
+@@ -89,9 +112,10 @@ class di {
+         // Configure the Container builder.
+         $builder = new \DI\ContainerBuilder();
+ 
+-        // At the moment we are using autowiring, but not automatic attribute injection.
+-        // Automatic attribute injection is a php-di specific feature.
++        // We use autowiring, and also enable attribute-based injection (e.g. #[\DI\Attribute\Inject]).
++        // Note: attribute injection is a php-di specific feature and is not part of the PSR-11 standard.
+         $builder->useAutowiring(true);
++        $builder->useAttributes(true);
+ 
+         if (!$CFG->debugdeveloper) {
+             // Enable compilation of the container and write proxies to disk in production.

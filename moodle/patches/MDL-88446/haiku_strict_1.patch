@@ -1,0 +1,26 @@
+diff --git a/public/media/player/videojs/classes/plugin.php b/public/media/player/videojs/classes/plugin.php
+index c9c4320e99c..c535f851ebc 100644
+--- a/public/media/player/videojs/classes/plugin.php
++++ b/public/media/player/videojs/classes/plugin.php
+@@ -279,8 +279,12 @@ class media_videojs_plugin extends core_media_player_native {
+ 
+     public function list_supported_urls(array $urls, array $options = array()) {
+         $result = [];
+-        // Youtube.
++        // Reset the per-call flags, so that state left over from a previous embed
++        // (e.g. an ogv/webm video processed earlier by this instance) does not leak
++        // into this call. This must happen before any early return below.
+         $this->youtube = false;
++        $this->ogvtech = false;
++        // Youtube.
+         if (count($urls) == 1 && get_config('media_videojs', 'youtube')) {
+             $url = reset($urls);
+ 
+@@ -307,7 +311,6 @@ class media_videojs_plugin extends core_media_player_native {
+             }
+ 
+             // Ogv.JS Tech.
+-            $this->ogvtech = false;
+             /* The following browsers do not support OGV natively:
+                 - Chrome (since version 120)
+                 - Edge (since version 122)

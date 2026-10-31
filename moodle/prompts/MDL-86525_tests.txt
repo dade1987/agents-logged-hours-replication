@@ -1,0 +1,32 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You CAN run Moodle's existing PHPUnit tests: `cd {WS} && vendor/bin/phpunit <path/to/some_test.php>` (the test environment is already initialised). You may also run `php -l <file>` and read code with grep/find/cat. Use absolute paths starting with {WS} in every command.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-86525: Course JPEG files are different after restore
+
+When using Moodle's default settings, when you back up and restore a course containing a JPEG file, this file typically (but not always) gets altered on restore. This is unexpected since the file comes from the same Moodle site without having being changed by anyone.
+
+This appears to be caused by file_redactor_exifremoverenabled = Yes (the default option). With this disabled this issue does not occur. (It also may not occur if file_redactor_exifremovertoolpath is correctly configured although my testing has been limited).
+
+h4. Steps to reproduce issue
+
+# Create a course:
+## Give it a name.
+## Add a JPEG file to the _Course image_ field, for example, {{owl.jpeg}}.
+# Find the file in {{mdl_files}} (for example, with {{SELECT id, contenthash FROM mdl_files WHERE filename = 'owl.jpeg' AND mimetype = 'image/jpeg' AND component = 'course' AND filearea = 'overviewfiles'}}), and note the contenthash.
+# Back up the course.
+# Restore the backup as a new course.
+# Find the new file in {{mdl_files}} with the same query as step 2.
+
+h4. Expected results
+
+We haven't altered the image since it was used in the first course so both hashes should be the same.
+
+h4. Actual results
+
+Two different hashes and, thus, two different files in {{filedir}}. If you back up the restored course (i.e. the second course not the first course) and restore that as a new course you'll (probably) get a third hash (and, again, a third file).

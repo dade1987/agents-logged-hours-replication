@@ -1,0 +1,320 @@
+diff --git a/mysql-test/main/desc_index_range.result b/mysql-test/main/desc_index_range.result
+index fd84fd97..77301c46 100644
+--- a/mysql-test/main/desc_index_range.result
++++ b/mysql-test/main/desc_index_range.result
+@@ -600,3 +600,115 @@ min(kp2)
+ 3
+ 3
+ drop table t20;
++#
++# MDEV-40762 Wrong MAX() result with GROUP BY when loose index scan
++#            uses DESC key part
++#
++# The MIN/MAX argument column is ASC in one index and DESC in another.
++# The key part (and thus the ASC/DESC flag used by the loose index scan)
++# must belong to the index that was actually chosen.
++create table t1 (a int not null, b int not null,
++key k_asc (a, b), key k_desc (a, b desc));
++insert into t1 values (1,1),(1,2),(1,3),(2,10),(2,20),(2,30),(3,5);
++explain select a, max(b) from t1 group by a;
++id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
++1	SIMPLE	t1	range	NULL	k_asc	4	NULL	#	Using index for group-by
++select a, max(b) from t1 group by a;
++a	max(b)
++1	3
++2	30
++3	5
++explain select a, min(b) from t1 group by a;
++id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
++1	SIMPLE	t1	range	NULL	k_asc	4	NULL	#	Using index for group-by
++select a, min(b) from t1 group by a;
++a	min(b)
++1	1
++2	10
++3	5
++explain select a, min(b), max(b) from t1 group by a;
++id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
++1	SIMPLE	t1	range	NULL	k_asc	4	NULL	#	Using index for group-by
++select a, min(b), max(b) from t1 group by a;
++a	min(b)	max(b)
++1	1	3
++2	10	30
++3	5	5
++drop table t1;
++create table t1 (a int not null, b int not null,
++key k_desc (a, b desc), key k_asc (a, b));
++insert into t1 values (1,1),(1,2),(1,3),(2,10),(2,20),(2,30),(3,5);
++explain select a, max(b) from t1 group by a;
++id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
++1	SIMPLE	t1	range	NULL	k_desc	4	NULL	#	Using index for group-by
++select a, max(b) from t1 group by a;
++a	max(b)
++1	3
++2	30
++3	5
++explain select a, min(b) from t1 group by a;
++id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
++1	SIMPLE	t1	range	NULL	k_desc	4	NULL	#	Using index for group-by
++select a, min(b) from t1 group by a;
++a	min(b)
++1	1
++2	10
++3	5
++drop table t1;
++create table t (
++interval_id char(4) not null,
++exchange_id varchar(32) not null,
++base_asset varchar(15) not null,
++quote_asset varchar(15) not null,
++open_time datetime not null,
++symbol varchar(30) not null,
++final char(1) not null default 'Y',
++primary key (interval_id, exchange_id, base_asset, quote_asset, open_time,
++symbol),
++key idx_asc (interval_id, exchange_id, base_asset, quote_asset, open_time,
++final),
++key idx_desc (interval_id, exchange_id, base_asset, quote_asset,
++open_time desc),
++key idx_desc_final (interval_id, exchange_id, base_asset, quote_asset,
++open_time desc, final)
++) engine=innodb default charset=utf8mb4 collate=utf8mb4_bin;
++insert into t (interval_id, exchange_id, base_asset, quote_asset, open_time,
++symbol)
++select '1M', 'binance', 'BTC', 'USDT', '2026-01-01' + interval seq month,
++'BTCUSDT' from seq_0_to_5;
++insert into t (interval_id, exchange_id, base_asset, quote_asset, open_time,
++symbol)
++select '1M', 'binance', 'ETH', 'USDT', '2026-01-01' + interval seq month,
++'ETHUSDT' from seq_0_to_3;
++insert into t (interval_id, exchange_id, base_asset, quote_asset, open_time,
++symbol)
++select '1M', 'kraken', 'BTC', 'USD', '2026-01-01' + interval seq month,
++'BTCUSD' from seq_0_to_2;
++select interval_id, exchange_id, base_asset, quote_asset,
++max(open_time) as open_time_max
++from t
++where exchange_id = 'binance'
++group by interval_id, exchange_id, base_asset, quote_asset;
++interval_id	exchange_id	base_asset	quote_asset	open_time_max
++1M	binance	BTC	USDT	2026-06-01 00:00:00
++1M	binance	ETH	USDT	2026-04-01 00:00:00
++select a.interval_id, a.exchange_id, a.base_asset, a.quote_asset,
++a.open_time, b.open_time_max
++from t as a
++join (
++select interval_id, exchange_id, base_asset, quote_asset,
++max(open_time) as open_time_max
++from t
++where exchange_id = 'binance'
++group by interval_id, exchange_id, base_asset, quote_asset
++) as b
++on a.interval_id = b.interval_id
++and a.exchange_id = b.exchange_id
++and a.base_asset = b.base_asset
++and a.quote_asset = b.quote_asset
++and a.open_time = b.open_time_max
++order by a.base_asset;
++interval_id	exchange_id	base_asset	quote_asset	open_time	open_time_max
++1M	binance	BTC	USDT	2026-06-01 00:00:00	2026-06-01 00:00:00
++1M	binance	ETH	USDT	2026-04-01 00:00:00	2026-04-01 00:00:00
++drop table t;
+diff --git a/mysql-test/main/desc_index_range.test b/mysql-test/main/desc_index_range.test
+index 36f4c406..6c82c975 100644
+--- a/mysql-test/main/desc_index_range.test
++++ b/mysql-test/main/desc_index_range.test
+@@ -396,3 +396,103 @@ eval EXPLAIN $query;
+ eval $query;
+ 
+ drop table t20;
++
++--echo #
++--echo # MDEV-40762 Wrong MAX() result with GROUP BY when loose index scan
++--echo #            uses DESC key part
++--echo #
++--echo # The MIN/MAX argument column is ASC in one index and DESC in another.
++--echo # The key part (and thus the ASC/DESC flag used by the loose index scan)
++--echo # must belong to the index that was actually chosen.
++
++create table t1 (a int not null, b int not null,
++                 key k_asc (a, b), key k_desc (a, b desc));
++insert into t1 values (1,1),(1,2),(1,3),(2,10),(2,20),(2,30),(3,5);
++let $query=
++select a, max(b) from t1 group by a;
++--replace_column 9 #
++eval explain $query;
++eval $query;
++let $query=
++select a, min(b) from t1 group by a;
++--replace_column 9 #
++eval explain $query;
++eval $query;
++let $query=
++select a, min(b), max(b) from t1 group by a;
++--replace_column 9 #
++eval explain $query;
++eval $query;
++drop table t1;
++
++# Same with the DESC index declared first
++create table t1 (a int not null, b int not null,
++                 key k_desc (a, b desc), key k_asc (a, b));
++insert into t1 values (1,1),(1,2),(1,3),(2,10),(2,20),(2,30),(3,5);
++let $query=
++select a, max(b) from t1 group by a;
++--replace_column 9 #
++eval explain $query;
++eval $query;
++let $query=
++select a, min(b) from t1 group by a;
++--replace_column 9 #
++eval explain $query;
++eval $query;
++drop table t1;
++
++# The case from the bug report
++create table t (
++  interval_id char(4) not null,
++  exchange_id varchar(32) not null,
++  base_asset varchar(15) not null,
++  quote_asset varchar(15) not null,
++  open_time datetime not null,
++  symbol varchar(30) not null,
++  final char(1) not null default 'Y',
++  primary key (interval_id, exchange_id, base_asset, quote_asset, open_time,
++               symbol),
++  key idx_asc (interval_id, exchange_id, base_asset, quote_asset, open_time,
++               final),
++  key idx_desc (interval_id, exchange_id, base_asset, quote_asset,
++                open_time desc),
++  key idx_desc_final (interval_id, exchange_id, base_asset, quote_asset,
++                      open_time desc, final)
++) engine=innodb default charset=utf8mb4 collate=utf8mb4_bin;
++insert into t (interval_id, exchange_id, base_asset, quote_asset, open_time,
++               symbol)
++select '1M', 'binance', 'BTC', 'USDT', '2026-01-01' + interval seq month,
++       'BTCUSDT' from seq_0_to_5;
++insert into t (interval_id, exchange_id, base_asset, quote_asset, open_time,
++               symbol)
++select '1M', 'binance', 'ETH', 'USDT', '2026-01-01' + interval seq month,
++       'ETHUSDT' from seq_0_to_3;
++insert into t (interval_id, exchange_id, base_asset, quote_asset, open_time,
++               symbol)
++select '1M', 'kraken', 'BTC', 'USD', '2026-01-01' + interval seq month,
++       'BTCUSD' from seq_0_to_2;
++
++select interval_id, exchange_id, base_asset, quote_asset,
++       max(open_time) as open_time_max
++from t
++where exchange_id = 'binance'
++group by interval_id, exchange_id, base_asset, quote_asset;
++
++select a.interval_id, a.exchange_id, a.base_asset, a.quote_asset,
++       a.open_time, b.open_time_max
++from t as a
++join (
++  select interval_id, exchange_id, base_asset, quote_asset,
++         max(open_time) as open_time_max
++  from t
++  where exchange_id = 'binance'
++  group by interval_id, exchange_id, base_asset, quote_asset
++) as b
++  on a.interval_id = b.interval_id
++ and a.exchange_id = b.exchange_id
++ and a.base_asset = b.base_asset
++ and a.quote_asset = b.quote_asset
++ and a.open_time = b.open_time_max
++order by a.base_asset;
++
++drop table t;
+diff --git a/sql/opt_range.cc b/sql/opt_range.cc
+index c8d1d8da..53a4fc99 100644
+--- a/sql/opt_range.cc
++++ b/sql/opt_range.cc
+@@ -14859,6 +14859,14 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
+     uint cur_key_infix_len= 0;
+     uchar cur_key_infix[MAX_KEY_LENGTH];
+     uint cur_used_key_parts;
++    /*
++      The keypart of the MIN/MAX argument in cur_index_info. It must be
++      tracked per index: the same column may be ASC in one index and DESC
++      in another (the HA_REVERSE_SORT flag of the keypart drives the scan
++      direction in QUICK_GROUP_MIN_MAX_SELECT::get_next()), so it is copied
++      to min_max_arg_part only when cur_index becomes the best index.
++    */
++    KEY_PART_INFO *cur_min_max_arg_part= NULL;
+     
+     /*
+       Check (B1) - if current index is covering.
+@@ -15028,7 +15036,7 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
+         cause= "aggregate column not suffix in idx";
+         goto next_index;
+       }
+-      min_max_arg_part= cur_index_info->key_part + key_part_nr - 1;
++      cur_min_max_arg_part= cur_index_info->key_part + key_part_nr - 1;
+     }
+ 
+     /*
+@@ -15062,19 +15070,21 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
+     first_non_group_part= (cur_group_key_parts < key_parts) ?
+                           cur_index_info->key_part + cur_group_key_parts :
+                           NULL;
+-    first_non_infix_part= min_max_arg_part ?
+-                          (min_max_arg_part < last_part) ?
+-                             min_max_arg_part :
++    first_non_infix_part= cur_min_max_arg_part ?
++                          (cur_min_max_arg_part < last_part) ?
++                             cur_min_max_arg_part :
+                              NULL :
+                            NULL;
+     if (first_non_group_part &&
+-        (!min_max_arg_part || (min_max_arg_part - first_non_group_part > 0)))
++        (!cur_min_max_arg_part ||
++         (cur_min_max_arg_part - first_non_group_part > 0)))
+     {
+       if (tree)
+       {
+         SEL_ARG *index_range_tree= tree->keys[cur_param_idx];
+         if (!get_constant_key_infix(cur_index_info, index_range_tree,
+-                                    first_non_group_part, min_max_arg_part,
++                                    first_non_group_part,
++                                    cur_min_max_arg_part,
+                                     last_part, thd, cur_key_infix, 
+                                     &cur_key_infix_len,
+                                     &first_non_infix_part))
+@@ -15083,8 +15093,8 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
+           goto next_index;
+         }
+       }
+-      else if (min_max_arg_part &&
+-               (min_max_arg_part - first_non_group_part > 0))
++      else if (cur_min_max_arg_part &&
++               (cur_min_max_arg_part - first_non_group_part > 0))
+       {
+         /*
+           There is a gap but no range tree, thus no predicates at all for the
+@@ -15128,7 +15138,7 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
+     if (first_non_infix_part)
+     {
+       cur_part= first_non_infix_part +
+-                (min_max_arg_part && (min_max_arg_part < last_part));
++                (cur_min_max_arg_part && (cur_min_max_arg_part < last_part));
+       for (; cur_part != last_part; cur_part++)
+       {
+         if (bitmap_is_set(table->read_set, cur_part->field->field_index))
+@@ -15148,7 +15158,7 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
+     {
+       SEL_ARG *index_range_tree= tree->keys[cur_param_idx];
+       SEL_ARG *cur_range= NULL;
+-      if (get_sel_arg_for_keypart(min_max_arg_part->field,
++      if (get_sel_arg_for_keypart(cur_min_max_arg_part->field,
+                                   index_range_tree, &cur_range) ||
+           (cur_range && cur_range->type != SEL_ARG::KEY_RANGE))
+       {
+@@ -15204,6 +15214,7 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
+     {
+       index_info= cur_index_info;
+       index= cur_index;
++      min_max_arg_part= cur_min_max_arg_part;
+       best_read_cost= cur_read_cost;
+       best_records= cur_records;
+       best_index_tree= cur_index_tree;

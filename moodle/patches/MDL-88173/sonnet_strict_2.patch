@@ -1,0 +1,50 @@
+diff --git a/public/question/type/multichoice/renderer.php b/public/question/type/multichoice/renderer.php
+index cccaf774db8..0be247678c3 100644
+--- a/public/question/type/multichoice/renderer.php
++++ b/public/question/type/multichoice/renderer.php
+@@ -144,21 +144,19 @@ abstract class qtype_multichoice_renderer_base extends qtype_with_combined_feedb
+         }
+ 
+         $result = '';
+-        $result .= html_writer::tag('div', $question->format_questiontext($qa),
+-                array('class' => 'qtext'));
++        $result .= html_writer::start_tag('fieldset', ['class' => 'ablock no-overflow visual-scroll-x']);
++        // The question text is the accessible name of the group, so it goes inside the legend.
++        $result .= html_writer::tag('legend', $question->format_questiontext($qa),
++                ['class' => 'qtext fw-normal fs-base p-0 mb-3']);
+ 
+-        $result .= html_writer::start_tag('fieldset', array('class' => 'ablock no-overflow visual-scroll-x'));
+         if ($question->showstandardinstruction == 1) {
+-            $legendclass = '';
+-            $questionnumber = $options->add_question_identifier_to_label($this->prompt(), true, true);
++            $promptclass = '';
++            $prompttext = $options->add_question_identifier_to_label($this->prompt(), true, true);
+         } else {
+-            $questionnumber = $options->add_question_identifier_to_label(get_string('answer'), true, true);
+-            $legendclass = 'visually-hidden';
++            $prompttext = $options->add_question_identifier_to_label(get_string('answer'), true, true);
++            $promptclass = 'visually-hidden';
+         }
+-        $legendattrs = [
+-            'class' => 'prompt h6 fw-normal ' . $legendclass,
+-        ];
+-        $result .= html_writer::tag('legend', $questionnumber, $legendattrs);
++        $result .= html_writer::div($prompttext, 'prompt h6 fw-normal ' . $promptclass);
+ 
+         $result .= html_writer::start_tag('div', array('class' => 'answer'));
+         foreach ($radiobuttons as $key => $radio) {
+diff --git a/public/question/type/multichoice/tests/walkthrough_test.php b/public/question/type/multichoice/tests/walkthrough_test.php
+index c09e39dd3e3..88c4e90404c 100644
+--- a/public/question/type/multichoice/tests/walkthrough_test.php
++++ b/public/question/type/multichoice/tests/walkthrough_test.php
+@@ -302,9 +302,7 @@ final class walkthrough_test extends \qbehaviour_walkthrough_test_base {
+         $this->render();
+ 
+         // Check for 'Show standard instruction'.
+-        $standardinstruction = \html_writer::tag('legend', get_string('answer'), [
+-            'class' => 'prompt h6 fw-normal visually-hidden',
+-        ]);
++        $standardinstruction = \html_writer::div(get_string('answer'), 'prompt h6 fw-normal visually-hidden');
+         $this->assertStringContainsString($standardinstruction, $this->currentoutput);
+     }
+ 

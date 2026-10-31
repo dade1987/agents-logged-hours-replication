@@ -1,0 +1,81 @@
+diff --git a/mysql-test/suite/csv/mdev40636.result b/mysql-test/suite/csv/mdev40636.result
+new file mode 100644
+index 00000000..9c565d99
+--- /dev/null
++++ b/mysql-test/suite/csv/mdev40636.result
+@@ -0,0 +1,18 @@
++#
++# MDEV-40636 CSV crashes on DELETE
++#
++create table t1 (id int not null, pad char(10) not null) engine=csv;
++insert t1 select seq,'AAAAAAAAAA' from seq_1_to_2048;
++select count(*) from t1;
++count(*)
++2048
++delete from t1 where id % 2 = 0;
++select count(*), min(id), max(id) from t1;
++count(*)	min(id)	max(id)
++1024	1	2047
++update t1 set pad='BBBBBBBBBB' where id % 4 = 1;
++select count(*) from t1 where pad='BBBBBBBBBB';
++count(*)
++512
++drop table t1;
++# End of tests
+diff --git a/mysql-test/suite/csv/mdev40636.test b/mysql-test/suite/csv/mdev40636.test
+new file mode 100644
+index 00000000..1e1cda5e
+--- /dev/null
++++ b/mysql-test/suite/csv/mdev40636.test
+@@ -0,0 +1,16 @@
++--source include/have_sequence.inc
++--source include/have_csv.inc
++
++--echo #
++--echo # MDEV-40636 CSV crashes on DELETE
++--echo #
++create table t1 (id int not null, pad char(10) not null) engine=csv;
++insert t1 select seq,'AAAAAAAAAA' from seq_1_to_2048;
++select count(*) from t1;
++delete from t1 where id % 2 = 0;
++select count(*), min(id), max(id) from t1;
++update t1 set pad='BBBBBBBBBB' where id % 4 = 1;
++select count(*) from t1 where pad='BBBBBBBBBB';
++drop table t1;
++
++--echo # End of tests
+diff --git a/storage/csv/ha_tina.cc b/storage/csv/ha_tina.cc
+index 71c06776..dcf1e88c 100644
+--- a/storage/csv/ha_tina.cc
++++ b/storage/csv/ha_tina.cc
+@@ -645,16 +645,27 @@ int ha_tina::chain_append()
+       chain_size += DEFAULT_CHAIN_LENGTH;
+       if (chain_alloced)
+       {
+-        if ((chain= (tina_set *) my_realloc(csv_key_memory_tina_set,
+-                                            (uchar*)chain, chain_size,
+-                                            MYF(MY_WME))) == NULL)
++        tina_set *ptr= (tina_set *) my_realloc(csv_key_memory_tina_set,
++                                               (uchar*)chain,
++                                               chain_size * sizeof(tina_set),
++                                               MYF(MY_WME));
++        if (!ptr)
++        {
++          chain_size-= DEFAULT_CHAIN_LENGTH;
+           return -1;
++        }
++        chain= ptr;
+       }
+       else
+       {
+         tina_set *ptr= (tina_set *) my_malloc(csv_key_memory_tina_set,
+                                               chain_size * sizeof(tina_set),
+                                               MYF(MY_WME));
++        if (!ptr)
++        {
++          chain_size-= DEFAULT_CHAIN_LENGTH;
++          return -1;
++        }
+         memcpy(ptr, chain, DEFAULT_CHAIN_LENGTH * sizeof(tina_set));
+         chain= ptr;
+         chain_alloced++;

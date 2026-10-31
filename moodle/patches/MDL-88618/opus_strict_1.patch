@@ -1,0 +1,272 @@
+diff --git a/.upgradenotes/MDL-88618-2026102412000000.yml b/.upgradenotes/MDL-88618-2026102412000000.yml
+new file mode 100644
+index 00000000000..ffb636aa398
+--- /dev/null
++++ b/.upgradenotes/MDL-88618-2026102412000000.yml
+@@ -0,0 +1,15 @@
++issueNumber: MDL-88618
++notes:
++  editor_tiny:
++    - message: >-
++        The TinyMCE Accordion (`accordion`) and List Styles (`advlist`) plugins
++        bundled with TinyMCE are now enabled. Accordion is available from the
++        Insert menu, and List Styles extends the existing bullet and numbered
++        list toolbar buttons with additional list styles.
++      type: improved
++  core:
++    - message: >-
++        The HTML Purifier configuration used by `purify_html()` now allows the
++        `details` (with the `open` attribute) and `summary` elements, as used
++        by the TinyMCE Accordion plugin.
++      type: improved
+diff --git a/public/lib/editor/tiny/amd/build/defaults.min.js b/public/lib/editor/tiny/amd/build/defaults.min.js
+index 19f6ae353759f93de61887415c2366fd35b1d56d..41365c1299f19b2c20fdd26895f1bfed23d9410e 100644
+GIT binary patch
+delta 22
+ecmZ1`zd?S(TV~G0<mCLKl+66R&2N}@aRUHr7ztMZ
+
+delta 17
+ZcmdlWzf69^TjtFLyv$6Sf3a@k1OP#-2HOAt
+
+diff --git a/public/lib/editor/tiny/amd/build/defaults.min.js.map b/public/lib/editor/tiny/amd/build/defaults.min.js.map
+index a25edd0b1bdc8b3e38f7494145a08e417a123761..22105b34b3f0272c574848173373c50c05b238ca 100644
+GIT binary patch
+delta 22
+dcmdmBx65vWEIVgna&mrAN@jlEW*K%72>@S_2Y3Jg
+
+delta 12
+TcmdmGx4~|MEc<44c3}wsA72B<
+
+diff --git a/public/lib/editor/tiny/amd/src/defaults.js b/public/lib/editor/tiny/amd/src/defaults.js
+index 3042c376cea..769cc601724 100644
+--- a/public/lib/editor/tiny/amd/src/defaults.js
++++ b/public/lib/editor/tiny/amd/src/defaults.js
+@@ -36,7 +36,7 @@ export const getDefaultMenu = () => {
+         file: {title: 'File', items: 'newdocument restoredraft | preview | export print | deleteallconversations'},
+         edit: {title: 'Edit', items: 'undo redo | cut copy paste pastetext | selectall | searchreplace'},
+         view: {title: 'View', items: 'code | visualaid visualchars visualblocks | spellchecker | preview fullscreen | showcomments'},
+-        insert: {title: 'Insert', items: 'image link media addcomment pageembed template codesample inserttable | charmap emoticons hr | pagebreak nonbreaking anchor tableofcontents | insertdatetime'},
++        insert: {title: 'Insert', items: 'image link media addcomment pageembed template codesample inserttable accordion | charmap emoticons hr | pagebreak nonbreaking anchor tableofcontents | insertdatetime'},
+         format: {title: 'Format', items: 'bold italic underline strikethrough superscript subscript codeformat | styles blocks fontfamily fontsize align lineheight | forecolor backcolor | language | removeformat'},
+         tools: {title: 'Tools', items: 'spellchecker spellcheckerlanguage | a11ycheck code wordcount'},
+         table: {title: 'Table', items: 'inserttable | cell row column | advtablesort | tableprops deletetable'},
+diff --git a/public/lib/editor/tiny/classes/manager.php b/public/lib/editor/tiny/classes/manager.php
+index 57f10a42bb7..459b2e64b1e 100644
+--- a/public/lib/editor/tiny/classes/manager.php
++++ b/public/lib/editor/tiny/classes/manager.php
+@@ -275,6 +275,23 @@ class manager {
+         // The following list is defined at:
+         // https://www.tiny.cloud/docs/advanced/available-toolbar-buttons/#thecoretoolbarbuttons.
+         return [
++            'accordion' => [
++                'buttons' => [
++                    'accordion',
++                    'accordionremove',
++                ],
++                'menuitems' => [
++                    'accordion' => 'insert',
++                ],
++            ],
++            'advlist' => [
++                // The advlist plugin extends the bullist and numlist buttons provided by the lists plugin.
++                // It requires the lists plugin to be enabled.
++                'buttons' => [
++                    'bullist',
++                    'numlist',
++                ],
++            ],
+             'anchor' => [
+                 'buttons' => [
+                     'anchor',
+diff --git a/public/lib/editor/tiny/tests/behat/accordion_advlist.feature b/public/lib/editor/tiny/tests/behat/accordion_advlist.feature
+new file mode 100644
+index 00000000000..3321a951205
+--- /dev/null
++++ b/public/lib/editor/tiny/tests/behat/accordion_advlist.feature
+@@ -0,0 +1,33 @@
++@editor @editor_tiny @javascript
++Feature: Use the TinyMCE Accordion and List Styles plugins
++  In order to structure my content
++  As a user
++  I need to be able to insert accordions and apply list styles in TinyMCE
++
++  Scenario: Insert an accordion using the Insert menu
++    Given I am on the "Profile advanced editing" page logged in as "admin"
++    And I set the field "Description" to "<p>My accordion title</p>"
++    And I select the "p" element in position "0" of the "Description" TinyMCE editor
++    When I click on the "Insert > Accordion" menu item for the "Description" TinyMCE editor
++    Then the field "Description" matches expression "#<details class=\"mce-accordion\" open=\"open\"><summary class=\"mce-accordion-summary\">My accordion title</summary><div class=\"mce-accordion-body\"><p>.+</p></div></details>#s"
++    And I click on "Update profile" "button"
++    And I am on the "admin" "user > profile" page
++    And "//details[contains(@class, 'mce-accordion')]/summary[contains(., 'My accordion title')]" "xpath_element" should exist
++
++  Scenario: Apply an extended ordered list style
++    Given I am on the "Profile advanced editing" page logged in as "admin"
++    And I set the field "Description" to "<p>First item</p>"
++    And I select the "p" element in position "0" of the "Description" TinyMCE editor
++    And I expand all toolbars for the "Description" TinyMCE editor
++    When I click on the "Numbered list menu" button for the "Description" TinyMCE editor
++    And I click on "[role^='menuitem'][aria-label='Lower Alpha']" "css_element"
++    Then the field "Description" matches expression "#<ol style=\"list-style-type: lower-alpha;\">\s*<li>First item</li>\s*</ol>#s"
++
++  Scenario: Apply an extended unordered list style
++    Given I am on the "Profile advanced editing" page logged in as "admin"
++    And I set the field "Description" to "<p>First item</p>"
++    And I select the "p" element in position "0" of the "Description" TinyMCE editor
++    And I expand all toolbars for the "Description" TinyMCE editor
++    When I click on the "Bullet list menu" button for the "Description" TinyMCE editor
++    And I click on "[role^='menuitem'][aria-label='Square']" "css_element"
++    Then the field "Description" matches expression "#<ul style=\"list-style-type: square;\">\s*<li>First item</li>\s*</ul>#s"
+diff --git a/public/lib/editor/tiny/tests/manager_test.php b/public/lib/editor/tiny/tests/manager_test.php
+new file mode 100644
+index 00000000000..67b5e879ccd
+--- /dev/null
++++ b/public/lib/editor/tiny/tests/manager_test.php
+@@ -0,0 +1,80 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace editor_tiny;
++
++/**
++ * Unit tests for the editor_tiny\manager class.
++ *
++ * @package    editor_tiny
++ * @covers     \editor_tiny\manager
++ * @copyright  2026 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++final class manager_test extends \advanced_testcase {
++    /**
++     * Get the plugin configuration for the system context.
++     *
++     * @return array
++     */
++    protected function get_plugin_configuration(): array {
++        $manager = new manager();
++        return $manager->get_plugin_configuration(\core\context\system::instance(), [], []);
++    }
++
++    /**
++     * Ensure that the Accordion plugin is enabled.
++     */
++    public function test_accordion_plugin_enabled(): void {
++        $this->resetAfterTest();
++
++        $plugins = $this->get_plugin_configuration();
++
++        $this->assertArrayHasKey('accordion', $plugins);
++        $this->assertContains('accordion', $plugins['accordion']['buttons']);
++        $this->assertArrayHasKey('accordion', $plugins['accordion']['menuitems']);
++        $this->assertEquals('insert', $plugins['accordion']['menuitems']['accordion']);
++    }
++
++    /**
++     * Ensure that the List Styles (advlist) plugin is enabled, along with the lists plugin that it depends upon.
++     */
++    public function test_advlist_plugin_enabled(): void {
++        $this->resetAfterTest();
++
++        $plugins = $this->get_plugin_configuration();
++
++        $this->assertArrayHasKey('advlist', $plugins);
++        // The advlist plugin requires the lists plugin.
++        $this->assertArrayHasKey('lists', $plugins);
++
++        $this->assertContains('bullist', $plugins['advlist']['buttons']);
++        $this->assertContains('numlist', $plugins['advlist']['buttons']);
++    }
++
++    /**
++     * Ensure that the plugins which are disabled in Moodle are not included.
++     */
++    public function test_disabled_plugins_not_included(): void {
++        $this->resetAfterTest();
++
++        $plugins = $this->get_plugin_configuration();
++
++        foreach (['image', 'media', 'autosave', 'preview', 'link'] as $disabledplugin) {
++            $this->assertArrayNotHasKey($disabledplugin, $plugins);
++        }
++    }
++}
+diff --git a/public/lib/tests/weblib_test.php b/public/lib/tests/weblib_test.php
+index bf3e969d1cd..67131f3b886 100644
+--- a/public/lib/tests/weblib_test.php
++++ b/public/lib/tests/weblib_test.php
+@@ -641,6 +641,34 @@ EXPECTED;
+ 
+     }
+ 
++    /**
++     * Test that the details and summary elements (used by the TinyMCE Accordion plugin) are preserved.
++     *
++     * @covers \purify_html
++     */
++    public function test_purify_html_details(): void {
++        $this->resetAfterTest();
++
++        $accordion = '<details class="mce-accordion" open="open">' .
++            '<summary class="mce-accordion-summary">Accordion summary</summary>' .
++            '<div class="mce-accordion-body"><p>Accordion <strong>body</strong></p></div>' .
++            '</details>' .
++            '<details><summary>Closed accordion</summary><p>Hidden content</p></details>';
++
++        $this->assertEquals($accordion, purify_html($accordion));
++
++        // Unsafe attributes and content are still removed.
++        $illegal = '<details onclick="alert(1)"><summary onmouseover="alert(2)">Summary</summary>' .
++            '<script>alert(3);</script><p>Body</p></details>';
++        $this->assertEquals(
++            '<details><summary>Summary</summary><p>Body</p></details>',
++            purify_html($illegal)
++        );
++
++        // The summary element is only valid within a details element.
++        $this->assertEquals('<p>Text</p>', purify_html('<p><summary>Text</summary></p>'));
++    }
++
+     /**
+      * Tests for content_to_text.
+      *
+diff --git a/public/lib/weblib.php b/public/lib/weblib.php
+index 225779a9cd8..8edb636de52 100644
+--- a/public/lib/weblib.php
++++ b/public/lib/weblib.php
+@@ -1107,7 +1107,7 @@ function purify_html($text, $options = array()) {
+         $config = HTMLPurifier_Config::createDefault();
+ 
+         $config->set('HTML.DefinitionID', 'moodlehtml');
+-        $config->set('HTML.DefinitionRev', 7);
++        $config->set('HTML.DefinitionRev', 8);
+         $config->set('CSS.Proprietary', true);
+         $config->set('Cache.SerializerPath', $cachedir);
+         $config->set('Cache.SerializerPermissions', $CFG->directorypermissions);
+@@ -1190,6 +1190,14 @@ function purify_html($text, $options = array()) {
+                 'default' => 'Bool',
+             ]);
+ 
++            // Interactive elements, used for example by the TinyMCE Accordion plugin.
++            // https://html.spec.whatwg.org/#the-details-element
++            $def->addElement('details', 'Block', 'Optional: #PCDATA | Flow | summary', 'Common', [
++                'open' => 'Bool#open',
++            ]);
++            // https://html.spec.whatwg.org/#the-summary-element
++            $def->addElement('summary', false, 'Optional: #PCDATA | Flow', 'Common');
++
+             // Use the built-in Ruby module to add annotation support.
+             $def->manager->addModule(new HTMLPurifier_HTMLModule_Ruby());
+         }

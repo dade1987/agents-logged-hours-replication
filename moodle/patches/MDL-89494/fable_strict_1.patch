@@ -1,0 +1,85 @@
+diff --git a/public/admin/tool/customlang/locallib.php b/public/admin/tool/customlang/locallib.php
+index c76ff7829fb..6b1baf5cf10 100644
+--- a/public/admin/tool/customlang/locallib.php
++++ b/public/admin/tool/customlang/locallib.php
+@@ -34,7 +34,10 @@ class tool_customlang_utils {
+ 
+     /**
+      * Rough number of strings that are being processed during a full checkout.
+-     * This is used to estimate the progress of the checkout.
++     *
++     * @deprecated since Moodle 6.0 (MDL-89494). The checkout progress is now computed from the
++     *             actual number of components and strings being processed, so this estimate is no
++     *             longer used.
+      */
+     const ROUGH_NUMBER_OF_STRINGS = 33000;
+ 
+@@ -126,13 +129,17 @@ class tool_customlang_utils {
+         }
+         unset($current);
+ 
+-        // initialize the progress counter - stores the number of processed strings
+-        $done = 0;
++        // Initialize the progress counters. The progress is computed from the real amount of
++        // work: the number of components to process and, within the current component, the
++        // number of strings already processed. The progress bar never reaches 100% before
++        // the whole checkout has actually finished.
+         $strinprogress = get_string('checkoutinprogress', 'tool_customlang');
+ 
+         // reload components and fetch their strings
+         $stringman  = get_string_manager();
+         $components = $DB->get_records('tool_customlang_components');
++        $componentstotal = count($components);
++        $componentsdone = 0;
+         foreach ($components as $component) {
+             $sql = "SELECT stringid, id, lang, componentid, original, master, local, timemodified, timecustomized, outdated, modified
+                       FROM {tool_customlang} s
+@@ -147,6 +154,10 @@ class tool_customlang_utils {
+             }
+             $local = $stringman->load_component_strings($component->name, $lang, true, false);
+ 
++            // Number of strings to process in this component and number already processed.
++            $stringstotal = count($english);
++            $done = 0;
++
+             foreach ($english as $stringid => $stringoriginal) {
+                 $stringmaster = isset($master[$stringid]) ? $master[$stringid] : null;
+                 $stringlocal = isset($local[$stringid]) ? $local[$stringid] : null;
+@@ -154,7 +165,11 @@ class tool_customlang_utils {
+ 
+                 if (!is_null($progressbar)) {
+                     $done++;
+-                    $donepercent = floor(min($done, self::ROUGH_NUMBER_OF_STRINGS) / self::ROUGH_NUMBER_OF_STRINGS * 100);
++                    // Fraction of the components already fully processed, plus the fraction of the
++                    // current component that has been processed so far.
++                    $progress = ($componentsdone + ($done / $stringstotal)) / $componentstotal;
++                    // Never report 100% here, the checkout is complete only after the loop finishes.
++                    $donepercent = min(floor($progress * 100), 99);
+                     $progressbar->update_full($donepercent, $strinprogress);
+                 }
+ 
+@@ -208,8 +223,11 @@ class tool_customlang_utils {
+                     $DB->insert_record('tool_customlang', $record);
+                 }
+             }
++
++            $componentsdone++;
+         }
+ 
++        // The checkout is now complete, all the strings are available in the translator.
+         if (!is_null($progressbar)) {
+             $progressbar->update_full(100, get_string('checkoutdone', 'tool_customlang'));
+         }
+diff --git a/public/admin/tool/customlang/upgrade.txt b/public/admin/tool/customlang/upgrade.txt
+new file mode 100644
+index 00000000000..b7bfb89c86a
+--- /dev/null
++++ b/public/admin/tool/customlang/upgrade.txt
+@@ -0,0 +1,7 @@
++This file describes API changes in the tool_customlang code.
++
++=== 6.0 ===
++
++* The constant tool_customlang_utils::ROUGH_NUMBER_OF_STRINGS has been deprecated and is no longer used. The
++  checkout progress is now computed from the actual number of components and strings being processed, so that
++  the progress bar never reaches 100% before the checkout has actually finished (MDL-89494).

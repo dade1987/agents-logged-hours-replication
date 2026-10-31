@@ -1,0 +1,64 @@
+diff --git a/public/admin/tool/installaddon/lang/en/tool_installaddon.php b/public/admin/tool/installaddon/lang/en/tool_installaddon.php
+index c104eb0b723..50b5697339a 100644
+--- a/public/admin/tool/installaddon/lang/en/tool_installaddon.php
++++ b/public/admin/tool/installaddon/lang/en/tool_installaddon.php
+@@ -33,9 +33,9 @@ $string['featuredisabled'] = 'The plugin installer is disabled on this site.';
+ $string['installaddon'] = 'Install plugin!';
+ $string['installaddons'] = 'Install plugins';
+ $string['installfromrepo'] = 'Install plugins from the Moodle plugins directory';
+-$string['installfromrepo_help'] = 'You will be redirected to the Moodle plugins directory to search for and install a plugin. Note that your site full name, URL and Moodle version will be sent as well, to make the installation process easier for you.';
++$string['installfromrepounavailable'] = 'Installing plugins directly from the Moodle plugins directory is currently unavailable. To install a plugin, download its ZIP package and upload it using the form below.';
+ $string['installfromzip'] = 'Install plugin from ZIP file';
+-$string['installfromzip_help'] = 'An alternative to installing a plugin directly from the Moodle plugins directory is to upload a ZIP package of the plugin. The ZIP package should have the same structure as a package downloaded from the Moodle plugins directory.';
++$string['installfromzip_help'] = 'Plugins can be installed by uploading a ZIP package of the plugin. The ZIP package should have the same structure as a package downloaded from the Moodle plugins directory.';
+ $string['installfromzipfile'] = 'ZIP package';
+ $string['installfromzipfile_help'] = 'The plugin ZIP package must contain just one directory, named to match the plugin name. The ZIP will be extracted into an appropriate location for the plugin type. If the package has been downloaded from the Moodle plugins directory then it will have this structure.';
+ $string['installfromzipinvalid'] = 'The plugin ZIP package must contain just one directory, named to match the plugin name. The file provided is not a valid plugin ZIP package.';
+diff --git a/public/admin/tool/installaddon/renderer.php b/public/admin/tool/installaddon/renderer.php
+index e69aa6789d5..19330bae191 100644
+--- a/public/admin/tool/installaddon/renderer.php
++++ b/public/admin/tool/installaddon/renderer.php
+@@ -199,17 +199,18 @@ class tool_installaddon_renderer extends plugin_renderer_base {
+     }
+ 
+     /**
+-     * Renders the widget for browsing the add-on repository
++     * Renders the notice about installing plugins from the Moodle plugins directory.
++     *
++     * Direct installation of plugins from the Moodle plugins directory is currently unavailable, so instead of
++     * offering a button that leads to a dead end, a notice is displayed and the ZIP upload remains the way to go.
+      *
+      * @return string
+      */
+     protected function index_page_repository() {
+ 
+-        $url = $this->installer->get_addons_repository_url();
+-
+         $out = $this->box(
+-            $this->output->single_button($url, get_string('installfromrepo', 'tool_installaddon'), 'get').
+-            $this->output->help_icon('installfromrepo', 'tool_installaddon'),
++            $this->output->notification(get_string('installfromrepounavailable', 'tool_installaddon'),
++                \core\output\notification::NOTIFY_INFO, false),
+             'generalbox', 'installfromrepobox'
+         );
+ 
+diff --git a/public/admin/tool/installaddon/styles.css b/public/admin/tool/installaddon/styles.css
+index 3de50f35259..fe461560c11 100644
+--- a/public/admin/tool/installaddon/styles.css
++++ b/public/admin/tool/installaddon/styles.css
+@@ -1,13 +1,4 @@
+ #page-admin-tool-installaddon-index #installfromrepobox {
+-    text-align: center;
+-    padding-top: 2em;
+-    padding-bottom: 2em;
+-}
+-
+-#page-admin-tool-installaddon-index #installfromrepobox .singlebutton {
+-    display: inline-block;
+-}
+-
+-#page-admin-tool-installaddon-index #installfromrepobox .singlebutton input[type=submit] {
+-    padding: 1em;
++    padding-top: 1em;
++    padding-bottom: 1em;
+ }

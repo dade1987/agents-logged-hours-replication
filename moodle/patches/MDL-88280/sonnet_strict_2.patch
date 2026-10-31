@@ -1,0 +1,28 @@
+diff --git a/public/question/classes/local/bank/question_bank_helper.php b/public/question/classes/local/bank/question_bank_helper.php
+index f6b6befbc72..b622ff9e858 100644
+--- a/public/question/classes/local/bank/question_bank_helper.php
++++ b/public/question/classes/local/bank/question_bank_helper.php
+@@ -269,11 +269,14 @@ class question_bank_helper {
+         // Build the left joins for all modules of the type requested i.e. those that do or do not share questions.
+         $pluginjoins = [];
+         $pluginfields = [];
++        $excludepreviewsql = '';
+         foreach ($plugins as $key => $plugin) {
+             $join = "LEFT JOIN {{$plugin}} p{$key} ON p{$key}.id = cm.instance
+                      AND m.name = '{$plugin}'";
+             if ($plugin === self::get_default_question_bank_activity_name()) {
+                 $join .= " AND p{$key}.type <> '" . self::TYPE_PREVIEW . "'";
++                // The join above only blanks the plugin row, so exclude the course module itself.
++                $excludepreviewsql .= " AND (m.name <> '{$plugin}' OR p{$key}.id IS NOT NULL)";
+             }
+             $pluginjoins[] = $join;
+             $pluginfields[] = "p{$key}.name";
+@@ -282,7 +285,7 @@ class question_bank_helper {
+ 
+         // Build the SQL to filter by module name and exclude deleted course modules.
+         [$modulenamesql, $modulenameparams] = $DB->get_in_or_equal($plugins, SQL_PARAMS_NAMED, 'modname');
+-        $wheremodulesql = "AND m.name $modulenamesql AND cm.deletioninprogress = 0";
++        $wheremodulesql = "AND m.name $modulenamesql AND cm.deletioninprogress = 0 {$excludepreviewsql}";
+         $params = array_merge($params, $modulenameparams);
+ 
+         // Build the search condition using COALESCE only if there are multiple plugin fields.

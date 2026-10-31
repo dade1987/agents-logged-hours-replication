@@ -1,0 +1,48 @@
+diff --git a/public/media/player/videojs/classes/plugin.php b/public/media/player/videojs/classes/plugin.php
+index c9c4320e99c..01ba8719a2f 100644
+--- a/public/media/player/videojs/classes/plugin.php
++++ b/public/media/player/videojs/classes/plugin.php
+@@ -279,8 +279,10 @@ class media_videojs_plugin extends core_media_player_native {
+ 
+     public function list_supported_urls(array $urls, array $options = array()) {
+         $result = [];
+-        // Youtube.
++        // Reset the flags, as the same plugin instance may be used to process several embeds.
+         $this->youtube = false;
++        $this->ogvtech = false;
++        // Youtube.
+         if (count($urls) == 1 && get_config('media_videojs', 'youtube')) {
+             $url = reset($urls);
+ 
+diff --git a/public/media/player/videojs/tests/player_test.php b/public/media/player/videojs/tests/player_test.php
+index 4f0d81eb931..e647e627cfb 100644
+--- a/public/media/player/videojs/tests/player_test.php
++++ b/public/media/player/videojs/tests/player_test.php
+@@ -284,6 +284,27 @@ final class player_test extends \advanced_testcase {
+         $this->assertStringNotContainsString('mediaplugin_videojs', $t);
+     }
+ 
++    /**
++     * Test that a YouTube embed following an OGV-supported video embed does not inherit the OgvJS tech.
++     *
++     * @covers \media_videojs_plugin::list_supported_urls
++     */
++    public function test_youtube_after_ogv_video(): void {
++        set_config('youtube', 1, 'media_videojs');
++
++        $manager = core_media_manager::instance();
++
++        // Embed a webm video first, which enables the OgvJS tech.
++        $t = $manager->embed_url(new moodle_url('http://example.org/1.webm'));
++        $this->assertStringContainsString('mediaplugin_videojs', $t);
++        $this->assertStringContainsString('&quot;techOrder&quot;: [&quot;OgvJS&quot;]', $t);
++
++        // Then embed a YouTube video using the same plugin instance.
++        $t = $manager->embed_url(new moodle_url('http://www.youtube.com/watch?v=vyrwMmsufJc'));
++        $this->youtube_plugin_engaged($t);
++        $this->assertStringNotContainsString('OgvJS', $t);
++    }
++
+     /**
+      * Data provider for {@see test_youtube_start_time}
+      *

@@ -1,0 +1,42 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You CAN run Moodle's existing PHPUnit tests: `cd {WS} && vendor/bin/phpunit <path/to/some_test.php>` (the test environment is already initialised). You may also run `php -l <file>` and read code with grep/find/cat. Use absolute paths starting with {WS} in every command.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-89752: Default the Boost colour mode to Light while colour modes are experimental
+
+{{theme_boost | enablecolourmodes}} is off until a site opts in, which is correct. But {{theme_boost | defaultcolourmode}} defaults to {{auto}}, so the moment an admin ticks the experimental setting, everyone whose device asks for dark is switched to dark mode. The audit for MDL-68037 found 242 hardcoded colour rules across 53 components, most of which are still unconverted, so those users get a partly broken interface without having chosen anything.
+
+Two arguments, the second of which is the decisive one:
+
+*1. Enabling the feature is not the same as opting everyone into dark.* An admin ticking an experimental checkbox is reasonably read as "let people choose dark mode", not "switch a slice of my users to dark mode on their next page load". Light as the default makes the opt in per person, which matches how the setting is described and keeps the blast radius proportionate to what was asked for.
+
+*2. Guests and users who are not logged in have no way out.* {{colour_mode::can_choose_mode()}} is false for them, so {{render_menu()}} returns an empty string and no switcher is drawn. They always get the site default. With {{auto}}, a visitor on a dark appearance device lands on the login page, or any public course, in a half converted dark interface with no control to change it. A logged in user meeting the same defects can at least switch to light from the navbar. This is the one case where an unconverted component has no user side remedy, and it is the case {{auto}} creates.
+
+The accessibility argument is sometimes made the other way, that {{auto}} honours a device preference which some users set for real reasons such as photophobia or migraine. It does, and Light costs them one visit to the navbar menu, once. But an incomplete dark mode carries genuine contrast failures, so serving it unasked is not an accessibility improvement over a working light mode. For this window the accessibility argument points at Light too.
+
+This has to land before 5.3 is released. Once the feature has shipped, changing the default alters the appearance of sites which already opted in, which turns a one line change into an upgrade concern.
+
+h3. Suggested fix
+
+# {{theme/boost/settings.php}}, change the {{admin_setting_configselect}} default for {{defaultcolourmode}} from {{\theme_boost\colour_mode::AUTO}} to {{::LIGHT}}.
+# {{colour_mode::get_site_default()}}, change the fallback for an unset or invalid config value from {{self::AUTO}} to {{self::LIGHT}}, so the two agree.
+# {{defaultcolourmode_desc}}, add a sentence noting that Light is the default while the feature is experimental, so an admin reads it as deliberate rather than as an oversight.
+# {{theme/boost/tests/colour_mode_test.php}} is the only place asserting the unconfigured fallback, and needs the expectation changed. Every other unit test and Behat scenario sets {{defaultcolourmode}} explicitly, so nothing else moves.
+
+No upgrade note and no upgrade step. Colour modes are unreleased in 5.3dev, so no site has this setting saved and there is nothing to migrate.
+
+h3. Follow up
+
+MDL-89379 is already the finish line for de-experimentalising and already owns the decision about {{defaultcolourmode}}. Its description needs a one line amendment once this lands: the bullet currently records {{auto}} as "the current default and the least surprising", which should become a statement that the default is Light for the experimental window and that MDL-89379 restores {{auto}}, blocked on the MDL-68037 per component sub-tasks. That keeps the flip in the exit criteria for the epic rather than floating as its own improvement, where it could be picked up before the conversion is finished.
+
+h3. Testing
+
+# With {{enablecolourmodes}} off, confirm the site renders light and no switcher appears.
+# Tick {{enablecolourmodes}}, leave {{defaultcolourmode}} untouched, and set the operating system to dark appearance. Confirm the site renders light, both logged in and logged out.
+# As a logged in user, choose System from the navbar switcher and confirm the site follows the device, so the capability is intact and only the default has changed.
+# Set {{defaultcolourmode}} to System, log out, and confirm the login page follows the device, so the setting still works for a site which chooses it.

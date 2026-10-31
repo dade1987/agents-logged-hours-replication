@@ -1,0 +1,72 @@
+diff --git a/public/mod/quiz/lib.php b/public/mod/quiz/lib.php
+index 708b6ec8711..31061567560 100644
+--- a/public/mod/quiz/lib.php
++++ b/public/mod/quiz/lib.php
+@@ -103,6 +103,10 @@ function quiz_add_instance($quiz) {
+ 
+     // Process the options from the form.
+     $quiz->timecreated = time();
++    // The due date is optional (e.g. when creating a quiz programmatically), so default it.
++    if (!isset($quiz->duedate)) {
++        $quiz->duedate = 0;
++    }
+     $result = quiz_process_options($quiz);
+     if ($result && is_string($result)) {
+         return $result;
+@@ -148,6 +152,11 @@ function quiz_update_instance($quiz, $mform) {
+     $quiz->sumgrades = $oldquiz->sumgrades;
+     $quiz->grade     = $oldquiz->grade;
+ 
++    // The due date is optional (e.g. when updating a quiz programmatically), so keep the existing value if omitted.
++    if (!isset($quiz->duedate)) {
++        $quiz->duedate = $oldquiz->duedate;
++    }
++
+     // Update the database.
+     $quiz->id = $quiz->instance;
+     $DB->update_record('quiz', $quiz);
+@@ -1232,7 +1241,7 @@ function quiz_update_events($quiz, $override = null) {
+         $userid    = isset($current->userid)? $current->userid : 0;
+         $timeopen  = isset($current->timeopen)?  $current->timeopen : $quiz->timeopen;
+         $timeclose = isset($current->timeclose)? $current->timeclose : $quiz->timeclose;
+-        $duedate = isset($current->duedate) ? $current->duedate : $quiz->duedate;
++        $duedate = $current->duedate ?? $quiz->duedate ?? 0;
+ 
+         // Only add open/close/duedate events for an override if they differ from the quiz default.
+         $addopen  = empty($current->id) || !empty($current->timeopen);
+diff --git a/public/mod/quiz/tests/lib_test.php b/public/mod/quiz/tests/lib_test.php
+index c4f933eb09d..144f41b5da4 100644
+--- a/public/mod/quiz/tests/lib_test.php
++++ b/public/mod/quiz/tests/lib_test.php
+@@ -490,6 +490,31 @@ final class lib_test extends \advanced_testcase {
+         $this->assertTrue($actionevent->is_actionable());
+     }
+ 
++    /**
++     * Test that quiz_update_events copes with a quiz object that has no duedate set.
++     *
++     * @covers ::quiz_update_events
++     */
++    public function test_quiz_update_events_without_duedate(): void {
++        global $DB;
++        $this->resetAfterTest();
++
++        $course = $this->getDataGenerator()->create_course();
++        $quiz = $this->getDataGenerator()->create_module('quiz', ['course' => $course->id,
++            'timeopen' => time() - DAYSECS, 'timeclose' => time() + DAYSECS]);
++
++        $quizrecord = $DB->get_record('quiz', ['id' => $quiz->id]);
++        unset($quizrecord->duedate);
++        $quizrecord->coursemodule = $quiz->cmid;
++
++        quiz_update_events($quizrecord);
++
++        $events = $DB->get_records('event', ['modulename' => 'quiz', 'instance' => $quiz->id]);
++        $this->assertCount(2, $events);
++        $eventtypes = array_column($events, 'eventtype');
++        $this->assertNotContains(QUIZ_EVENT_TYPE_DUE, $eventtypes);
++    }
++
+     public function test_quiz_core_calendar_provide_event_action_open(): void {
+         $this->resetAfterTest();
+ 

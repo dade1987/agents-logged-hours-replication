@@ -1,0 +1,132 @@
+diff --git a/public/mod/quiz/amd/build/searchwidget/user.min.js b/public/mod/quiz/amd/build/searchwidget/user.min.js
+index 8e7ddee74a1710aa6dce3fef3fbfe96be4047dc6..2df06d7ace4fc8da52edeccc9a399d4163733807 100644
+GIT binary patch
+delta 114
+zcmew&vRh<A&BS)Cjoa3-P2Rw+7OhdFms(L$l$e&8nv;@~n3S4RTvHPrtErcpSfHU1
+uUzD0=Yge6<T2c*GU<D?1!0N2PWUVbojdf9KNoi4DG?H{|?PflXG$sHnwkyQ|
+
+delta 172
+zcmdlj@<n7q4VR8ma(+>&esM|B#A<C;op>N)<Fa*Z-a0@=W?s5uQBh*0ZDM(1W{HLY
+zSXM7RwImoUSFEW~q?cMzQk0mMnVOSQte2ZuprMhST4`&iQ4OT5fVfsuQ*&}KySfDy
+fl^~@$nRzLx6`Hno(I5_zozY;4*x1ci+0&Q+bv-{N
+
+diff --git a/public/mod/quiz/amd/src/searchwidget/user.js b/public/mod/quiz/amd/src/searchwidget/user.js
+index 563c4f05ba5..4dc259ea762 100644
+--- a/public/mod/quiz/amd/src/searchwidget/user.js
++++ b/public/mod/quiz/amd/src/searchwidget/user.js
+@@ -23,7 +23,6 @@
+ import UserSearch from 'core_user/comboboxsearch/user';
+ import Url from 'core/url';
+ import * as Repository from 'mod_quiz/searchwidget/repository';
+-import {getStrings} from 'core/str';
+ 
+ export default class QuizUserSearch extends UserSearch {
+ 
+@@ -49,12 +48,10 @@ export default class QuizUserSearch extends UserSearch {
+         // Await the user fetch request
+         const r = await Repository.userFetch(params);
+ 
+-        // Await the result of getStrings
+-        const stringArray = await getStrings(r.extrafields.map((key) => ({key})));
+-
+-        // Map the extrafields to profilestringmap
++        // The display labels are resolved server-side (this handles custom profile fields,
++        // e.g. profile_field_xxx, which do not have a language string).
+         this.profilestringmap = new Map(
+-            r.extrafields.map((key, index) => ([key, stringArray[index]]))
++            (r.extrafieldlabels || []).map(({field, label}) => ([field, label]))
+         );
+ 
+         // Return r.users as the final result
+diff --git a/public/mod/quiz/classes/external/get_users_in_report.php b/public/mod/quiz/classes/external/get_users_in_report.php
+index 74bf72596af..220f34edaf6 100644
+--- a/public/mod/quiz/classes/external/get_users_in_report.php
++++ b/public/mod/quiz/classes/external/get_users_in_report.php
+@@ -108,6 +108,8 @@ class get_users_in_report extends external_api {
+         $data = $report->setup_report_data($quiz, $cm, $course, $context);
+         if (empty($data)) {
+             return [
++                'extrafields' => [],
++                'extrafieldlabels' => [],
+                 'users' => $users,
+                 'warnings' => $warnings,
+             ];
+@@ -150,8 +152,17 @@ class get_users_in_report extends external_api {
+         // We don't want the filter to strip out the picture field and other name fields,
+         // since we already have the full name field.
+         $allowfields = array_merge(['fullname'], $userfieldsapi->get_required_fields([\core_user\fields::PURPOSE_IDENTITY]));
++        // Resolve the display labels server-side, so custom profile fields (profile_field_xxx)
++        // get their proper names rather than being looked up as core language strings.
++        $extrafieldlabels = array_map(function (string $field): array {
++            return [
++                'field' => $field,
++                'label' => \core_user\fields::get_display_name($field),
++            ];
++        }, $allowfields);
+         return [
+             'extrafields' => $allowfields,
++            'extrafieldlabels' => $extrafieldlabels,
+             'users' => $users,
+             'warnings' => $warnings,
+         ];
+@@ -171,6 +182,15 @@ class get_users_in_report extends external_api {
+ 
+         return new external_single_structure([
+             'extrafields' => new external_multiple_structure(new external_value(PARAM_RAW, 'List of extra fields')),
++            'extrafieldlabels' => new external_multiple_structure(
++                new external_single_structure([
++                    'field' => new external_value(PARAM_RAW, 'The field name'),
++                    'label' => new external_value(PARAM_RAW, 'The display label for the field'),
++                ]),
++                'The display labels for the extra fields',
++                VALUE_DEFAULT,
++                [],
++            ),
+             'users' => new external_multiple_structure(core_user_external::user_description($additionalfields)),
+             'warnings' => new external_warnings(),
+         ]);
+diff --git a/public/mod/quiz/tests/external/get_users_in_report_test.php b/public/mod/quiz/tests/external/get_users_in_report_test.php
+index 0977c63c29b..1e993bf3055 100644
+--- a/public/mod/quiz/tests/external/get_users_in_report_test.php
++++ b/public/mod/quiz/tests/external/get_users_in_report_test.php
+@@ -101,4 +101,40 @@ final class get_users_in_report_test extends \advanced_testcase {
+         )['users'];
+         $this->assertCount(1, $users);
+     }
++
++    /**
++     * Test that the extra field labels are resolved correctly, including custom profile fields.
++     */
++    public function test_get_users_in_report_extrafield_labels(): void {
++        $this->resetAfterTest();
++
++        $dg = $this->getDataGenerator();
++        $dg->create_custom_profile_field([
++            'shortname' => 'fruit',
++            'name' => 'Favourite fruit',
++            'datatype' => 'text',
++        ]);
++        set_config('showuseridentity', 'email,profile_field_fruit');
++
++        $course = $dg->create_course();
++        $quiz = $dg->get_plugin_generator('mod_quiz')->create_instance(['course' => $course->id, 'sumgrades' => 1]);
++        $u1 = $dg->create_user();
++        $dg->enrol_user($u1->id, $course->id, 'student');
++        $this->setAdminUser();
++
++        $result = get_users_in_report::execute(
++            $quiz->cmid,
++            'overview',
++            '{"attempts":"enrolled_with","onlygraded":"","search":"","onlyregraded":""}'
++        );
++        $result = \core_external\external_api::clean_returnvalue(get_users_in_report::execute_returns(), $result);
++
++        $this->assertEquals(['fullname', 'email', 'profile_field_fruit'], $result['extrafields']);
++        $this->assertEquals([
++            ['field' => 'fullname', 'label' => get_string('fullname')],
++            ['field' => 'email', 'label' => get_string('email')],
++            ['field' => 'profile_field_fruit', 'label' => 'Favourite fruit'],
++        ], $result['extrafieldlabels']);
++        $this->assertDebuggingNotCalled();
++    }
+ }

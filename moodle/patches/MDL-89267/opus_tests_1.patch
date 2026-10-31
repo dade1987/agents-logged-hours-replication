@@ -1,0 +1,287 @@
+diff --git a/public/backup/moodle2/restore_stepslib.php b/public/backup/moodle2/restore_stepslib.php
+index 981e26797fb..98d19680025 100644
+--- a/public/backup/moodle2/restore_stepslib.php
++++ b/public/backup/moodle2/restore_stepslib.php
+@@ -5041,6 +5041,9 @@ class restore_create_categories_and_questions extends restore_structure_step {
+     /** @var stdClass the last question_version seen during the restore. Processed when we get to a question. */
+     protected $latestversion;
+ 
++    /** @var bool whether the question bank entry for {@see $latestqbe} was created by this restore. */
++    protected $latestqbecreated = false;
++
+     protected function define_structure() {
+ 
+         // Check if the backup is a pre 4.0 one.
+@@ -5203,6 +5206,7 @@ class restore_create_categories_and_questions extends restore_structure_step {
+         // We can only determine the right way to process this once we get to
+         // process_question and have more information, so for now just store.
+         $this->latestqbe = (object) $data;
++        $this->latestqbecreated = false;
+     }
+ 
+     /**
+@@ -5315,6 +5319,7 @@ class restore_create_categories_and_questions extends restore_structure_step {
+                 }
+ 
+                 $this->latestqbe->newid = $DB->insert_record('question_bank_entries', $this->latestqbe);
++                $this->latestqbecreated = true;
+                 $this->set_mapping('question_bank_entry', $this->latestqbe->oldid, $this->latestqbe->newid);
+             }
+ 
+@@ -5338,49 +5343,7 @@ class restore_create_categories_and_questions extends restore_structure_step {
+             // In case the backed up version was deleted and a new one created in its place, increase the version numbers of
+             // conflicting versions to make room for this one.
+             $transaction = $DB->start_delegated_transaction();
+-            if (
+-                $DB->record_exists(
+-                    'question_versions',
+-                    [
+-                        'questionbankentryid' => $this->latestversion->questionbankentryid,
+-                        'version' => $this->latestversion->version,
+-                    ],
+-                )
+-            ) {
+-                // We'll update each higher version and any references one-at-a-time, starting with the highest, to avoid
+-                // creating a duplicate questionbankentryid-version combination in question_versions.
+-                $moveversions = $DB->get_records_select(
+-                    'question_versions',
+-                    'questionbankentryid = :questionbankentryid AND version >= :oldversion',
+-                    [
+-                        'questionbankentryid' => $this->latestversion->questionbankentryid,
+-                        'oldversion' => $this->latestversion->version,
+-                    ],
+-                    'version DESC',
+-                );
+-                foreach ($moveversions as $moveversion) {
+-                    $DB->set_field(
+-                        'question_versions',
+-                        'version',
+-                        $moveversion->version + 1,
+-                        [
+-                            'questionbankentryid' => $moveversion->questionbankentryid,
+-                            'version' => $moveversion->version,
+-                        ]
+-                    );
+-                    $DB->set_field(
+-                        'question_references',
+-                        'version',
+-                        $moveversion->version + 1,
+-                        [
+-                            'questionbankentryid' => $moveversion->questionbankentryid,
+-                            'version' => $moveversion->version,
+-                        ]
+-                    );
+-                }
+-                // Ensure the nextversion value has been initialised, and increment it to account for the additional version.
+-                versions::get_next_version($this->latestversion->questionbankentryid);
+-            }
++            $this->make_room_for_version($this->latestversion->questionbankentryid, $this->latestversion->version);
+             $newqvid = $DB->insert_record('question_versions', $this->latestversion);
+             $this->set_mapping('question_versions', $oldqvid, $newqvid);
+             $transaction->allow_commit();
+@@ -5408,6 +5371,20 @@ class restore_create_categories_and_questions extends restore_structure_step {
+                 $this->latestqbe->oldid = $this->latestqbe->id;
+                 $this->latestqbe->newid = $newquestionversion->questionbankentryid;
+                 $this->set_mapping('question_bank_entry', $this->latestqbe->oldid, $this->latestqbe->newid);
++            } else if (
++                $this->latestqbecreated
++                && $this->latestqbe->newid != $newquestionversion->questionbankentryid
++            ) {
++                // Another version of this entry was processed before this one. It did not exist on the site any more,
++                // so a new question bank entry was created for it. Now we know the original entry still exists, move the
++                // versions already restored into it, so the versions are not split across two entries.
++                $this->merge_created_question_bank_entry(
++                    $this->latestqbe->newid,
++                    $newquestionversion->questionbankentryid,
++                );
++                $this->latestqbe->newid = $newquestionversion->questionbankentryid;
++                $this->latestqbecreated = false;
++                $this->set_mapping('question_bank_entry', $this->latestqbe->oldid, $this->latestqbe->newid);
+             }
+         }
+ 
+@@ -5418,6 +5395,95 @@ class restore_create_categories_and_questions extends restore_structure_step {
+         // step will be in charge of restoring all the question files.
+     }
+ 
++    /**
++     * Make room for a version number in a question bank entry.
++     *
++     * If the version number is already used in the entry (for example, because the backed up version was deleted
++     * and a new one created in its place), increase the version numbers of the conflicting versions, and of any
++     * references to them, to free up the requested version number.
++     *
++     * @param int $questionbankentryid the question bank entry.
++     * @param int $version the version number that needs to be free.
++     */
++    protected function make_room_for_version(int $questionbankentryid, int $version): void {
++        global $DB;
++
++        if (
++            !$DB->record_exists(
++                'question_versions',
++                [
++                    'questionbankentryid' => $questionbankentryid,
++                    'version' => $version,
++                ],
++            )
++        ) {
++            return;
++        }
++
++        // We'll update each higher version and any references one-at-a-time, starting with the highest, to avoid
++        // creating a duplicate questionbankentryid-version combination in question_versions.
++        $moveversions = $DB->get_records_select(
++            'question_versions',
++            'questionbankentryid = :questionbankentryid AND version >= :oldversion',
++            [
++                'questionbankentryid' => $questionbankentryid,
++                'oldversion' => $version,
++            ],
++            'version DESC',
++        );
++        foreach ($moveversions as $moveversion) {
++            $DB->set_field(
++                'question_versions',
++                'version',
++                $moveversion->version + 1,
++                [
++                    'questionbankentryid' => $moveversion->questionbankentryid,
++                    'version' => $moveversion->version,
++                ]
++            );
++            $DB->set_field(
++                'question_references',
++                'version',
++                $moveversion->version + 1,
++                [
++                    'questionbankentryid' => $moveversion->questionbankentryid,
++                    'version' => $moveversion->version,
++                ]
++            );
++        }
++        // Ensure the nextversion value has been initialised, and increment it to account for the additional version.
++        versions::get_next_version($questionbankentryid);
++    }
++
++    /**
++     * Move all versions from a question bank entry created by this restore into an existing entry, then delete it.
++     *
++     * @param int $createdqbeid the question bank entry created by this restore.
++     * @param int $existingqbeid the existing question bank entry the versions belong in.
++     */
++    protected function merge_created_question_bank_entry(int $createdqbeid, int $existingqbeid): void {
++        global $DB;
++
++        $transaction = $DB->start_delegated_transaction();
++        $createdversions = $DB->get_records(
++            'question_versions',
++            ['questionbankentryid' => $createdqbeid],
++            'version ASC',
++        );
++        foreach ($createdversions as $createdversion) {
++            $this->make_room_for_version($existingqbeid, $createdversion->version);
++            $DB->set_field(
++                'question_versions',
++                'questionbankentryid',
++                $existingqbeid,
++                ['id' => $createdversion->id],
++            );
++        }
++        // Nothing else refers to the created entry yet, as question references are restored later.
++        $DB->delete_records('question_bank_entries', ['id' => $createdqbeid]);
++        $transaction->allow_commit();
++    }
++
+     protected function process_question_hint($data) {
+         global $DB;
+ 
+diff --git a/public/question/tests/backup_test.php b/public/question/tests/backup_test.php
+index add46dc0651..309043ae3d8 100644
+--- a/public/question/tests/backup_test.php
++++ b/public/question/tests/backup_test.php
+@@ -1100,6 +1100,84 @@ final class backup_test extends \advanced_testcase {
+         $this->assertEquals(7, $DB->get_field('question_bank_entries', 'nextversion', ['id' => $questionv1->questionbankentryid]));
+     }
+ 
++    /**
++     * Restoring a deleted version keeps it in the original question bank entry, whatever order the versions are restored in.
++     *
++     * @dataProvider restore_deleted_first_version_provider
++     * @param bool $reverse whether to reverse the order of the versions in the backup file.
++     */
++    public function test_restore_backup_containing_deleted_first_version(bool $reverse): void {
++        global $CFG, $DB;
++        self::setAdminUser();
++        $this->resetAfterTest();
++        $questiongenerator = self::getDataGenerator()->get_plugin_generator('core_question');
++        $testdata = $this->add_course_quiz_and_qbank();
++        $questionv1 = $testdata->qbankquestion;
++        $questionv2 = $questiongenerator->update_question($questionv1, null, ['name' => 'Version 2']);
++        $qbeid = $questionv1->questionbankentryid;
++
++        $backupid = $this->backup_course_module($testdata->quiz->cmid);
++
++        if ($reverse) {
++            // Reverse the order of the question versions within each question bank entry in the backup.
++            $xmlfile = $CFG->tempdir . '/backup/' . $backupid . '/questions.xml';
++            $dom = new \DOMDocument();
++            $dom->preserveWhiteSpace = false;
++            $dom->load($xmlfile);
++            foreach ($dom->getElementsByTagName('question_version') as $versionlist) {
++                $children = [];
++                foreach (iterator_to_array($versionlist->childNodes) as $child) {
++                    if ($child instanceof \DOMElement) {
++                        $children[] = $versionlist->removeChild($child);
++                    }
++                }
++                foreach (array_reverse($children) as $child) {
++                    $versionlist->appendChild($child);
++                }
++            }
++            $dom->save($xmlfile);
++        }
++
++        // Version 1 is not in use (the quiz uses the latest version), so it is actually deleted.
++        question_delete_question($questionv1->id);
++        $this->assertFalse($DB->record_exists('question', ['id' => $questionv1->id]));
++        $qbecount = $DB->count_records('question_bank_entries', ['questioncategoryid' => $testdata->qbankcategory->id]);
++
++        $this->restore_to_course($backupid, $testdata->course->id);
++
++        // No new question bank entry has been created, and version 1 has been restored into the original entry.
++        $this->assertEquals(
++            $qbecount,
++            $DB->count_records('question_bank_entries', ['questioncategoryid' => $testdata->qbankcategory->id]),
++        );
++        $versions = $DB->get_records(
++            'question_versions',
++            ['questionbankentryid' => $qbeid],
++            fields: 'version, questionid, status',
++        );
++        $this->assertCount(2, $versions);
++        $this->assertEquals('bank question', $DB->get_field('question', 'name', ['id' => $versions[1]->questionid]));
++        $this->assertEquals($questionv2->id, $versions[2]->questionid);
++
++        // The quiz references in the restored course point at the original entry.
++        $restoredquiz = $DB->get_records('quiz', ['course' => $testdata->course->id], 'id DESC', 'id', 0, 1);
++        $restoredquiz = reset($restoredquiz);
++        $structure = quiz_settings::create($restoredquiz->id)->get_structure();
++        $this->assertEquals($questionv2->id, $structure->get_question_in_slot(1)->questionid);
++    }
++
++    /**
++     * Data provider for {@see test_restore_backup_containing_deleted_first_version}.
++     *
++     * @return array
++     */
++    public static function restore_deleted_first_version_provider(): array {
++        return [
++            'Original order' => [false],
++            'Reversed order' => [true],
++        ];
++    }
++
+     /**
+      * Restoring a question bank entry retains the original nextquestion value.
+      *

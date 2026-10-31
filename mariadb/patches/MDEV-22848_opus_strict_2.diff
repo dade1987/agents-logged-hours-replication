@@ -1,0 +1,112 @@
+diff --git a/mysql-test/suite/binlog/r/binlog_gtid_slave_pos_autocommit.result b/mysql-test/suite/binlog/r/binlog_gtid_slave_pos_autocommit.result
+new file mode 100644
+index 00000000..19dffa87
+--- /dev/null
++++ b/mysql-test/suite/binlog/r/binlog_gtid_slave_pos_autocommit.result
+@@ -0,0 +1,23 @@
++#
++# MDEV-22848 Assertion `trx_is_registered_for_2pc(trx)' failed in
++# innobase_xa_prepare on DROP and in innobase_savepoint on SAVEPOINT
++#
++SET @save_slave_pos= @@GLOBAL.gtid_slave_pos;
++SET autocommit=0;
++CREATE TABLE t1 (c INT) ENGINE=MyISAM;
++SET GLOBAL gtid_slave_pos="0-1-100";
++INSERT INTO t1 VALUES (0);
++DROP TABLE not_there;
++ERROR 42S02: Unknown table 'test.not_there'
++SET GLOBAL gtid_slave_pos="0-1-101";
++INSERT INTO t1 VALUES (1);
++SAVEPOINT a;
++COMMIT;
++SELECT * FROM t1;
++c
++0
++1
++DROP TABLE t1;
++SET autocommit=1;
++SET GLOBAL gtid_slave_pos= @save_slave_pos;
++# End of 10.5 tests
+diff --git a/mysql-test/suite/binlog/t/binlog_gtid_slave_pos_autocommit.test b/mysql-test/suite/binlog/t/binlog_gtid_slave_pos_autocommit.test
+new file mode 100644
+index 00000000..265bdd0e
+--- /dev/null
++++ b/mysql-test/suite/binlog/t/binlog_gtid_slave_pos_autocommit.test
+@@ -0,0 +1,25 @@
++--source include/have_innodb.inc
++
++--echo #
++--echo # MDEV-22848 Assertion `trx_is_registered_for_2pc(trx)' failed in
++--echo # innobase_xa_prepare on DROP and in innobase_savepoint on SAVEPOINT
++--echo #
++
++SET @save_slave_pos= @@GLOBAL.gtid_slave_pos;
++SET autocommit=0;
++CREATE TABLE t1 (c INT) ENGINE=MyISAM;
++SET GLOBAL gtid_slave_pos="0-1-100";
++INSERT INTO t1 VALUES (0);
++--error ER_BAD_TABLE_ERROR
++DROP TABLE not_there;
++
++SET GLOBAL gtid_slave_pos="0-1-101";
++INSERT INTO t1 VALUES (1);
++SAVEPOINT a;
++COMMIT;
++SELECT * FROM t1;
++DROP TABLE t1;
++SET autocommit=1;
++SET GLOBAL gtid_slave_pos= @save_slave_pos;
++
++--echo # End of 10.5 tests
+diff --git a/sql/rpl_gtid.cc b/sql/rpl_gtid.cc
+index 9004aea2..681ccfc5 100644
+--- a/sql/rpl_gtid.cc
++++ b/sql/rpl_gtid.cc
+@@ -699,6 +699,30 @@ rpl_slave_state::record_gtid(THD *thd, const rpl_gtid *gtid, uint64 sub_id,
+   */
+   suspended_wfc= thd->suspend_subsequent_commits();
+   thd->lex->reset_n_backup_query_tables_list(&lex_backup);
++
++  /*
++    The option bits must be adjusted before the table is opened and locked.
++    The storage engine (eg. InnoDB) registers itself in the transaction
++    (THD::transaction->all) in external_lock() depending on
++    OPTION_NOT_AUTOCOMMIT / OPTION_BEGIN. If we are not in a transaction
++    (eg. SET GLOBAL gtid_slave_pos with autocommit=0), the update of the
++    gtid table is committed separately by the ha_commit_trans(thd, FALSE)
++    below. If the engine had been registered in the "all" transaction, it
++    would remain there after that commit, while the engine itself considers
++    its transaction as committed and deregistered. A later commit of the
++    user transaction would then call prepare/commit/savepoint for an engine
++    transaction that is not registered (MDEV-22848).
++  */
++  if (!in_transaction)
++  {
++    DBUG_PRINT("info", ("resetting OPTION_BEGIN"));
++    thd->variables.option_bits&=
++      ~(ulonglong)(OPTION_NOT_AUTOCOMMIT |OPTION_BEGIN |OPTION_BIN_LOG |
++                   OPTION_GTID_BEGIN);
++  }
++  else
++    thd->variables.option_bits&= ~(ulonglong)OPTION_BIN_LOG;
++
+   tlist.init_one_table(&MYSQL_SCHEMA_NAME, &gtid_pos_table_name, NULL, TL_WRITE);
+   if ((err= open_and_lock_tables(thd, &tlist, FALSE, 0)))
+     goto end;
+@@ -714,16 +738,6 @@ rpl_slave_state::record_gtid(THD *thd, const rpl_gtid *gtid, uint64 sub_id,
+   thd->wsrep_ignore_table= true; // Do not replicate mysql.gtid_slave_pos table
+ #endif
+ 
+-  if (!in_transaction)
+-  {
+-    DBUG_PRINT("info", ("resetting OPTION_BEGIN"));
+-    thd->variables.option_bits&=
+-      ~(ulonglong)(OPTION_NOT_AUTOCOMMIT |OPTION_BEGIN |OPTION_BIN_LOG |
+-                   OPTION_GTID_BEGIN);
+-  }
+-  else
+-    thd->variables.option_bits&= ~(ulonglong)OPTION_BIN_LOG;
+-
+   bitmap_set_all(table->write_set);
+   table->rpl_write_set= table->write_set;
+ 

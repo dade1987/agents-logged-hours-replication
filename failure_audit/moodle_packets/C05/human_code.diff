@@ -1,0 +1,183 @@
+diff --git a/public/lib/classes/hook/output/before_import_map_config.php b/public/lib/classes/hook/output/before_import_map_config.php
+index 071d318b621..3112f865d78 100644
+--- a/public/lib/classes/hook/output/before_import_map_config.php
++++ b/public/lib/classes/hook/output/before_import_map_config.php
+@@ -24,6 +24,10 @@ namespace core\hook\output;
+  * (react, react-dom, @moodlehq/design-system, @moodle/lms/, etc.) and may call
+  * {@see add_import()} to add their own specifiers or override existing ones.
+  *
++ * Imports registered here are never automatically preloaded with a modulepreload hint: that is
++ * a closed core allowlist (see {@see \core\output\requirements\import_map::get_preload_specifiers()})
++ * so a plugin's own dependency is not fetched on every page that does not need it.
++ *
+  * @package    core
+  * @copyright  Andrew Lyons <andrew@nicols.co.uk>
+  * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+diff --git a/public/lib/classes/output/requirements/import_map.php b/public/lib/classes/output/requirements/import_map.php
+index 7c1b1e5f69b..555c94abf0a 100644
+--- a/public/lib/classes/output/requirements/import_map.php
++++ b/public/lib/classes/output/requirements/import_map.php
+@@ -123,6 +123,32 @@ class import_map implements \JsonSerializable {
+         return $importmap;
+     }
+ 
++    /**
++     * Return the bare specifiers explicitly opted in to modulepreload hinting.
++     *
++     * This is a closed allowlist, not a shape-based filter: only entries registered with
++     * `preload: true` (currently a handful of core, site-wide, single-file dependencies) are
++     * returned, regardless of specifier name. A plugin adding its own import via the
++     * before_import_map_config hook is never included here unless it explicitly opts in, so a
++     * plugin-only dependency is not fetched on every page that never uses it.
++     *
++     * The returned specifiers match the keys used in jsonSerialize()'s output (trailing slashes
++     * stripped for themable entries), so callers can look up the resolved URL directly from
++     * jsonSerialize()['imports'] without needing to re-derive theme resolution.
++     *
++     * @return string[]
++     */
++    public function get_preload_specifiers(): array {
++        $specifiers = [];
++        foreach ($this->imports as $specifier => $importdata) {
++            if (!$importdata->preload) {
++                continue;
++            }
++            $specifiers[] = rtrim($specifier, '/');
++        }
++        return $specifiers;
++    }
++
+     /**
+      * Set the list of available themes by name.
+      *
+@@ -169,11 +195,13 @@ class import_map implements \JsonSerializable {
+             urlsuffix: '/index.js',
+             // Allow theme designers to override the design system components.
+             themable: true,
++            preload: true,
+         );
+         $this->add_import(
+             'react',
+             path: 'lib/bundles/react/react',
+             themable: false,
++            preload: true,
+         );
+         $this->add_import(
+             'react/',
+@@ -184,6 +212,7 @@ class import_map implements \JsonSerializable {
+             'react-dom',
+             path: 'lib/bundles/react-dom/react-dom',
+             themable: false,
++            preload: true,
+         );
+         $this->add_import(
+             'react-dom/',
+@@ -205,6 +234,7 @@ class import_map implements \JsonSerializable {
+         $this->add_import(
+             'tabbable',
+             path: 'lib/bundles/tabbable/tabbable',
++            preload: true,
+         );
+ 
+         // Register the main Bootstrap bundle as a bare specifier, and the internal util and dom modules as subpath specifiers.
+@@ -213,6 +243,7 @@ class import_map implements \JsonSerializable {
+             path: 'lib/bundles/bootstrap/js',
+             urlsuffix: '/bootstrap.js',
+             allowedsuffixes: ['.js', '.js.map'],
++            preload: true,
+         );
+         $this->add_import(
+             specifier: 'bootstrap/',
+@@ -241,6 +272,11 @@ class import_map implements \JsonSerializable {
+      *   Use this when the entry resolves to a directory's index file so that relative imports
+      *   within the module resolve correctly (e.g. '/index.js' for a package-style module).
+      * @param bool $themable Whether the import is themable.
++     * @param bool $preload Whether this entry is a foundational, single-file dependency worth
++     *   preloading with a modulepreload hint. Restricted to an explicit opt-in (rather than
++     *   inferred from the specifier shape) so that a plugin registering its own import via the
++     *   before_import_map_config hook is never preloaded on every page by default; core only
++     *   marks the handful of entries it knows are used site-wide on every ESM-using page.
+      */
+     public function add_import(
+         string $specifier,
+@@ -253,6 +289,7 @@ class import_map implements \JsonSerializable {
+         array $allowedsuffixes = ['.js', '.js.map'],
+         string $urlsuffix = '',
+         bool $themable = false,
++        bool $preload = false,
+     ): void {
+         if (!in_array($suffix, $allowedsuffixes, true)) {
+             $allowedsuffixes[] = $suffix;
+@@ -272,6 +309,7 @@ class import_map implements \JsonSerializable {
+             'modifier' => $modifier,
+             'urlsuffix' => $urlsuffix,
+             'themable' => $themable,
++            'preload' => $preload,
+         ];
+         $this->importssorted = false;
+     }
+diff --git a/public/lib/classes/output/requirements/page_requirements_manager.php b/public/lib/classes/output/requirements/page_requirements_manager.php
+index f13039d2d28..8f36cc93744 100644
+--- a/public/lib/classes/output/requirements/page_requirements_manager.php
++++ b/public/lib/classes/output/requirements/page_requirements_manager.php
+@@ -1063,14 +1063,58 @@ class page_requirements_manager {
+         $themes = core_component::get_all_plugins_list('theme');
+         $importmap->set_available_themes(array_keys($themes));
+ 
+-        return html_writer::tag(
++        $importmapdata = $importmap->jsonSerialize();
++
++        // The importmap script tag must be emitted before any modulepreload link (or module
++        // script): browsers only honour an import map for specifier resolution if it is
++        // registered before the first module-related resource is processed. A modulepreload
++        // link emitted ahead of the importmap here would silently break bare specifier
++        // resolution ("react", "@moodlehq/design-system", ...) for every module on the page.
++        $output = html_writer::tag(
+             'script',
+             json_encode(
+-                $importmap,
++                $importmapdata,
+                 JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES
+             ),
+             ['type' => 'importmap'],
+         );
++        $output .= $this->get_import_map_preload_links($importmap, $importmapdata);
++
++        return $output;
++    }
++
++    /**
++     * Return modulepreload link tags for the import map's explicitly preloadable entries.
++     *
++     * The ESM dependency graph is normally discovered one level at a time: the browser must
++     * fetch and parse each module before it learns which further modules that module imports.
++     * For a handful of foundational entries (the JS framework runtime and its themed design
++     * system entry point) the resolved URL is already known from the import map itself, so
++     * preloading them lets the browser start those fetches immediately in parallel with page
++     * parsing rather than waiting for import-graph discovery to reach them.
++     *
++     * Which entries qualify is a closed allowlist maintained on the import_map entries
++     * themselves (see import_map::get_preload_specifiers()), not a filter over specifier name
++     * shape: this deliberately excludes any import registered by a plugin via the
++     * before_import_map_config hook unless that plugin explicitly opts in, so third-party
++     * dependencies are not fetched on every page by default.
++     *
++     * @param import_map $importmap The import map instance the preload allowlist is read from.
++     * @param array $importmapdata The serialised import map data, as returned by import_map::jsonSerialize().
++     * @return string
++     */
++    protected function get_import_map_preload_links(import_map $importmap, array $importmapdata): string {
++        $output = '';
++        foreach ($importmap->get_preload_specifiers() as $specifier) {
++            if (!array_key_exists($specifier, $importmapdata['imports'])) {
++                continue;
++            }
++            $output .= html_writer::empty_tag('link', [
++                'rel' => 'modulepreload',
++                'href' => $importmapdata['imports'][$specifier],
++            ]);
++        }
++        return $output;
+     }
+ 
+     /**

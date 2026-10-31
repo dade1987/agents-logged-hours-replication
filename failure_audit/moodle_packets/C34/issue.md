@@ -1,0 +1,11 @@
+# Backup file_logger should store relative paths
+
+h2. Summary
+
+Backup {{file_logger}} should serialize a relative path (just the filename) rather than the absolute {{$CFG->backuptempdir/$backupid.log}}. 
+
+The absolute path is host specific and ends up baked into the backup controller record and into the {{.mbz}} artefact, which makes backups non portable and causes restore code to blindly open whatever path was deserialized. Storing a relative path and rebuilding the full path on the fly using the current {{$CFG->backuptempdir}} fixes both.
+
+h2. Background
+
+This came out of [https://moodle.atlassian.net/browse/MDL-76288|https://moodle.atlassian.net/browse/MDL-76288|smart-link], which fixed {{backup_cleanup_task}} crashing when {{$CFG->backuptempdir}} had changed since the controller was serialised. {{file_logger::__wakeup}} now needs to also handle relative paths, this ticket adds that read-side support alongside switching the writer to produce relative paths.

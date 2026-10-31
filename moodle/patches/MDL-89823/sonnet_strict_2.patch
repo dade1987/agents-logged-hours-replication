@@ -1,0 +1,83 @@
+diff --git a/public/lib/classes/api/repository/api_token_repository.php b/public/lib/classes/api/repository/api_token_repository.php
+index 8773ba7243f..4b283f75708 100644
+--- a/public/lib/classes/api/repository/api_token_repository.php
++++ b/public/lib/classes/api/repository/api_token_repository.php
+@@ -53,7 +53,10 @@ class api_token_repository {
+ 
+         $record = new \stdClass();
+         $record->name = $name;
+-        $record->token = password_hash($secret, PASSWORD_DEFAULT);
++        $record->token = password_hash(
++            self::get_hash_input($secret, $scopes, $expirytime),
++            PASSWORD_DEFAULT,
++        );
+         $record->userid = $userid;
+         $record->scopes = implode(' ', $scopes);
+         $record->description = $description;
+@@ -66,6 +69,32 @@ class api_token_repository {
+         return api_token_entity::create_from_record($record);
+     }
+ 
++    /**
++     * Build the value which is hashed and stored for a token.
++     *
++     * The raw secret is bound to the token's scopes and expiry using an HMAC, so the stored hash only
++     * verifies if neither has been changed since the token was created. The HMAC is used rather than
++     * simple concatenation because bcrypt ignores everything after the first 72 bytes.
++     *
++     * @param string $secret The raw secret.
++     * @param string[] $scopes The scopes granted to the token.
++     * @param int|null $expirytime The expiry timestamp, or null if none.
++     * @return string
++     */
++    protected static function get_hash_input(
++        #[\SensitiveParameter]
++        string $secret,
++        array $scopes,
++        ?int $expirytime,
++    ): string {
++        $integrity = json_encode([
++            'scopes' => implode(' ', $scopes),
++            'expirytime' => $expirytime,
++        ]);
++
++        return hash_hmac('sha256', $integrity, $secret);
++    }
++
+     /**
+      * Get a token entity by its ID.
+      *
+@@ -189,7 +218,10 @@ class api_token_repository {
+     public function validate_token(int $tokenid, string $secret): api_token_entity {
+         $tokenentity = $this->get_by_id($tokenid);
+ 
+-        if (!password_verify($secret, $tokenentity->get_token())) {
++        if (!password_verify(
++            self::get_hash_input($secret, $tokenentity->get_scopes(), $tokenentity->get_expirytime()),
++            $tokenentity->get_token(),
++        )) {
+             throw new \core\exception\invalid_api_token_exception();
+         }
+ 
+diff --git a/public/lib/classes/api/token_manager.php b/public/lib/classes/api/token_manager.php
+index 5a59145f171..15f22bc92e5 100644
+--- a/public/lib/classes/api/token_manager.php
++++ b/public/lib/classes/api/token_manager.php
+@@ -58,7 +58,7 @@ class token_manager {
+     /** @var int How close to expiry a token is flagged as expiring soon, in days. */
+     public const int EXPIRY_IMMINENT_DAYS = 3;
+ 
+-    /** @var int The length of the generated secret, in characters. */
++    /** @var int The number of random bytes in the generated secret (hex encoded, so twice as many characters). */
+     protected const int SECRET_LENGTH = 32;
+ 
+     /**
+@@ -103,7 +103,7 @@ class token_manager {
+         $this->validate_expiry($expirytime);
+         $this->validate_scopes($scopes);
+ 
+-        $secret = random_string(self::SECRET_LENGTH);
++        $secret = bin2hex(random_bytes(self::SECRET_LENGTH));
+ 
+         $token = $this->repository->create_token(
+             $name,

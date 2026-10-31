@@ -1,0 +1,104 @@
+diff --git a/mysql-test/main/user_var.result b/mysql-test/main/user_var.result
+index 8afe3839..6836ebd2 100644
+--- a/mysql-test/main/user_var.result
++++ b/mysql-test/main/user_var.result
+@@ -162,13 +162,13 @@ collation(@a:=_latin2'test')
+ latin2_general_ci
+ select coercibility(@a:=_latin2'test');
+ coercibility(@a:=_latin2'test')
+-6
++5
+ select collation(@a:=_latin2'test' collate latin2_bin);
+ collation(@a:=_latin2'test' collate latin2_bin)
+ latin2_bin
+ select coercibility(@a:=_latin2'test' collate latin2_bin);
+ coercibility(@a:=_latin2'test' collate latin2_bin)
+-6
++5
+ select (@a:=_latin2'test' collate latin2_bin) = _latin2'TEST';
+ (@a:=_latin2'test' collate latin2_bin) = _latin2'TEST'
+ 0
+@@ -597,3 +597,26 @@ c1
+ 2233999999
+ DROP TABLE t1;
+ SET sql_mode=DEFAULT;
++# End of 10.3 tests
++#
++# MDEV-39530 Collation mix issue after update
++#
++SET NAMES utf8mb3 COLLATE utf8mb3_uca1400_ai_ci;
++CREATE TABLE t1 (id INT PRIMARY KEY, path VARCHAR(800) NOT NULL DEFAULT '')
++CHARACTER SET utf8mb3 COLLATE utf8mb3_unicode_ci;
++INSERT INTO t1 VALUES (1,'text');
++SELECT IF((@p:=(SELECT path FROM t1 WHERE id=1 AND path REGEXP '^xx'))!='',1,2) AS c1;
++c1
++2
++SELECT IF((@p:=(SELECT path FROM t1 WHERE id=1))!='',1,2) AS c1;
++c1
++1
++SELECT (@p:=path)='TEXT' AS c1, COLLATION(@p:=path) AS c2, COERCIBILITY(@p:=path) AS c3 FROM t1;
++c1	c2	c3
++1	utf8mb3_unicode_ci	5
++SELECT COERCIBILITY(@p:='a'), COERCIBILITY(@p:=NULL), COERCIBILITY(@p:=1);
++COERCIBILITY(@p:='a')	COERCIBILITY(@p:=NULL)	COERCIBILITY(@p:=1)
++5	5	7
++DROP TABLE t1;
++SET NAMES DEFAULT;
++# End of 12.3 tests
+diff --git a/mysql-test/main/user_var.test b/mysql-test/main/user_var.test
+index 298257cf..1e91de5a 100644
+--- a/mysql-test/main/user_var.test
++++ b/mysql-test/main/user_var.test
+@@ -538,3 +538,22 @@ SHOW CREATE TABLE t1;
+ SELECT * FROM t1;
+ DROP TABLE t1;
+ SET sql_mode=DEFAULT;
++
++--echo # End of 10.3 tests
++
++--echo #
++--echo # MDEV-39530 Collation mix issue after update
++--echo #
++
++SET NAMES utf8mb3 COLLATE utf8mb3_uca1400_ai_ci;
++CREATE TABLE t1 (id INT PRIMARY KEY, path VARCHAR(800) NOT NULL DEFAULT '')
++  CHARACTER SET utf8mb3 COLLATE utf8mb3_unicode_ci;
++INSERT INTO t1 VALUES (1,'text');
++SELECT IF((@p:=(SELECT path FROM t1 WHERE id=1 AND path REGEXP '^xx'))!='',1,2) AS c1;
++SELECT IF((@p:=(SELECT path FROM t1 WHERE id=1))!='',1,2) AS c1;
++SELECT (@p:=path)='TEXT' AS c1, COLLATION(@p:=path) AS c2, COERCIBILITY(@p:=path) AS c3 FROM t1;
++SELECT COERCIBILITY(@p:='a'), COERCIBILITY(@p:=NULL), COERCIBILITY(@p:=1);
++DROP TABLE t1;
++SET NAMES DEFAULT;
++
++--echo # End of 12.3 tests
+diff --git a/sql/item_func.cc b/sql/item_func.cc
+index 07b811eb..6761c82e 100644
+--- a/sql/item_func.cc
++++ b/sql/item_func.cc
+@@ -4849,9 +4849,15 @@ bool Item_func_set_user_var::fix_fields(THD *thd, Item **ref)
+   if (!m_var_entry->charset() || !null_item)
+     m_var_entry->set_charset(args[0]->collation.derivation == DERIVATION_NUMERIC ?
+                              &my_charset_numeric : args[0]->collation.collation);
++  /*
++    Use DERIVATION_USERVAR, like Item_func_get_user_var does, so that
++    the result of "@a:=expr" has the same derivation as a later "@a".
++    DERIVATION_COERCIBLE caused "Illegal mix of collations" when
++    compared to a string literal (MDEV-39530).
++  */
+   collation.set(m_var_entry->charset(),
+                 args[0]->collation.derivation == DERIVATION_NUMERIC ?
+-                DERIVATION_NUMERIC : DERIVATION_COERCIBLE);
++                DERIVATION_NUMERIC : DERIVATION_USERVAR);
+   switch (args[0]->result_type()) {
+   case STRING_RESULT:
+   case TIME_RESULT:
+@@ -4916,7 +4922,7 @@ Item_func_set_user_var::fix_length_and_dec(THD *thd)
+   }
+   else
+   {
+-    collation.set(DERIVATION_COERCIBLE);
++    collation.set(DERIVATION_USERVAR);
+     fix_length_and_charset(args[0]->max_char_length(),
+                            args[0]->collation.collation);
+   }

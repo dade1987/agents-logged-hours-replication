@@ -1,0 +1,208 @@
+diff --git a/public/admin/tool/messageinbound/classes/manager.php b/public/admin/tool/messageinbound/classes/manager.php
+index a0d1137276c..4748f9a2c9d 100644
+--- a/public/admin/tool/messageinbound/classes/manager.php
++++ b/public/admin/tool/messageinbound/classes/manager.php
+@@ -734,13 +734,20 @@ class manager {
+             $messagedata = reset($messages);
+ 
+             // Parse encoding.
+-            $encoding = array_search(
+-                needle: strtoupper($partstructure[5]),
+-                haystack: utils::get_body_encoding(),
+-            );
++            // The body structure may be incomplete, so default to no encoding when it is missing.
++            $encoding = false;
++            if (isset($partstructure[5]) && is_string($partstructure[5])) {
++                $encoding = array_search(
++                    needle: strtoupper($partstructure[5]),
++                    haystack: utils::get_body_encoding(),
++                );
++            }
+ 
+             // Parse subtype.
+-            $subtype = strtoupper($partstructure[1]);
++            $subtype = '';
++            if (isset($partstructure[1]) && is_string($partstructure[1])) {
++                $subtype = strtoupper($partstructure[1]);
++            }
+ 
+             // Section part may be encoded, even plain text messages, so check everything.
+             if ($encoding == utils::ENCQUOTEDPRINTABLE) {
+@@ -752,11 +759,19 @@ class manager {
+             }
+ 
+             // Parse parameters.
++            // The attributes may be missing or not an array when the body structure is incomplete.
++            $attributes = isset($partstructure[2]) && is_array($partstructure[2]) ? $partstructure[2] : [];
+             $parameters = $this->process_message_body_structure_parameters(
+-                attributes: $partstructure[2],
++                attributes: $attributes,
+                 parameters: $parameters,
+             );
+ 
++            // Default to UTF-8 when no charset has been specified.
++            $charset = $parameters['CHARSET'] ?? 'UTF-8';
++            if (!is_string($charset) || $charset === '') {
++                $charset = 'UTF-8';
++            }
++
+             // Parse content id.
+             $contentid = '';
+             if (!empty($partstructure[3])) {
+@@ -770,20 +785,20 @@ class manager {
+             }
+ 
+             // Parse size of contents in bytes.
+-            $bytes = intval($partstructure[6]);
++            $bytes = isset($partstructure[6]) ? intval($partstructure[6]) : 0;
+ 
+             // PLAIN text.
+             if ($subtype == 'PLAIN') {
+                 $contentplain = $this->process_message_part_body(
+                     bodycontent: $data,
+-                    charset: $parameters['CHARSET'],
++                    charset: $charset,
+                 );
+             }
+             // HTML.
+             if ($subtype == 'HTML') {
+                 $contenthtml = $this->process_message_part_body(
+                     bodycontent: $data,
+-                    charset: $parameters['CHARSET'],
++                    charset: $charset,
+                 );
+             }
+             // ATTACHMENT.
+@@ -800,7 +815,7 @@ class manager {
+                 ) {
+                     // Parse disposition.
+                     $disposition = null;
+-                    if (is_array($partstructure[8])) {
++                    if (isset($partstructure[8]) && is_array($partstructure[8]) && isset($partstructure[8][0])) {
+                         $disposition = strtolower($partstructure[8][0]);
+                     }
+                     $disposition = $disposition == 'inline' ? 'inline' : 'attachment';
+diff --git a/public/admin/tool/messageinbound/tests/manager_test.php b/public/admin/tool/messageinbound/tests/manager_test.php
+index badc40fb65d..c9d88f18895 100644
+--- a/public/admin/tool/messageinbound/tests/manager_test.php
++++ b/public/admin/tool/messageinbound/tests/manager_test.php
+@@ -20,6 +20,7 @@ use core_privacy\tests\provider_testcase;
+ use core_privacy\local\request\approved_contextlist;
+ use core_privacy\local\request\transform;
+ use core_privacy\local\request\writer;
++use PHPUnit\Framework\Attributes\DataProvider;
+ use tool_messageinbound\privacy\provider;
+ 
+ /**
+@@ -66,6 +67,111 @@ final class manager_test extends provider_testcase {
+         $this->assertEquals(0, $DB->count_records_select('messageinbound_messagelist', 'timecreated < :t', ['t' => $stale + 1]));
+     }
+ 
++    /**
++     * Test that body parts with incomplete MIME structures and no charset are parsed without errors.
++     *
++     * @param array $partstructure The body part structure as returned by the IMAP server.
++     * @param string $body The raw body content of the part.
++     * @param string $expectedplain The expected plain text content.
++     * @param string $expectedhtml The expected HTML content.
++     * @param array $expectedattachments The expected list of attachment filenames keyed by disposition.
++     */
++    #[DataProvider('process_message_data_body_part_provider')]
++    public function test_process_message_data_body_part(
++        array $partstructure,
++        string $body,
++        string $expectedplain,
++        string $expectedhtml,
++        array $expectedattachments,
++    ): void {
++        $manager = new \tool_messageinbound\manager();
++
++        $messagedata = new \rcube_message_header();
++        $messagedata->bodypart = ['1' => $body];
++
++        $client = $this->createMock(\rcube_imap_generic::class);
++        $client->selected = 'INBOX';
++        $client->method('fetch')->willReturn([$messagedata]);
++
++        $rc = new \ReflectionClass($manager);
++        $rc->getProperty('client')->setValue($manager, $client);
++
++        $contentplain = '';
++        $contenthtml = '';
++        $attachments = ['inline' => [], 'attachment' => []];
++        $parameters = [];
++
++        $rc->getMethod('process_message_data_body_part')->invokeArgs($manager, [
++            1,
++            $partstructure,
++            '1',
++            &$contentplain,
++            &$contenthtml,
++            &$attachments,
++            &$parameters,
++        ]);
++
++        $this->assertSame($expectedplain, $contentplain);
++        $this->assertSame($expectedhtml, $contenthtml);
++        $this->assertSame(
++            $expectedattachments,
++            array_map(fn($list) => array_map(fn($a) => $a->filename, $list), $attachments),
++        );
++    }
++
++    /**
++     * Data provider for test_process_message_data_body_part.
++     *
++     * @return array
++     */
++    public static function process_message_data_body_part_provider(): array {
++        $noattachments = ['inline' => [], 'attachment' => []];
++        return [
++            'Complete structure with charset' => [
++                ['TEXT', 'PLAIN', ['CHARSET', 'UTF-8'], null, null, '7BIT', '11', null, null, null],
++                'Hello world',
++                'Hello world',
++                '',
++                $noattachments,
++            ],
++            'Missing charset' => [
++                ['TEXT', 'PLAIN', [], null, null, '7BIT', '11', null, null, null],
++                'Hello world',
++                'Hello world',
++                '',
++                $noattachments,
++            ],
++            'Missing attributes key' => [
++                [0 => 'TEXT', 1 => 'HTML', 5 => 'QUOTED-PRINTABLE'],
++                "<p>Caf=C3=A9</p>",
++                '',
++                '<p>Café</p>',
++                $noattachments,
++            ],
++            'Missing encoding key' => [
++                [0 => 'TEXT', 1 => 'PLAIN', 2 => ['CHARSET', 'ISO-8859-1']],
++                "Caf\xE9",
++                'Café',
++                '',
++                $noattachments,
++            ],
++            'Only type present' => [
++                ['TEXT'],
++                'Hello world',
++                '',
++                '',
++                $noattachments,
++            ],
++            'Attachment without disposition or size' => [
++                ['APPLICATION', 'OCTET-STREAM', ['NAME', 'file.txt'], null, null, 'BASE64'],
++                base64_encode('Hello world'),
++                '',
++                '',
++                ['inline' => [], 'attachment' => ['file.txt']],
++            ],
++        ];
++    }
++
+     /**
+      * Create a message to validate.
+      *

@@ -1,0 +1,122 @@
+diff --git a/public/backup/moodle2/restore_stepslib.php b/public/backup/moodle2/restore_stepslib.php
+index 981e26797fb..66edd4b9e81 100644
+--- a/public/backup/moodle2/restore_stepslib.php
++++ b/public/backup/moodle2/restore_stepslib.php
+@@ -5347,39 +5347,10 @@ class restore_create_categories_and_questions extends restore_structure_step {
+                     ],
+                 )
+             ) {
+-                // We'll update each higher version and any references one-at-a-time, starting with the highest, to avoid
+-                // creating a duplicate questionbankentryid-version combination in question_versions.
+-                $moveversions = $DB->get_records_select(
+-                    'question_versions',
+-                    'questionbankentryid = :questionbankentryid AND version >= :oldversion',
+-                    [
+-                        'questionbankentryid' => $this->latestversion->questionbankentryid,
+-                        'oldversion' => $this->latestversion->version,
+-                    ],
+-                    'version DESC',
++                $this->make_room_for_question_version(
++                    $this->latestversion->questionbankentryid,
++                    $this->latestversion->version,
+                 );
+-                foreach ($moveversions as $moveversion) {
+-                    $DB->set_field(
+-                        'question_versions',
+-                        'version',
+-                        $moveversion->version + 1,
+-                        [
+-                            'questionbankentryid' => $moveversion->questionbankentryid,
+-                            'version' => $moveversion->version,
+-                        ]
+-                    );
+-                    $DB->set_field(
+-                        'question_references',
+-                        'version',
+-                        $moveversion->version + 1,
+-                        [
+-                            'questionbankentryid' => $moveversion->questionbankentryid,
+-                            'version' => $moveversion->version,
+-                        ]
+-                    );
+-                }
+-                // Ensure the nextversion value has been initialised, and increment it to account for the additional version.
+-                versions::get_next_version($this->latestversion->questionbankentryid);
+             }
+             $newqvid = $DB->insert_record('question_versions', $this->latestversion);
+             $this->set_mapping('question_versions', $oldqvid, $newqvid);
+@@ -5408,6 +5379,23 @@ class restore_create_categories_and_questions extends restore_structure_step {
+                 $this->latestqbe->oldid = $this->latestqbe->id;
+                 $this->latestqbe->newid = $newquestionversion->questionbankentryid;
+                 $this->set_mapping('question_bank_entry', $this->latestqbe->oldid, $this->latestqbe->newid);
++            } else if ($this->latestqbe->newid != $newquestionversion->questionbankentryid) {
++                // Sibling versions processed earlier were restored into a newly created entry, because no surviving
++                // version had been seen yet. Move them into the original entry and discard the new one.
++                $transaction = $DB->start_delegated_transaction();
++                $targetid = $newquestionversion->questionbankentryid;
++                $tempid = $this->latestqbe->newid;
++                $moving = $DB->get_records('question_versions', ['questionbankentryid' => $tempid], 'version DESC');
++                foreach ($moving as $movingversion) {
++                    if ($DB->record_exists('question_versions', ['questionbankentryid' => $targetid, 'version' => $movingversion->version])) {
++                        $this->make_room_for_question_version($targetid, $movingversion->version);
++                    }
++                    $DB->set_field('question_versions', 'questionbankentryid', $targetid, ['id' => $movingversion->id]);
++                }
++                $DB->delete_records('question_bank_entries', ['id' => $tempid]);
++                $this->latestqbe->newid = $targetid;
++                $this->set_mapping('question_bank_entry', $this->latestqbe->oldid ?? $this->latestqbe->id, $targetid);
++                $transaction->allow_commit();
+             }
+         }
+ 
+@@ -5418,6 +5406,50 @@ class restore_create_categories_and_questions extends restore_structure_step {
+         // step will be in charge of restoring all the question files.
+     }
+ 
++    /**
++     * Increase the version numbers of all versions (and references) at or above the given version, to make room for another.
++     *
++     * @param int $questionbankentryid The question bank entry.
++     * @param int $version The version number to free up.
++     */
++    protected function make_room_for_question_version(int $questionbankentryid, int $version): void {
++        global $DB;
++
++        // We'll update each higher version and any references one-at-a-time, starting with the highest, to avoid
++        // creating a duplicate questionbankentryid-version combination in question_versions.
++        $moveversions = $DB->get_records_select(
++            'question_versions',
++            'questionbankentryid = :questionbankentryid AND version >= :oldversion',
++            [
++                'questionbankentryid' => $questionbankentryid,
++                'oldversion' => $version,
++            ],
++            'version DESC',
++        );
++        foreach ($moveversions as $moveversion) {
++            $DB->set_field(
++                'question_versions',
++                'version',
++                $moveversion->version + 1,
++                [
++                    'questionbankentryid' => $moveversion->questionbankentryid,
++                    'version' => $moveversion->version,
++                ]
++            );
++            $DB->set_field(
++                'question_references',
++                'version',
++                $moveversion->version + 1,
++                [
++                    'questionbankentryid' => $moveversion->questionbankentryid,
++                    'version' => $moveversion->version,
++                ]
++            );
++        }
++        // Ensure the nextversion value has been initialised, and increment it to account for the additional version.
++        versions::get_next_version($questionbankentryid);
++    }
++
+     protected function process_question_hint($data) {
+         global $DB;
+ 

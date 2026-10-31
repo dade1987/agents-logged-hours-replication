@@ -1,0 +1,341 @@
+diff --git a/.upgradenotes/MDL-70225-2026102600000000.yml b/.upgradenotes/MDL-70225-2026102600000000.yml
+new file mode 100644
+index 00000000000..0cc1170f093
+--- /dev/null
++++ b/.upgradenotes/MDL-70225-2026102600000000.yml
+@@ -0,0 +1,10 @@
++issueNumber: MDL-70225
++notes:
++  search_simpledb:
++    - message: >-
++        The simple search engine now matches the start of words instead of
++        requiring exact word matches. Every term in the query is required
++        (AND) and each of them matches any word beginning with it, e.g.
++        searching for 'Cat 10' finds 'Cats 101'. Substrings in the middle of
++        a word (e.g. 'ogs') are not matched.
++      type: improved
+diff --git a/public/search/engine/simpledb/classes/engine.php b/public/search/engine/simpledb/classes/engine.php
+index e2ab53558c2..594288de83e 100644
+--- a/public/search/engine/simpledb/classes/engine.php
++++ b/public/search/engine/simpledb/classes/engine.php
+@@ -128,32 +128,36 @@ class engine extends \core_search\engine {
+ 
+         // And finally the main query after applying all AND filters.
+         if (!empty($filters->q)) {
++            $terms = $this->get_search_terms($filters->q);
++            if (empty($terms)) {
++                // Nothing searchable in the query (e.g. only punctuation or wildcards).
++                $this->totalresults = 0;
++                return array();
++            }
++
+             switch ($DB->get_dbfamily()) {
+                 case 'postgres':
++                    // Prefix matching for every term (all of them are required).
++                    $tsquery = $this->get_postgres_tsquery($terms);
+                     $ands[] = "(" .
+-                        "to_tsvector('simple', title) @@ plainto_tsquery('simple', ?) OR ".
+-                        "to_tsvector('simple', content) @@ plainto_tsquery('simple', ?) OR ".
+-                        "to_tsvector('simple', description1) @@ plainto_tsquery('simple', ?) OR ".
+-                        "to_tsvector('simple', description2) @@ plainto_tsquery('simple', ?)".
++                        "to_tsvector('simple', title) @@ to_tsquery('simple', ?) OR ".
++                        "to_tsvector('simple', content) @@ to_tsquery('simple', ?) OR ".
++                        "to_tsvector('simple', description1) @@ to_tsquery('simple', ?) OR ".
++                        "to_tsvector('simple', description2) @@ to_tsquery('simple', ?)".
+                         ")";
+-                    $params[] = $filters->q;
+-                    $params[] = $filters->q;
+-                    $params[] = $filters->q;
+-                    $params[] = $filters->q;
++                    $params[] = $tsquery;
++                    $params[] = $tsquery;
++                    $params[] = $tsquery;
++                    $params[] = $tsquery;
+                     break;
+                 case 'mysql':
+                     if ($DB->is_fulltext_search_supported()) {
+-                        $ands[] = "MATCH (title, content, description1, description2) AGAINST (?)";
+-                        $params[] = $filters->q;
+-
+-                        // Sorry for the hack, but it does not seem that we will have a solution for
+-                        // this soon (https://bugs.mysql.com/bug.php?id=78485).
+-                        if ($filters->q === '*') {
+-                            return array();
+-                        }
++                        // Boolean mode so we can require every term (+) and match the start of words (*).
++                        $ands[] = "MATCH (title, content, description1, description2) AGAINST (? IN BOOLEAN MODE)";
++                        $params[] = $this->get_mysql_boolean_query($terms);
+                     } else {
+                         // Clumsy version for mysql versions with no fulltext support.
+-                        list($queryand, $queryparams) = $this->get_simple_query($filters->q);
++                        list($queryand, $queryparams) = $this->get_simple_query($terms);
+                         $ands[] = $queryand;
+                         $params = array_merge($params, $queryparams);
+                     }
+@@ -161,19 +165,17 @@ class engine extends \core_search\engine {
+                 case 'mssql':
+                     if ($DB->is_fulltext_search_supported()) {
+                         $ands[] = "CONTAINS ((title, content, description1, description2), ?)";
+-                        // Special treatment for double quotes:
+-                        // - Puntuation is ignored so we can get rid of them.
+-                        // - Phrases should be enclosed in double quotation marks.
+-                        $params[] = '"' . str_replace('"', '', $filters->q) . '"';
++                        // Every term is required and matched as a prefix term.
++                        $params[] = $this->get_mssql_contains_query($terms);
+                     } else {
+-                        // Clumsy version for mysql versions with no fulltext support.
+-                        list($queryand, $queryparams) = $this->get_simple_query($filters->q);
++                        // Clumsy version for mssql versions with no fulltext support.
++                        list($queryand, $queryparams) = $this->get_simple_query($terms);
+                         $ands[] = $queryand;
+                         $params = array_merge($params, $queryparams);
+                     }
+                     break;
+                 default:
+-                    list($queryand, $queryparams) = $this->get_simple_query($filters->q);
++                    list($queryand, $queryparams) = $this->get_simple_query($terms);
+                     $ands[] = $queryand;
+                     $params = array_merge($params, $queryparams);
+                     break;
+@@ -332,29 +334,112 @@ class engine extends \core_search\engine {
+     }
+ 
+     /**
+-     * Returns the default query for db engines.
++     * Splits the search query into the list of terms to search for.
++     *
++     * Terms are separated by white space. Quotes and characters that have a special meaning
++     * for the database full-text search engines are removed, as they are not part of the
++     * indexed words anyway. Empty terms are discarded.
+      *
+      * @param string $q The query string
++     * @return string[] List of terms
++     */
++    protected function get_search_terms(string $q): array {
++        // Remove quotes and the operators used by the full-text search engines.
++        $specialchars = '["\'`\\\\:*+\-<>~()@&|!]';
++        $cleaned = preg_replace('/' . $specialchars . '/u', ' ', $q);
++        if ($cleaned === null) {
++            // Invalid UTF-8, fall back to a non unicode replacement.
++            $cleaned = preg_replace('/' . $specialchars . '/', ' ', $q);
++        }
++
++        $terms = preg_split('/\s+/u', trim((string)$cleaned), -1, PREG_SPLIT_NO_EMPTY);
++        if ($terms === false) {
++            $terms = preg_split('/\s+/', trim((string)$cleaned), -1, PREG_SPLIT_NO_EMPTY);
++        }
++
++        return array_values(array_unique($terms));
++    }
++
++    /**
++     * Returns the PostgreSQL tsquery string, all terms are required and matched as prefixes.
++     *
++     * @param string[] $terms Search terms
++     * @return string
++     */
++    protected function get_postgres_tsquery(array $terms): string {
++        $parts = [];
++        foreach ($terms as $term) {
++            // Quote the term so it is normalised using the 'simple' configuration parser.
++            $parts[] = "'" . str_replace("'", "''", $term) . "':*";
++        }
++        return implode(' & ', $parts);
++    }
++
++    /**
++     * Returns the MySQL boolean mode query, all terms are required and matched as prefixes.
++     *
++     * @param string[] $terms Search terms
++     * @return string
++     */
++    protected function get_mysql_boolean_query(array $terms): string {
++        $parts = [];
++        foreach ($terms as $term) {
++            $parts[] = '+' . $term . '*';
++        }
++        return implode(' ', $parts);
++    }
++
++    /**
++     * Returns the SQL Server CONTAINS query, all terms are required and matched as prefixes.
++     *
++     * @param string[] $terms Search terms
++     * @return string
++     */
++    protected function get_mssql_contains_query(array $terms): string {
++        $parts = [];
++        foreach ($terms as $term) {
++            $parts[] = '"' . $term . '*"';
++        }
++        return implode(' AND ', $parts);
++    }
++
++    /**
++     * Returns the default query for db engines.
++     *
++     * Every term must match the start of a word in one of the indexed fields.
++     *
++     * @param string|string[] $q The query string or the list of terms
+      * @return array SQL string and params list
+      */
+     protected function get_simple_query($q) {
+         global $DB;
+ 
+-        $sql = '(' .
+-            $DB->sql_like('title', '?', false, false) . ' OR ' .
+-            $DB->sql_like('content', '?', false, false) . ' OR ' .
+-            $DB->sql_like('description1', '?', false, false) . ' OR ' .
+-            $DB->sql_like('description2', '?', false, false) .
+-            ')';
+-
+-        // Remove single and double quotes from the query.
+-        $q = str_replace(['"', "'"], '', $q);
+-        $params = [
+-            '%' . $q . '%',
+-            '%' . $q . '%',
+-            '%' . $q . '%',
+-            '%' . $q . '%'
+-        ];
++        if (is_array($q)) {
++            $terms = $q;
++        } else {
++            $terms = $this->get_search_terms($q);
++        }
++
++        $fields = ['title', 'content', 'description1', 'description2'];
++
++        $fieldsconditions = [];
++        $params = [];
++        foreach ($fields as $field) {
++            $termsconditions = [];
++            foreach ($terms as $term) {
++                $escaped = $DB->sql_like_escape($term);
++                // The term is either at the beginning of the field or at the beginning of a word.
++                $termsconditions[] = '(' .
++                    $DB->sql_like($field, '?', false, false) . ' OR ' .
++                    $DB->sql_like($field, '?', false, false) .
++                    ')';
++                $params[] = $escaped . '%';
++                $params[] = '% ' . $escaped . '%';
++            }
++            $fieldsconditions[] = '(' . implode(' AND ', $termsconditions) . ')';
++        }
++
++        $sql = '(' . implode(' OR ', $fieldsconditions) . ')';
+ 
+         return array($sql, $params);
+     }
+diff --git a/public/search/engine/simpledb/tests/engine_test.php b/public/search/engine/simpledb/tests/engine_test.php
+index ea67f63d6aa..d5278f914d5 100644
+--- a/public/search/engine/simpledb/tests/engine_test.php
++++ b/public/search/engine/simpledb/tests/engine_test.php
+@@ -204,6 +204,108 @@ final class engine_test extends \advanced_testcase {
+         $this->assertCount(0, $this->search->search($querydata));
+     }
+ 
++    /**
++     * Test that the search matches the start of words and requires all the terms.
++     *
++     * @return void
++     */
++    public function test_search_partial_words(): void {
++        $this->add_mock_search_area();
++
++        $this->generator->create_record((object)['title' => 'Cats 101', 'content' => 'Content about cats']);
++        $this->generator->create_record((object)['title' => 'Dogs 101', 'content' => 'Content about dogs']);
++        $this->generator->create_record((object)['title' => 'Course CU99999', 'content' => 'First course']);
++        $this->generator->create_record((object)['title' => 'Course CU99999V20', 'content' => 'Second course']);
++
++        $this->search->index();
++        $this->update_index();
++
++        // Whole word.
++        $this->assert_search_titles('101', ['Cats 101', 'Dogs 101']);
++
++        // All the terms are required (AND).
++        $this->assert_search_titles('Cats Dogs', []);
++        $this->assert_search_titles('Cats 101', ['Cats 101']);
++
++        // Start of the words.
++        $this->assert_search_titles('Cat 10', ['Cats 101']);
++        $this->assert_search_titles('Dog', ['Dogs 101']);
++        $this->assert_search_titles('CU99999', ['Course CU99999', 'Course CU99999V20']);
++        $this->assert_search_titles('CU99999V', ['Course CU99999V20']);
++        $this->assert_search_titles('cu99999v20', ['Course CU99999V20']);
++
++        // Middle of the words does not match.
++        $this->assert_search_titles('ogs', []);
++        $this->assert_search_titles('99999', []);
++
++        // Quotes and special characters are ignored.
++        $this->assert_search_titles('"Cats 101"', ['Cats 101']);
++        $this->assert_search_titles('Cat* & Dog*', []);
++        $this->assert_search_titles('+Dog*', ['Dogs 101']);
++
++        // Nothing meaningful to search for.
++        $this->assert_search_titles('*', []);
++        $this->assert_search_titles('"', []);
++    }
++
++    /**
++     * Test the LIKE based fallback query used by databases without full-text search support.
++     *
++     * @return void
++     */
++    public function test_simple_query_fallback(): void {
++        global $DB;
++
++        $this->add_mock_search_area();
++
++        $this->generator->create_record((object)['title' => 'Cats 101', 'content' => 'Content about cats']);
++        $this->generator->create_record((object)['title' => 'Dogs 101', 'content' => 'Content about dogs']);
++        $this->generator->create_record((object)['title' => 'Course CU99999', 'content' => 'First course']);
++        $this->generator->create_record((object)['title' => 'Course CU99999V20', 'content' => 'Second course']);
++
++        $this->search->index();
++        $this->update_index();
++
++        $method = new \ReflectionMethod($this->engine, 'get_simple_query');
++
++        $cases = [
++            '101' => ['Cats 101', 'Dogs 101'],
++            'Cats Dogs' => [],
++            'Cat 10' => ['Cats 101'],
++            'Dog' => ['Dogs 101'],
++            'CU99999' => ['Course CU99999', 'Course CU99999V20'],
++            'cu99999v' => ['Course CU99999V20'],
++            'ogs' => [],
++            '"Cats 101"' => ['Cats 101'],
++            '100%' => [],
++            'about_cats' => [],
++        ];
++        foreach ($cases as $q => $expected) {
++            list($sql, $params) = $method->invoke($this->engine, (string)$q);
++            $titles = array_map(function($record) {
++                return $record->title;
++            }, $DB->get_records_select('search_simpledb_index', $sql, $params));
++            sort($titles);
++            $this->assertEquals($expected, array_values($titles), 'Unexpected results for query "' . $q . '"');
++        }
++    }
++
++    /**
++     * Asserts that the given search query returns the given titles.
++     *
++     * @param string $q Search query
++     * @param string[] $expected Expected titles (in alphabetical order)
++     */
++    protected function assert_search_titles(string $q, array $expected): void {
++        $querydata = new \stdClass();
++        $querydata->q = $q;
++        $titles = array_map(function($result) {
++            return $result->get('title');
++        }, $this->search->search($querydata));
++        sort($titles);
++        $this->assertEquals($expected, $titles, 'Unexpected results for query "' . $q . '"');
++    }
++
+     /**
+      * Test delete function
+      *

@@ -1,0 +1,100 @@
+You are a software engineer fixing an issue in MariaDB Server (C/C++). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot build MariaDB or run its test suite. Read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update mysql-test tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDEV-40824: slave_run_triggers_for_rbr enabled slave ignores after-insert trigger's error
+
+The following test hangs at {{wait_for_slave_sql_error}} line starting from
+MDEV-15990 commits.
+
+{code:mtr}
+--source include/have_binlog_format_row.inc
+--source include/have_innodb.inc
+--source include/master-slave.inc
+
+--connection slave
+call mtr.add_suppression("Can.t update table 'aud' in stored function/trigger");
+call mtr.add_suppression("Slave: At line 1 in test.ai Error_code: 4094");
+call mtr.add_suppression("Could not execute Write_rows");
+call mtr.add_suppression("Error running query, slave SQL thread aborted");
+source include/stop_slave.inc;
+SET @sav= @@global.slave_run_triggers_for_rbr;
+SET @@global.slave_run_triggers_for_rbr= ENFORCE;
+source include/start_slave.inc;
+
+--connection master
+CREATE TABLE t1 (a INT NOT NULL PRIMARY KEY) ENGINE=InnoDB;
+CREATE TABLE aud (a INT) ENGINE=InnoDB;
+CREATE TRIGGER ai AFTER INSERT ON t1 FOR EACH ROW INSERT INTO aud VALUES (NEW.a);
+--sync_slave_with_master
+
+--connection master
+INSERT INTO t1 VALUES (1);
+
+--echo # the slave must stop with an error at trying to "re-"exectute the trigger.
+--connection slave
+let $slave_sql_errno = 1442;
+source include/wait_for_slave_sql_error.inc;
+
+# Recover the slave that
+SET @@global.slave_run_triggers_for_rbr = NO;
+source include/start_slave.inc;
+
+# now must catch up.
+--connection master
+--sync_slave_with_master
+
+SELECT a FROM t1 ORDER BY a;
+--echo # ENFORCE re-runs the master's trigger on the slave, but the audit row
+--echo # was not going to be written twice.
+SELECT COUNT(*) AS aud_rows_on_slave FROM aud;
+
+# --- cleanup ---
+--connection slave
+source include/stop_slave.inc;
+SET @@global.slave_run_triggers_for_rbr = @sav;
+source include/start_slave.inc;
+--connection master
+DROP TRIGGER ai;
+DROP TABLE t1, aud;
+--sync_slave_with_master
+--source include/rpl_end.inc
+
+{code}
+The test correctly expects an error from a trigger that the slave applier can't pass.
+
+Additionally it is verified that the expected error-stop by slave indeed took place for pre-MDEV-15990 version.
+
+The reason of the hang is [the block|https://github.com/MariaDB/server/blob/91156c3de58762196605150ab3f756fe952592d1/sql/log_event_server.cc#L7737]
+ 
+{code:c++}
+   error= m_write_record->write_record();
+
+    DBUG_RETURN(error ? m_write_record->last_errno() : 0);
+{code}
+ignored an after-trigger error which has legitimate {{zero}} code in {{m_write_record}}.
+
+The following diff fixes the issue
+
+{code:diff}
+@@ -7734,9 +7734,13 @@ Write_rows_log_event::write_row(rpl_group_info *rgi,
+     error= update_sequence();
+   else
+   {
++    int ret_err;
+     error= m_write_record->write_record();
++    ret_err= error ?
++	     (m_write_record->last_errno() ?
++	      m_write_record->last_errno() : HA_ERR_GENERIC): 0;
+ 
+-    DBUG_RETURN(error ? m_write_record->last_errno() : 0);
++    DBUG_RETURN(ret_err);
+   }
+
+{code}
+

@@ -1,0 +1,73 @@
+diff --git a/public/question/classes/statistics/questions/all_calculated_for_qubaid_condition.php b/public/question/classes/statistics/questions/all_calculated_for_qubaid_condition.php
+index df5ca3f23de..45c7d8bb7ac 100644
+--- a/public/question/classes/statistics/questions/all_calculated_for_qubaid_condition.php
++++ b/public/question/classes/statistics/questions/all_calculated_for_qubaid_condition.php
+@@ -212,6 +212,7 @@ class all_calculated_for_qubaid_condition {
+                         debugging('Statistics found for slot ' . $fromdb->slot .
+                             ' in stats ' . json_encode($qubaids->from_where_params()) .
+                             ' which is not an analysable question.', DEBUG_DEVELOPER);
++                        continue;
+                     }
+                     $this->questionstats[$fromdb->slot]->populate_from_record($fromdb);
+                 } else {
+diff --git a/public/question/tests/statistics/all_calculated_for_qubaid_condition_test.php b/public/question/tests/statistics/all_calculated_for_qubaid_condition_test.php
+new file mode 100644
+index 00000000000..522bfd67c74
+--- /dev/null
++++ b/public/question/tests/statistics/all_calculated_for_qubaid_condition_test.php
+@@ -0,0 +1,55 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core_question\statistics\questions;
++
++/**
++ * Unit tests for {@see all_calculated_for_qubaid_condition}.
++ *
++ * @package    core_question
++ * @copyright  The Open University
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ * @covers     \core_question\statistics\questions\all_calculated_for_qubaid_condition
++ */
++final class all_calculated_for_qubaid_condition_test extends \advanced_testcase {
++
++    public function test_get_cached_skips_stats_for_unknown_slots(): void {
++        global $DB;
++        $this->resetAfterTest();
++
++        $qubaids = new \qubaid_list([1, 2, 3]);
++        $timemodified = time();
++        $base = [
++            'hashcode' => $qubaids->get_hash_code(),
++            'timemodified' => $timemodified,
++            'questionid' => 123,
++            'slot' => 7,
++            'subquestion' => 0,
++            's' => 1,
++            'facility' => 0.5,
++        ];
++        // Main stats for a slot that is not an analysable question.
++        $DB->insert_record('question_statistics', (object) ($base + ['variant' => null]));
++        // Variant stats for the same slot.
++        $DB->insert_record('question_statistics', (object) ($base + ['variant' => 1]));
++
++        $stats = new all_calculated_for_qubaid_condition();
++        $stats->get_cached($qubaids);
++
++        $this->assertDebuggingCalledCount(2);
++        $this->assertArrayNotHasKey(7, $stats->questionstats);
++    }
++}

@@ -1,0 +1,94 @@
+diff --git a/mysql-test/main/keywords.result b/mysql-test/main/keywords.result
+index 8f4ba9bb..27807ee6 100644
+--- a/mysql-test/main/keywords.result
++++ b/mysql-test/main/keywords.result
+@@ -812,3 +812,33 @@ DROP FUNCTION test.create; -- FUNCTION test.create does not exist
+ DROP TABLE t1;
+ DROP PROCEDURE p1;
+ DROP PROCEDURE p2;
++#
++# MDEV-41657 TO_DATE no longer works as a variable
++#
++CREATE TABLE to_date (to_date INT);
++INSERT INTO to_date VALUES (1);
++SELECT to_date FROM to_date;
++to_date
++1
++SELECT to_date.to_date FROM to_date;
++to_date
++1
++DROP TABLE to_date;
++BEGIN NOT ATOMIC
++DECLARE to_date INT DEFAULT 2;
++SET to_date= to_date + 1;
++SELECT to_date;
++END
++$$
++to_date
++3
++SET @to_date= 3;
++SELECT @to_date;
++@to_date
++3
++SET SQL_MODE=ORACLE;
++SELECT TO_DATE('2001-02-03','YYYY-MM-DD') AS c1;
++c1
++2001-02-03 00:00:00
++SET SQL_MODE=DEFAULT;
++# End of 12.3 tests
+diff --git a/mysql-test/main/keywords.test b/mysql-test/main/keywords.test
+index e6a3fc49..aec309cc 100644
+--- a/mysql-test/main/keywords.test
++++ b/mysql-test/main/keywords.test
+@@ -372,3 +372,31 @@ DROP TABLE t1;
+ 
+ DROP PROCEDURE p1;
+ DROP PROCEDURE p2;
++
++--echo #
++--echo # MDEV-41657 TO_DATE no longer works as a variable
++--echo #
++
++CREATE TABLE to_date (to_date INT);
++INSERT INTO to_date VALUES (1);
++SELECT to_date FROM to_date;
++SELECT to_date.to_date FROM to_date;
++DROP TABLE to_date;
++
++DELIMITER $$;
++BEGIN NOT ATOMIC
++  DECLARE to_date INT DEFAULT 2;
++  SET to_date= to_date + 1;
++  SELECT to_date;
++END
++$$
++DELIMITER ;$$
++
++SET @to_date= 3;
++SELECT @to_date;
++
++SET SQL_MODE=ORACLE;
++SELECT TO_DATE('2001-02-03','YYYY-MM-DD') AS c1;
++SET SQL_MODE=DEFAULT;
++
++--echo # End of 12.3 tests
+diff --git a/sql/lex.h b/sql/lex.h
+index 709d949c..7f81d051 100644
+--- a/sql/lex.h
++++ b/sql/lex.h
+@@ -675,7 +675,6 @@ SYMBOL symbols[] = {
+   { "TINYINT",		SYM(TINYINT)},
+   { "TINYTEXT",		SYM(TINYTEXT)},
+   { "TO",		SYM(TO_SYM)},
+-  { "TO_DATE",		SYM(TO_DATE)},
+   { "TRAILING",		SYM(TRAILING)},
+   { "TRANSACTION",	SYM(TRANSACTION_SYM)},
+   { "TRANSACTIONAL",	SYM(TRANSACTIONAL_SYM)},
+@@ -791,6 +790,7 @@ SYMBOL sql_functions[] = {
+   { "SUBSTRING",	SYM(SUBSTRING)},
+   { "SUM",		SYM(SUM_SYM)},
+   { "SYSTEM_USER",      SYM(USER_SYM)},
++  { "TO_DATE",		SYM(TO_DATE)},
+   { "TRIM",		SYM(TRIM)},
+   { "TRIM_ORACLE",	SYM(TRIM_ORACLE)},
+   { "VARIANCE",		SYM(VARIANCE_SYM)},

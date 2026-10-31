@@ -1,0 +1,24 @@
+diff --git a/sql/sql_show.cc b/sql/sql_show.cc
+index cbfa699e..486226ca 100644
+--- a/sql/sql_show.cc
++++ b/sql/sql_show.cc
+@@ -1672,7 +1672,7 @@ static void append_directory(THD *thd, String *packet, LEX_CSTRING *dir_type,
+     size_t length= dirname_length(filename);
+     packet->append(' ');
+     packet->append(dir_type);
+-    packet->append(STRING_WITH_LEN(" DIRECTORY='"));
++    packet->append(STRING_WITH_LEN(" DIRECTORY="));
+ #ifdef _WIN32
+     /* Convert \ to / to be able to create table on unix */
+     char *winfilename= (char*) thd->memdup(filename, length);
+@@ -1684,8 +1684,8 @@ static void append_directory(THD *thd, String *packet, LEX_CSTRING *dir_type,
+     }
+     filename= winfilename;
+ #endif
+-    packet->append(filename, length);
+-    packet->append('\'');
++    /* Quote and escape the path, it may contain quotes or backslashes */
++    append_unescaped(packet, filename, length);
+   }
+ }
+ 

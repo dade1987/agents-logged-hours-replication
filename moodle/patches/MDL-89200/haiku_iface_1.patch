@@ -1,0 +1,127 @@
+diff --git a/public/admin/tool/task/lang/en/tool_task.php b/public/admin/tool/task/lang/en/tool_task.php
+index 7ccee87463e..f01613f73b1 100644
+--- a/public/admin/tool/task/lang/en/tool_task.php
++++ b/public/admin/tool/task/lang/en/tool_task.php
+@@ -84,6 +84,7 @@ $string['runadhoctasksfailed'] = 'Run failed \'{$a}\' tasks';
+ $string['runagain'] = 'Run again';
+ $string['runasap'] = 'Run ASAP';
+ $string['runasap_confirm'] = 'Are you sure you want to run this task \'{$a}\' ASAP? The task will run via cron at the next available time.';
++$string['runasapalreadyrunning'] = 'This task \'{$a}\' is currently running, so it has not been scheduled to run ASAP. Try again once it has finished.';
+ $string['runasapsuccess'] = 'This task \'{$a}\' has been scheduled to run ASAP.';
+ $string['runclassname'] = 'Run all';
+ $string['runclassnamedueonly'] = 'Run due only';
+diff --git a/public/admin/tool/task/schedule_task.php b/public/admin/tool/task/schedule_task.php
+index 2824cea75be..77a3905a394 100644
+--- a/public/admin/tool/task/schedule_task.php
++++ b/public/admin/tool/task/schedule_task.php
+@@ -80,8 +80,11 @@ if ($action == 'asap') {
+         );
+     }
+     // Set nextruntime to the past so cron picks it up on its very next run.
+-    \core\task\manager::set_scheduled_task_nextruntime($task, time() - HOURSECS);
+-    echo $OUTPUT->notification(get_string('runasapsuccess', 'tool_task', $task->get_name()), 'success');
++    if (\core\task\manager::set_scheduled_task_nextruntime($task, time() - HOURSECS)) {
++        echo $OUTPUT->notification(get_string('runasapsuccess', 'tool_task', $task->get_name()), 'success');
++    } else {
++        echo $OUTPUT->notification(get_string('runasapalreadyrunning', 'tool_task', $task->get_name()), 'error');
++    }
+     echo $output->link_back(get_class($task));
+     echo $OUTPUT->footer();
+     exit;
+diff --git a/public/lib/classes/task/manager.php b/public/lib/classes/task/manager.php
+index 1bd67857f72..2520252e56a 100644
+--- a/public/lib/classes/task/manager.php
++++ b/public/lib/classes/task/manager.php
+@@ -1391,19 +1391,35 @@ class manager {
+     /**
+      * Sets the next run time for a scheduled task.
+      *
++     * The change is rejected while the task is running, because scheduled_task_complete() would
++     * otherwise overwrite the next run time when the running task finishes.
++     *
+      * @param scheduled_task $task Task to modify
+      * @param int $nextruntime timestamp
++     * @return bool true if the next run time was set, false if the task is currently running
+      * @throws \dml_exception If there is a database error
+      * @since Moodle 5.3
+      */
+-    public static function set_scheduled_task_nextruntime(scheduled_task $task, int $nextruntime): void {
++    public static function set_scheduled_task_nextruntime(scheduled_task $task, int $nextruntime): bool {
+         global $DB;
+-        $DB->set_field(
+-            'task_scheduled',
+-            'nextruntime',
+-            $nextruntime,
+-            ['classname' => self::get_canonical_class_name($task)]
+-        );
++
++        $classname = self::get_canonical_class_name($task);
++
++        // A running scheduled task holds the lock for its class name until it completes or fails
++        // (see get_next_scheduled_task()), so failing to acquire it means the task is running.
++        $cronlockfactory = \core\lock\lock_config::get_lock_factory('cron');
++        $lock = $cronlockfactory->get_lock($classname, 0);
++        if (!$lock) {
++            return false;
++        }
++
++        try {
++            $DB->set_field('task_scheduled', 'nextruntime', $nextruntime, ['classname' => $classname]);
++        } finally {
++            $lock->release();
++        }
++
++        return true;
+     }
+ 
+     /**
+diff --git a/public/lib/tests/task/manager_test.php b/public/lib/tests/task/manager_test.php
+index 7e28d285776..07342742641 100644
+--- a/public/lib/tests/task/manager_test.php
++++ b/public/lib/tests/task/manager_test.php
+@@ -702,4 +702,45 @@ final class manager_test extends \advanced_testcase {
+         $this->assertNotNull($next);
+         manager::scheduled_task_complete($next);
+     }
++
++    /**
++     * Test that setting the next run time is rejected while the task is running, and that the
++     * rejected request is not overwritten when the running task completes.
++     */
++    public function test_set_scheduled_task_nextruntime_while_running(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $this->preventResetByRollback();
++        $clock = $this->mock_clock_with_frozen(
++            (new \DateTimeImmutable('2026-01-01 12:00:00', \core_date::get_server_timezone_object()))->getTimestamp(),
++        );
++
++        // Disable all the tasks, so we can insert our own and be sure it's the only one being run.
++        $DB->set_field('task_scheduled', 'disabled', 1);
++
++        $task = new scheduled_test_task();
++        $task->set_month('*');
++        $task->set_hour('0');
++        $task->set_next_run_time($clock->time() - HOURSECS);
++        $DB->insert_record('task_scheduled', manager::record_from_scheduled_task($task));
++
++        $running = \core\task\manager::get_next_scheduled_task($clock->time());
++        $this->assertNotNull($running);
++
++        // The task is running, so the request must be rejected.
++        $this->assertFalse(manager::set_scheduled_task_nextruntime($running, $clock->time() - HOURSECS));
++
++        manager::scheduled_task_complete($running);
++
++        // The rejected request must not have been kept, so the task is not due again.
++        $next = \core\task\manager::get_next_scheduled_task($clock->time() + 10);
++        $this->assertNull($next);
++
++        // Once the task is no longer running, the request is accepted.
++        $this->assertTrue(manager::set_scheduled_task_nextruntime($running, $clock->time() + 20));
++        $next = \core\task\manager::get_next_scheduled_task($clock->time() + 30);
++        $this->assertNotNull($next);
++        manager::scheduled_task_complete($next);
++    }
+ }

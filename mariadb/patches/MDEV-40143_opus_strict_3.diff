@@ -1,0 +1,112 @@
+diff --git a/mysql-test/main/spatial_utility_function_isvalid.result b/mysql-test/main/spatial_utility_function_isvalid.result
+index 9896161a..6c995492 100644
+--- a/mysql-test/main/spatial_utility_function_isvalid.result
++++ b/mysql-test/main/spatial_utility_function_isvalid.result
+@@ -473,3 +473,36 @@ c
+ SELECT st_astext(ST_VALIDATE(ST_SYMDIFFERENCE(ST_GEOMFROMTEXT(' MULTIPOLYGON( ( ( 2 2, 2 8, 8 8, 8 2, 2 2 ), ( 4 4, 4 6, 6 6, 6 4, 4 4 ) ), ( (0 2,1 2,1 3,0 3,0 2) ) ) '),  ST_GEOMFROMTEXT(' POLYGON( ( 6 6, 5 8, 0 8, 8 1, 7 6, 6 6 ) ) ') ) ) ) <> '' c;
+ c
+ 1
++#
++# MDEV-40143 Inconsistent ST_IsValid() result between VIEW, CTE and
++#            TEMPORARY TABLE over RIGHT JOIN
++#
++CREATE TABLE t0 (c0 INT,c1 POINT);
++INSERT INTO t0 VALUES (-4, Point(0,0)), (6, NULL), (9, Point(1,1));
++SELECT ST_IsValid(c1) FROM t0;
++ST_IsValid(c1)
++1
++NULL
++1
++CREATE VIEW v0 AS
++SELECT ST_IsValid(a.c1) AS vc_0 FROM t0 AS a RIGHT JOIN t0 AS b ON a.c0 <=> b.c0 WHERE ST_Dimension(b.c1) >= 0;
++SELECT vc_0 FROM v0 WHERE vc_0 > 0;
++vc_0
++1
++1
++WITH CTE AS (
++SELECT ST_IsValid(a.c1) AS vc_0 FROM t0 AS a RIGHT JOIN t0 AS b ON a.c0 <=> b.c0 WHERE ST_Dimension(b.c1) >= 0)
++SELECT vc_0 FROM CTE WHERE vc_0 > 0;
++vc_0
++1
++1
++CREATE TEMPORARY TABLE temp_t AS
++SELECT ST_IsValid(a.c1) AS vc_0 FROM t0 AS a RIGHT JOIN t0 AS b ON a.c0 <=> b.c0 WHERE ST_Dimension(b.c1) >= 0;
++SELECT vc_0 FROM temp_t WHERE vc_0 > 0;
++vc_0
++1
++1
++DROP TEMPORARY TABLE temp_t;
++DROP VIEW v0;
++DROP TABLE t0;
++# End of 12.2 tests
+diff --git a/mysql-test/main/spatial_utility_function_isvalid.test b/mysql-test/main/spatial_utility_function_isvalid.test
+index 95696481..989da7ea 100644
+--- a/mysql-test/main/spatial_utility_function_isvalid.test
++++ b/mysql-test/main/spatial_utility_function_isvalid.test
+@@ -396,3 +396,25 @@ SELECT ST_IsValid(ST_GEOMFROMTEXT('  MULTIPOLYGON( ( (2 2, 2 4, 4 4, 4 2, 2 2) )
+ --echo # MDEV-36042 Assertion failed in Binary_string::q_append
+ --echo #
+ SELECT st_astext(ST_VALIDATE(ST_SYMDIFFERENCE(ST_GEOMFROMTEXT(' MULTIPOLYGON( ( ( 2 2, 2 8, 8 8, 8 2, 2 2 ), ( 4 4, 4 6, 6 6, 6 4, 4 4 ) ), ( (0 2,1 2,1 3,0 3,0 2) ) ) '),  ST_GEOMFROMTEXT(' POLYGON( ( 6 6, 5 8, 0 8, 8 1, 7 6, 6 6 ) ) ') ) ) ) <> '' c;
++
++--echo #
++--echo # MDEV-40143 Inconsistent ST_IsValid() result between VIEW, CTE and
++--echo #            TEMPORARY TABLE over RIGHT JOIN
++--echo #
++CREATE TABLE t0 (c0 INT,c1 POINT);
++INSERT INTO t0 VALUES (-4, Point(0,0)), (6, NULL), (9, Point(1,1));
++SELECT ST_IsValid(c1) FROM t0;
++CREATE VIEW v0 AS
++SELECT ST_IsValid(a.c1) AS vc_0 FROM t0 AS a RIGHT JOIN t0 AS b ON a.c0 <=> b.c0 WHERE ST_Dimension(b.c1) >= 0;
++SELECT vc_0 FROM v0 WHERE vc_0 > 0;
++WITH CTE AS (
++SELECT ST_IsValid(a.c1) AS vc_0 FROM t0 AS a RIGHT JOIN t0 AS b ON a.c0 <=> b.c0 WHERE ST_Dimension(b.c1) >= 0)
++SELECT vc_0 FROM CTE WHERE vc_0 > 0;
++CREATE TEMPORARY TABLE temp_t AS
++SELECT ST_IsValid(a.c1) AS vc_0 FROM t0 AS a RIGHT JOIN t0 AS b ON a.c0 <=> b.c0 WHERE ST_Dimension(b.c1) >= 0;
++SELECT vc_0 FROM temp_t WHERE vc_0 > 0;
++DROP TEMPORARY TABLE temp_t;
++DROP VIEW v0;
++DROP TABLE t0;
++
++--echo # End of 12.2 tests
+diff --git a/sql/item_geofunc.cc b/sql/item_geofunc.cc
+index 29c1bd56..1b60dc82 100644
+--- a/sql/item_geofunc.cc
++++ b/sql/item_geofunc.cc
+@@ -2137,19 +2137,20 @@ longlong Item_func_isvalid::val_int()
+   Geometry *geometry;
+ 
+   int valid;
+-  if ((args[0]->null_value ||
++  null_value= 0;
++  if ((!wkb || args[0]->null_value ||
+       !(geometry= Geometry::construct(&buffer, wkb->ptr(), wkb->length()))))
+   {
+     if (!args[0]->null_value)
+       my_error(ER_GIS_INVALID_DATA, MYF(0), func_name());
+     null_value= 1;
+-    return 1;
++    return 0;
+   }
+ 
+   if (geometry->is_valid(&valid))
+   {
+     null_value= 1;
+-    return 1;
++    return 0;
+   }
+ 
+   return (longlong) valid;
+diff --git a/sql/item_geofunc.h b/sql/item_geofunc.h
+index d830e440..c31465bf 100644
+--- a/sql/item_geofunc.h
++++ b/sql/item_geofunc.h
+@@ -1099,6 +1099,8 @@ class Item_func_isvalid: public Item_long_func_args_geometry
+   String tmp;
+   Item_func_isvalid(THD *thd, Item *a): Item_long_func_args_geometry(thd, a) {}
+   longlong val_int() override;
++  bool fix_length_and_dec(THD *thd) override
++  { max_length= 11; set_maybe_null(); return FALSE; }
+   LEX_CSTRING func_name_cstring() const override
+   {
+     static LEX_CSTRING name= {STRING_WITH_LEN("st_isvalid") };

@@ -1,0 +1,45 @@
+You are a software engineer fixing an issue in MariaDB Server (C/C++). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot build MariaDB or run its test suite. Read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update mysql-test tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDEV-31225: Signal 11 after select ..WHERE ROW(a,(a,a))  IN ((1,(1,1)),(2,(2,null))) with in_predicate_conversion_threshold=1
+
+test from main/func_debug.test :
+{code:sql}
+SET @@in_predicate_conversion_threshold=1;
+
+CREATE TABLE t1 (a INT);
+SELECT 1 FROM t1 WHERE ROW(a,(a,a))  IN ((1,(1,1)),(2,(2,null)));
+{code}
+{noformat:title=10.4.29-MariaDB-debug-log 84b9fc25a29b94a37eb9d5a}
+Thread 1 (Thread 0x7f2588625640 (LWP 59397)):
+
+#3  0x000055b75b83ee31 in my_write_core (sig=11) at //10.4/mysys/stacktrace.c:386
+#4  0x000055b75aed11f9 in handle_fatal_signal (sig=11) at //10.4/sql/signal_handler.cc:372
+#5  <signal handler called>
+#6  0x00007f2588622fc8 in ?? ()
+#7  0x00007f2588622fd0 in ?? ()
+#8  0x00007f2588623010 in ?? ()
+#9  0x000055b75adec19c in cmp_row_types (item1=0x7f2578015570, item2=0x7f2588622fb0) at //10.4/sql/sql_tvc.cc:859
+Backtrace stopped: previous frame inner to this frame (corrupt stack?)
+{noformat}
+{noformat}
+230509 17:13:07 [ERROR] mysqld got signal 11 ;
+
+Server version: 10.6.12-MariaDB source revision: 4c79e15cc3716f69c044d4287ad2160da8101cdc
+
+mysys/stacktrace.c:213(my_print_stacktrace)[0x55aa7ddfcff7]
+sigaction.c:0(__restore_rt)[0x7fe170b9d420]
+mysys/my_malloc.c:146(my_realloc)[0x55aa7e426647]
+sql/sql_string.cc:98(Binary_string::realloc_raw(unsigned long))[0x55aa7dc645e5]
+sql/sql_string.h:729(Binary_string::realloc_with_extra(unsigned long))[0x55aa7dd4ae3a]
+sql/item.h:2942(Item_fixed_hybrid::cleanup())[0x55aa7dd5a095]
+[0x7fe158bfa068]
+
+Query (0x7fe13c014f00): SELECT 1 FROM t1 WHERE ROW(a,(a,a))  IN ((1,(1,1)),(2,(2,null)))
+{noformat}

@@ -1,0 +1,23 @@
+diff --git a/sql/spatial.cc b/sql/spatial.cc
+index 20b8a551..6e1d3792 100644
+--- a/sql/spatial.cc
++++ b/sql/spatial.cc
+@@ -3404,6 +3404,18 @@ uint Gis_geometry_collection::init_from_wkb(const char *wkb, uint len,
+ 
+   if (len < 4)
+     return 0;
++
++  /*
++    GeometryCollection may contain other collections, so this function
++    recurses once per nesting level. Abort before the C stack is exhausted
++    on deeply nested input (MDEV-40540).
++  */
++  {
++    uchar stack_probe;
++    if (check_stack_overrun(current_thd, STACK_MIN_SIZE, &stack_probe))
++      return 0;
++  }
++
+   n_geom= wkb_get_uint(wkb, bo);
+ 
+   if (res->reserve(4, 512))

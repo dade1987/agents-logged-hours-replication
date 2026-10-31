@@ -1,0 +1,48 @@
+diff --git a/public/admin/tool/messageinbound/classes/manager.php b/public/admin/tool/messageinbound/classes/manager.php
+index a0d1137276c..b4a6970ca81 100644
+--- a/public/admin/tool/messageinbound/classes/manager.php
++++ b/public/admin/tool/messageinbound/classes/manager.php
+@@ -735,7 +735,7 @@ class manager {
+ 
+             // Parse encoding.
+             $encoding = array_search(
+-                needle: strtoupper($partstructure[5]),
++                needle: strtoupper($partstructure[5] ?? ''),
+                 haystack: utils::get_body_encoding(),
+             );
+ 
+@@ -752,8 +752,9 @@ class manager {
+             }
+ 
+             // Parse parameters.
++            $attributes = isset($partstructure[2]) && is_array($partstructure[2]) ? $partstructure[2] : [];
+             $parameters = $this->process_message_body_structure_parameters(
+-                attributes: $partstructure[2],
++                attributes: $attributes,
+                 parameters: $parameters,
+             );
+ 
+@@ -770,20 +771,20 @@ class manager {
+             }
+ 
+             // Parse size of contents in bytes.
+-            $bytes = intval($partstructure[6]);
++            $bytes = intval($partstructure[6] ?? 0);
+ 
+             // PLAIN text.
+             if ($subtype == 'PLAIN') {
+                 $contentplain = $this->process_message_part_body(
+                     bodycontent: $data,
+-                    charset: $parameters['CHARSET'],
++                    charset: $parameters['CHARSET'] ?? 'UTF-8',
+                 );
+             }
+             // HTML.
+             if ($subtype == 'HTML') {
+                 $contenthtml = $this->process_message_part_body(
+                     bodycontent: $data,
+-                    charset: $parameters['CHARSET'],
++                    charset: $parameters['CHARSET'] ?? 'UTF-8',
+                 );
+             }
+             // ATTACHMENT.

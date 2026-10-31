@@ -1,0 +1,51 @@
+diff --git a/storage/myisam/mi_open.c b/storage/myisam/mi_open.c
+index 414e483a..84740a1b 100644
+--- a/storage/myisam/mi_open.c
++++ b/storage/myisam/mi_open.c
+@@ -357,6 +357,17 @@ MI_INFO *mi_open(const char *name, int mode, uint open_flags)
+         keyinfo->share= share;
+         disk_pos=mi_keydef_read(disk_pos, keyinfo);
+         disk_pos_assert(disk_pos + keyinfo->keysegs * HA_KEYSEG_SIZE, end_pos);
++        /*
++          Sanity check of the key definition. Keys are stored in buffers of
++          size HA_MAX_KEY_BUFF, so a corrupted key definition with larger
++          lengths would cause buffer overflows when the key is accessed.
++        */
++        if (keyinfo->keylength > HA_MAX_KEY_BUFF ||
++            keyinfo->maxlength > HA_MAX_KEY_BUFF)
++        {
++          my_errno= HA_ERR_CRASHED;
++          goto err;
++        }
+         if (keyinfo->key_alg == HA_KEY_ALG_RTREE)
+           have_rtree=1;
+         set_if_smaller(share->blocksize, keyinfo->block_length);
+@@ -364,6 +375,16 @@ MI_INFO *mi_open(const char *name, int mode, uint open_flags)
+         for (j=0 ; j < keyinfo->keysegs; j++,pos++)
+ 	{
+ 	  disk_pos=mi_keyseg_read(disk_pos, pos);
++          /*
++            A key segment can never be longer than HA_MAX_KEY_LENGTH.
++            A larger value means that the index definition is corrupted;
++            using it would overflow the key buffers (HA_MAX_KEY_BUFF).
++          */
++          if (pos->length > HA_MAX_KEY_LENGTH)
++          {
++            my_errno= HA_ERR_CRASHED;
++            goto err;
++          }
+           if (pos->flag & HA_BLOB_PART &&
+               ! (share->options & (HA_OPTION_COMPRESS_RECORD |
+                                    HA_OPTION_PACK_RECORD)))
+@@ -453,6 +474,11 @@ MI_INFO *mi_open(const char *name, int mode, uint open_flags)
+ 	for (j=0 ; j < share->uniqueinfo[i].keysegs; j++,pos++)
+ 	{
+ 	  disk_pos=mi_keyseg_read(disk_pos, pos);
++          if (pos->length > HA_MAX_KEY_LENGTH)
++          {
++            my_errno= HA_ERR_CRASHED;
++            goto err;
++          }
+ 	  if (pos->type == HA_KEYTYPE_TEXT ||
+               pos->type == HA_KEYTYPE_VARTEXT1 ||
+               pos->type == HA_KEYTYPE_VARTEXT2)

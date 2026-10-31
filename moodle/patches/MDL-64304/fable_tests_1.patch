@@ -1,0 +1,105 @@
+diff --git a/.upgradenotes/MDL-64304-20261026051137.yml b/.upgradenotes/MDL-64304-20261026051137.yml
+new file mode 100644
+index 00000000000..178c9e41a3d
+--- /dev/null
++++ b/.upgradenotes/MDL-64304-20261026051137.yml
+@@ -0,0 +1,9 @@
++issueNumber: MDL-64304
++notes:
++  gradereport_user:
++    - message: >-
++        The `gradereport_user_get_grade_items` web service now returns a
++        descriptive `itemname` for category total and course total grade items
++        (e.g. "My category total" and "Course total") instead of an empty
++        string.
++      type: improved
+diff --git a/public/grade/report/user/classes/external/user.php b/public/grade/report/user/classes/external/user.php
+index 564aade0155..5c9a72f3b27 100644
+--- a/public/grade/report/user/classes/external/user.php
++++ b/public/grade/report/user/classes/external/user.php
+@@ -509,7 +509,8 @@ class user extends external_api {
+                                 new external_single_structure(
+                                     [
+                                         'id' => new external_value(PARAM_INT, 'Grade item id'),
+-                                        'itemname' => new external_value(PARAM_RAW, 'Grade item name'),
++                                        'itemname' => new external_value(PARAM_RAW,
++                                            'Grade item name (for category and course items, the category or course total name)'),
+                                         'itemtype' => new external_value(PARAM_ALPHA, 'Grade item type'),
+                                         'itemmodule' => new external_value(PARAM_PLUGIN, 'Grade item module'),
+                                         'iteminstance' => new external_value(PARAM_INT, 'Grade item instance'),
+diff --git a/public/grade/report/user/classes/report/user.php b/public/grade/report/user/classes/report/user.php
+index 7b9420628d3..40341c5e666 100644
+--- a/public/grade/report/user/classes/report/user.php
++++ b/public/grade/report/user/classes/report/user.php
+@@ -609,7 +609,13 @@ class user extends grade_report {
+ 
+                 // Basic grade item information.
+                 $gradeitemdata['id'] = $gradeobject->id;
+-                $gradeitemdata['itemname'] = $gradeobject->itemname;
++                if ($gradeobject->is_category_item() || $gradeobject->is_course_item()) {
++                    // Category and course totals have no itemname stored, so provide the
++                    // descriptive name instead (e.g. "Category name total", "Course total").
++                    $gradeitemdata['itemname'] = $gradeobject->get_name(true, false);
++                } else {
++                    $gradeitemdata['itemname'] = $gradeobject->itemname;
++                }
+                 $gradeitemdata['itemtype'] = $gradeobject->itemtype;
+                 $gradeitemdata['itemmodule'] = $gradeobject->itemmodule;
+                 $gradeitemdata['iteminstance'] = $gradeobject->iteminstance;
+diff --git a/public/grade/report/user/tests/externallib_test.php b/public/grade/report/user/tests/externallib_test.php
+index 2c7ddc0d240..435ea3f41ff 100644
+--- a/public/grade/report/user/tests/externallib_test.php
++++ b/public/grade/report/user/tests/externallib_test.php
+@@ -303,6 +303,7 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+ 
+         // Course grades.
+         $this->assertEquals('course', $studentgrades['usergrades'][0]['gradeitems'][1]['itemtype']);
++        $this->assertEquals(get_string('coursetotal', 'grades'), $studentgrades['usergrades'][0]['gradeitems'][1]['itemname']);
+         $this->assertEquals(80, $studentgrades['usergrades'][0]['gradeitems'][1]['graderaw']);
+         $this->assertEquals('80.00', $studentgrades['usergrades'][0]['gradeitems'][1]['gradeformatted']);
+         $this->assertEquals(0, $studentgrades['usergrades'][0]['gradeitems'][1]['grademin']);
+@@ -421,5 +422,44 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+         $this->assertCount(1, $studentgrades['usergrades'][0]['gradeitems']);
+         $this->assertEquals('course', $studentgrades['usergrades'][0]['gradeitems'][0]['itemtype']);
+     }
++    /**
++     * Test that get_grade_items returns a descriptive itemname for category and course total items.
++     */
++    public function test_get_grade_items_category_itemname(): void {
++        global $DB;
++
++        $this->resetAfterTest(true);
++
++        $course = $this->getDataGenerator()->create_course();
++        $studentrole = $DB->get_record('role', ['shortname' => 'student']);
++        $student = $this->getDataGenerator()->create_user();
++        $this->getDataGenerator()->enrol_user($student->id, $course->id, $studentrole->id);
++
++        // Create a grade category containing an assignment.
++        $category = $this->getDataGenerator()->create_grade_category(['courseid' => $course->id, 'fullname' => 'My category']);
++        $assignment = $this->getDataGenerator()->create_module('assign', ['name' => 'Test assign', 'course' => $course->id]);
++        $assignment->cmidnumber = get_coursemodule_from_instance('assign', $assignment->id, $course->id)->id;
++        $gradeitem = \grade_item::fetch(['courseid' => $course->id, 'itemtype' => 'mod', 'itemmodule' => 'assign',
++            'iteminstance' => $assignment->id]);
++        $gradeitem->set_parent($category->id);
++        assign_grade_item_update($assignment, [$student->id => ['userid' => $student->id, 'rawgrade' => 70]]);
++
++        $this->setUser($student);
++        $studentgrades = user_external::get_grade_items($course->id, $student->id);
++        $studentgrades = external_api::clean_returnvalue(user_external::get_grade_items_returns(), $studentgrades);
++        $this->assertCount(0, $studentgrades['warnings']);
++        $this->assertCount(1, $studentgrades['usergrades']);
++
++        $itemnames = [];
++        foreach ($studentgrades['usergrades'][0]['gradeitems'] as $item) {
++            $itemnames[$item['itemtype']] = $item['itemname'];
++        }
++
++        $this->assertEquals('Test assign', $itemnames['mod']);
++        $a = new \stdClass();
++        $a->category = 'My category';
++        $this->assertEquals(get_string('categorytotalfull', 'grades', $a), $itemnames['category']);
++        $this->assertEquals(get_string('coursetotal', 'grades'), $itemnames['course']);
++    }
+ 
+ }

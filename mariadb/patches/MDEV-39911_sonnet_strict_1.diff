@@ -1,0 +1,76 @@
+diff --git a/sql/spatial.cc b/sql/spatial.cc
+index 5df5a555..2f394df5 100644
+--- a/sql/spatial.cc
++++ b/sql/spatial.cc
+@@ -2395,7 +2395,8 @@ int Gis_polygon::simplify(String *result, double max_distance) const
+     return 1;
+ 
+   result->length(0);
+-  result->reserve(SRID_SIZE + WKB_HEADER_SIZE);
++  if (result->reserve(SRID_SIZE + WKB_HEADER_SIZE + 4))
++    return 1;
+   result->q_append(SRID_PLACEHOLDER);
+   result->q_append((char) wkb_ndr);
+   result->q_append((uint32) wkb_polygon);
+@@ -2407,6 +2408,8 @@ int Gis_polygon::simplify(String *result, double max_distance) const
+   for (uint32 i = 1; i <= num_interior_ring; i++)
+   {
+     String interior_ring= 0;
++    if (interior_ring.reserve(SRID_SIZE + WKB_HEADER_SIZE + 4))
++      return 1;
+     interior_ring.q_append((uint) 0);
+     if (this->interior_ring_n(i, &interior_ring) ||
+         !(geometry= Geometry::construct(&buffer, interior_ring.ptr(),
+@@ -3500,7 +3503,8 @@ int Gis_multi_line_string::simplify(String *result, double max_distance) const
+     return 1;
+ 
+   result->length(0);
+-  result->reserve(SRID_SIZE + WKB_HEADER_SIZE);
++  if (result->reserve(SRID_SIZE + WKB_HEADER_SIZE + 4))
++    return 1;
+   result->q_append(SRID_PLACEHOLDER);
+   result->q_append((char) wkb_ndr);
+   result->q_append((uint32) wkb_multilinestring);
+@@ -3508,13 +3512,19 @@ int Gis_multi_line_string::simplify(String *result, double max_distance) const
+ 
+   for (uint32 i = 1; i <= num_lines; i++)
+   {
+-    String wkb= 0;
++    String wkb;
++    wkb.set_charset(&my_charset_bin);
++    if (wkb.reserve(SRID_SIZE + WKB_HEADER_SIZE + 4))
++      return 1;
+     wkb.q_append((uint) 0);
+-    this->geometry_n(i, &wkb);
++    if (this->geometry_n(i, &wkb))
++      return 1;
+     if (!(geometry= Geometry::construct(&buffer, wkb.ptr(), wkb.length())))
+       return 1;
+-    geometry->simplify(&wkb, max_distance);
+-    result->append(wkb.ptr() + SRID_SIZE, wkb.length() - SRID_SIZE);
++    if (geometry->simplify(&wkb, max_distance))
++      return 1;
++    if (result->append(wkb.ptr() + SRID_SIZE, wkb.length() - SRID_SIZE))
++      return 1;
+   }
+ 
+   return 0;
+@@ -4107,7 +4117,8 @@ int Gis_multi_polygon::simplify(String *result, double max_distance) const
+     return 1;
+ 
+   result->length(0);
+-  result->reserve(SRID_SIZE + WKB_HEADER_SIZE);
++  if (result->reserve(SRID_SIZE + WKB_HEADER_SIZE + 4))
++    return 1;
+   result->q_append(SRID_PLACEHOLDER);
+   result->q_append((char) wkb_ndr);
+   result->q_append((uint32) wkb_multipolygon);
+@@ -4116,6 +4127,8 @@ int Gis_multi_polygon::simplify(String *result, double max_distance) const
+   for (uint32 i = 1; i <= num_polygon; i++)
+   {
+     String polygon= 0, simplified_polygon= 0;
++    if (polygon.reserve(SRID_SIZE + WKB_HEADER_SIZE + 4))
++      return 1;
+     polygon.q_append((uint) 0);
+     if (this->geometry_n(i, &polygon) ||
+         !(geometry= Geometry::construct(&buffer, polygon.ptr(),

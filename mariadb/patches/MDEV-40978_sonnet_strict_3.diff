@@ -1,0 +1,44 @@
+diff --git a/sql/partition_info.cc b/sql/partition_info.cc
+index d1f85e26..16c2e38d 100644
+--- a/sql/partition_info.cc
++++ b/sql/partition_info.cc
+@@ -2826,6 +2826,11 @@ bool partition_info::vers_set_interval(THD* thd, Item* interval,
+   vers_info->auto_hist= auto_hist;
+ 
+   /* 1. assign INTERVAL to interval.step */
++  if (interval->with_param())
++  {
++    my_error(ER_PART_WRONG_VALUE, MYF(0), table_name, "INTERVAL");
++    return true;
++  }
+   if (interval->fix_fields_if_needed_for_scalar(thd, &interval))
+     return true;
+   bool error= get_interval_value(thd, interval, int_type, &vers_info->interval.step) ||
+@@ -2842,6 +2847,11 @@ bool partition_info::vers_set_interval(THD* thd, Item* interval,
+   /* 2. assign STARTS to interval.start */
+   if (starts)
+   {
++    if (starts->with_param())
++    {
++      my_error(ER_PART_WRONG_VALUE, MYF(0), table_name, "STARTS");
++      return true;
++    }
+     if (starts->fix_fields_if_needed_for_scalar(thd, &starts))
+       return true;
+     switch (starts->result_type())
+diff --git a/sql/sql_partition_auto_interval.cc b/sql/sql_partition_auto_interval.cc
+index 2f599e64..8d6d3d9e 100644
+--- a/sql/sql_partition_auto_interval.cc
++++ b/sql/sql_partition_auto_interval.cc
+@@ -402,6 +402,11 @@ bool partition_info::set_range_interval(THD* thd, Item* ival,
+                                         interval_type type,
+                                         const char *table_name)
+ {
++  if (ival->with_param())
++  {
++    my_error(ER_PART_WRONG_VALUE, MYF(0), table_name, "INTERVAL");
++    return true;
++  }
+   if (ival->fix_fields_if_needed_for_scalar(thd, &ival))
+     return true;
+   bool error= get_interval_value(thd, ival, type, &interval) ||

@@ -1,0 +1,45 @@
+diff --git a/sql/sql_acl.cc b/sql/sql_acl.cc
+index 70984625..b1731e3b 100644
+--- a/sql/sql_acl.cc
++++ b/sql/sql_acl.cc
+@@ -14419,13 +14419,36 @@ bool Sql_cmd_grant::should_bypass_revoke_deny(THD *thd)
+       return false;
+   }
+ 
+-  /* Does current user have UPDATE grant for mysql.global_priv ? */
++  /*
++    Does current user have UPDATE on the Priv column of mysql.global_priv
++    (where DENY entries are stored)? A column-level UPDATE on any other
++    column is not enough, so check the Priv column explicitly.
++  */
+   TABLE_LIST tl;
+   tl.init_one_table(&MYSQL_SCHEMA_NAME, &MYSQL_TABLE_NAME[USER_TABLE],
+                     NULL, TL_WRITE);
+-  return !check_access(thd, UPDATE_ACL, tl.db.str, &tl.grant.privilege,
+-                       &tl.grant.m_internal, 0, 1) &&
+-         !check_grant(thd, UPDATE_ACL, &tl, FALSE, 1, TRUE);
++  if (check_access(thd, UPDATE_ACL, tl.db.str, &tl.grant.privilege,
++                   &tl.grant.m_internal, 0, 1) ||
++      check_grant(thd, UPDATE_ACL, &tl, FALSE, 1, TRUE))
++    return false;
++
++  /*
++    check_grant() accepts a column-level grant on any column, so re-evaluate
++    the grants for the Priv column only (table-level grants are included
++    via merge_with_parent()).
++  */
++  mysql_rwlock_rdlock(&LOCK_grant);
++  tl.grant.read(thd->security_ctx, tl.get_db_name().str,
++                tl.get_table_name().str);
++  const Lex_ident_column priv_col= "Priv"_Lex_ident_column;
++  access_t acc= merge_same_level(
++      check_grant_column_int(tl.grant.grant_table_user, priv_col),
++      check_grant_column_int(tl.grant.grant_table_role, priv_col),
++      check_grant_column_int(tl.grant.grant_public, priv_col));
++  acc.merge_with_parent(tl.grant.privilege);
++  mysql_rwlock_unlock(&LOCK_grant);
++
++  return (acc.allow_bits() & UPDATE_ACL) && !acc.denied_privs(UPDATE_ACL);
+ }
+ 
+ 

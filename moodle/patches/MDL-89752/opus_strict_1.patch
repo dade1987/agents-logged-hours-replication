@@ -1,0 +1,61 @@
+diff --git a/public/theme/boost/classes/colour_mode.php b/public/theme/boost/classes/colour_mode.php
+index acd2f402206..2363cd27b8c 100644
+--- a/public/theme/boost/classes/colour_mode.php
++++ b/public/theme/boost/classes/colour_mode.php
+@@ -188,7 +188,7 @@ class colour_mode {
+         }
+ 
+         $default = get_config('theme_boost', 'defaultcolourmode');
+-        return self::is_valid_mode($default) ? $default : self::AUTO;
++        return self::is_valid_mode($default) ? $default : self::LIGHT;
+     }
+ 
+     /**
+diff --git a/public/theme/boost/lang/en/theme_boost.php b/public/theme/boost/lang/en/theme_boost.php
+index 18b120889be..3f62c380b94 100644
+--- a/public/theme/boost/lang/en/theme_boost.php
++++ b/public/theme/boost/lang/en/theme_boost.php
+@@ -39,7 +39,7 @@ $string['colourmode:light'] = 'Light';
+ $string['colourmodeselected'] = 'Colour mode: {$a}';
+ $string['configtitle'] = 'Boost';
+ $string['defaultcolourmode'] = 'Default colour mode';
+-$string['defaultcolourmode_desc'] = 'The colour mode used by people who have not chosen one. \'System\' follows the colour scheme set on their device or browser.';
++$string['defaultcolourmode_desc'] = 'The colour mode used by people who have not chosen one. \'System\' follows the colour scheme set on their device or browser. While colour modes are experimental the default is \'Light\', so that nobody is shown the dark colour scheme without choosing it.';
+ $string['enablecolourmodes'] = 'Enable colour modes';
+ $string['enablecolourmodes_desc'] = 'Allow people to switch the site between a light and a dark colour scheme. When disabled, the site is always shown in light mode.
+ 
+diff --git a/public/theme/boost/settings.php b/public/theme/boost/settings.php
+index fa839fabb04..a6333b21092 100644
+--- a/public/theme/boost/settings.php
++++ b/public/theme/boost/settings.php
+@@ -126,7 +126,7 @@ if ($ADMIN->fulltree) {
+     foreach (\theme_boost\colour_mode::get_modes() as $mode) {
+         $choices[$mode] = get_string('colourmode:' . $mode, 'theme_boost');
+     }
+-    $setting = new admin_setting_configselect($name, $title, $description, \theme_boost\colour_mode::AUTO, $choices);
++    $setting = new admin_setting_configselect($name, $title, $description, \theme_boost\colour_mode::LIGHT, $choices);
+     $page->add($setting);
+     // The dependency goes on the tabs page rather than the tab: admin/settings.php reads the dependencies from the
+     // top level page, and theme_boost_admin_settingspage_tabs::add_tab() copies a tab's settings up but not its
+diff --git a/public/theme/boost/tests/colour_mode_test.php b/public/theme/boost/tests/colour_mode_test.php
+index bbdb54b3abf..4fd2ac6aebc 100644
+--- a/public/theme/boost/tests/colour_mode_test.php
++++ b/public/theme/boost/tests/colour_mode_test.php
+@@ -51,14 +51,14 @@ final class colour_mode_test extends \advanced_testcase {
+     }
+ 
+     /**
+-     * Auto is used when the site default is missing or has been given a value which is not a colour mode.
++     * Light is used when the site default is missing or has been given a value which is not a colour mode.
+      */
+     public function test_get_site_default_with_invalid_config(): void {
+         unset_config('defaultcolourmode', 'theme_boost');
+-        $this->assertEquals(colour_mode::AUTO, colour_mode::get_site_default());
++        $this->assertEquals(colour_mode::LIGHT, colour_mode::get_site_default());
+ 
+         set_config('defaultcolourmode', 'chartreuse', 'theme_boost');
+-        $this->assertEquals(colour_mode::AUTO, colour_mode::get_site_default());
++        $this->assertEquals(colour_mode::LIGHT, colour_mode::get_site_default());
+     }
+ 
+     /**

@@ -1,0 +1,37 @@
+diff --git a/sql/ha_partition.cc b/sql/ha_partition.cc
+index 411e1d30..7e9bfa2c 100644
+--- a/sql/ha_partition.cc
++++ b/sql/ha_partition.cc
+@@ -11137,17 +11137,30 @@ void ha_partition::release_auto_increment()
+         If the current auto_increment values is lower than the reserved
+         value, and the reserved value was reserved by this thread,
+         we can lower the reserved value.
++
++        Only values from the last interval reserved by this handler can be
++        given back: they are the only ones that are known not to have been
++        handed out to anyone else. next_insert_id may lie below that
++        interval, if restore_auto_increment() rolled it back across an
++        interval boundary after the first row taken from a freshly
++        reserved interval failed (MDEV-40995). The values between the
++        previous interval and the last one may have been reserved and
++        written by other sessions meanwhile, so never lower the shared
++        counter below the start of our own last interval.
+       */
+       if (next_insert_id < next_auto_inc_val &&
+           auto_inc_interval_for_cur_row.maximum() >= next_auto_inc_val)
+       {
+         THD *thd= ha_thd();
++        ulonglong release_from= MY_MAX(next_insert_id,
++                                       auto_inc_interval_for_cur_row.minimum());
+         /*
+           Check that we do not lower the value because of a failed insert
+           with SET INSERT_ID, i.e. forced/non generated values.
+         */
+-        if (thd->auto_inc_intervals_forced.maximum() < next_insert_id)
+-          part_share->next_auto_inc_val= next_insert_id;
++        if (release_from < next_auto_inc_val &&
++            thd->auto_inc_intervals_forced.maximum() < next_insert_id)
++          part_share->next_auto_inc_val= release_from;
+       }
+       DBUG_PRINT("info", ("part_share->next_auto_inc_val: %lu",
+                           (ulong) part_share->next_auto_inc_val));

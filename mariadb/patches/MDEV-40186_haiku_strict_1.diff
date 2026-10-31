@@ -1,0 +1,31 @@
+diff --git a/storage/heap/hp_delete.c b/storage/heap/hp_delete.c
+index 9579fb51..683b92df 100644
+--- a/storage/heap/hp_delete.c
++++ b/storage/heap/hp_delete.c
+@@ -71,11 +71,23 @@ int hp_rb_delete_key(HP_INFO *info, register HP_KEYDEF *keyinfo,
+   size_t old_allocated;
+   int res;
+ 
+-  if (flag) 
+-    info->last_pos= NULL; /* For heap_rnext/heap_rprev */
+-
+   custom_arg.keyseg= keyinfo->seg;
+   custom_arg.key_length= hp_rb_make_key(keyinfo, info->recbuf, record, recpos);
++  if (flag)
++  {
++    /*
++      The record the cursor points to is being deleted, so heap_rnext() /
++      heap_rprev() will have to restart the search from the tree.
++      Remember the full key of the deleted record (it includes the record
++      pointer, so it is unique in the tree) as the restart point. The
++      restart then continues from the next (or previous) key after the
++      deleted one, instead of from the original search key, which would
++      make the scan visit again the records that were already read.
++    */
++    info->last_pos= NULL; /* For heap_rnext/heap_rprev */
++    memcpy(info->lastkey, info->recbuf, custom_arg.key_length);
++    info->lastkey_len= custom_arg.key_length;
++  }
+   custom_arg.search_flag= SEARCH_SAME;
+   old_allocated= keyinfo->rb_tree.allocated;
+   res= tree_delete(&keyinfo->rb_tree, info->recbuf, custom_arg.key_length,

@@ -1,0 +1,65 @@
+diff --git a/public/lib/classes/cron.php b/public/lib/classes/cron.php
+index 120b9ec33cf..3c8a7b5de7c 100644
+--- a/public/lib/classes/cron.php
++++ b/public/lib/classes/cron.php
+@@ -364,8 +364,9 @@ class cron {
+             $params['classname'] = \core\task\manager::get_canonical_class_name($classname);
+         }
+ 
+-        // Only rerun the failed tasks that allow to be re-tried or have the remaining attempts available.
+-        $where .= ' AND (attemptsavailable > 0 OR attemptsavailable IS NULL)';
++        // Note: tasks are run regardless of their remaining attempts available. This method is only ever
++        // triggered by an explicit administrator action (UI or CLI), so the automated retry limit must not
++        // prevent recovery of tasks that have exhausted their attempts or that do not retry until success.
+         $tasks = $DB->get_records_sql("SELECT * from {task_adhoc} WHERE $where", $params);
+         foreach ($tasks as $t) {
+             self::run_adhoc_task($t->id);
+diff --git a/public/lib/tests/task/adhoc_task_test.php b/public/lib/tests/task/adhoc_task_test.php
+index 7f6aa63fd54..07c92687486 100644
+--- a/public/lib/tests/task/adhoc_task_test.php
++++ b/public/lib/tests/task/adhoc_task_test.php
+@@ -905,6 +905,44 @@ final class adhoc_task_test extends \advanced_testcase {
+         manager::adhoc_task_complete($task);
+     }
+ 
++    /**
++     * Test that running failed adhoc tasks also runs tasks with no remaining attempts available.
++     *
++     * @covers \core\cron::run_failed_adhoc_tasks
++     */
++    public function test_run_failed_adhoc_tasks_with_no_attempts_available(): void {
++        global $DB;
++        $this->resetAfterTest();
++
++        // Create a normal adhoc task and a no-retry adhoc task.
++        $taskid1 = manager::queue_adhoc_task(task: new adhoc_test_task());
++        $taskid2 = manager::queue_adhoc_task(task: new no_retry_adhoc_task());
++
++        // Mark both tasks as failed.
++        manager::adhoc_task_failed(task: manager::get_adhoc_task($taskid1));
++        manager::adhoc_task_failed(task: manager::get_adhoc_task($taskid2));
++
++        // The no-retry task has exhausted all of its attempts.
++        $this->assertEquals(
++            expected: 0,
++            actual: $DB->get_field(
++                table: 'task_adhoc',
++                return: 'attemptsavailable',
++                conditions: ['id' => $taskid2],
++            ),
++        );
++        $this->assertEquals(2, $DB->count_records_select('task_adhoc', 'faildelay > 0'));
++
++        // Running the failed tasks (an explicit administrator action) should run all of them.
++        ob_start();
++        \core\cron::run_failed_adhoc_tasks();
++        ob_end_clean();
++
++        // Both tasks succeeded, so they have been removed from the queue.
++        $this->assertFalse($DB->record_exists('task_adhoc', ['id' => $taskid1]));
++        $this->assertFalse($DB->record_exists('task_adhoc', ['id' => $taskid2]));
++    }
++
+     /**
+      * Test adhoc task run from CLI.
+      */

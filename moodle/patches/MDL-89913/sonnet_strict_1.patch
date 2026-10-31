@@ -1,0 +1,63 @@
+diff --git a/public/lib/classes/oauth2/server/repository/access_token_repository.php b/public/lib/classes/oauth2/server/repository/access_token_repository.php
+index 123d2cd8202..a47577ff39f 100644
+--- a/public/lib/classes/oauth2/server/repository/access_token_repository.php
++++ b/public/lib/classes/oauth2/server/repository/access_token_repository.php
+@@ -70,6 +70,9 @@ class access_token_repository implements AccessTokenRepositoryInterface {
+         $record->timecreated = time();
+ 
+         $DB->insert_record('oauth2_server_client_access_tokens', $record);
++
++        // Log the client last accessed time.
++        (new client_repository())->update_last_accessed($record->clientidentifier, $record->timecreated);
+     }
+ 
+     #[\Override]
+diff --git a/public/lib/classes/oauth2/server/repository/auth_code_repository.php b/public/lib/classes/oauth2/server/repository/auth_code_repository.php
+index bac4471c8a0..e6a74387278 100644
+--- a/public/lib/classes/oauth2/server/repository/auth_code_repository.php
++++ b/public/lib/classes/oauth2/server/repository/auth_code_repository.php
+@@ -52,6 +52,9 @@ class auth_code_repository implements AuthCodeRepositoryInterface {
+         $record->timecreated = time();
+ 
+         $DB->insert_record('oauth2_server_client_auth_codes', $record);
++
++        // Log the client last accessed time.
++        (new client_repository())->update_last_accessed($record->clientidentifier, $record->timecreated);
+     }
+ 
+     #[\Override]
+diff --git a/public/lib/classes/oauth2/server/repository/client_repository.php b/public/lib/classes/oauth2/server/repository/client_repository.php
+index b8ae134a371..e2d5dc79101 100644
+--- a/public/lib/classes/oauth2/server/repository/client_repository.php
++++ b/public/lib/classes/oauth2/server/repository/client_repository.php
+@@ -91,10 +91,30 @@ class client_repository implements ClientRepositoryInterface {
+ 
+         foreach ($secrets as $secret) {
+             if (password_verify($clientsecret, $secret->secret)) {
++                $now = time();
++                $DB->set_field('oauth2_server_client_secrets', 'lastaccessed', $now, ['id' => $secret->id]);
++                $this->update_last_accessed($clientidentifier, $now);
+                 return true;
+             }
+         }
+ 
+         return false;
+     }
++
++    /**
++     * Record the last accessed time of a client.
++     *
++     * @param string $clientidentifier
++     * @param int|null $time Defaults to the current time.
++     */
++    public function update_last_accessed(string $clientidentifier, ?int $time = null): void {
++        global $DB;
++
++        $DB->set_field(
++            'oauth2_server_clients',
++            'lastaccessed',
++            $time ?? time(),
++            ['clientidentifier' => $clientidentifier],
++        );
++    }
+ }

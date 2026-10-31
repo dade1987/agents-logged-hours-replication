@@ -1,0 +1,364 @@
+diff --git a/.upgradenotes/MDL-89346-2026102412000000.yml b/.upgradenotes/MDL-89346-2026102412000000.yml
+new file mode 100644
+index 00000000000..8c6f3ee3ea6
+--- /dev/null
++++ b/.upgradenotes/MDL-89346-2026102412000000.yml
+@@ -0,0 +1,11 @@
++issueNumber: MDL-89346
++notes:
++  mod_assign:
++    - message: >-
++        The external function `mod_assign_get_submission_status` now returns
++        the feedback given by each marker (in assignments using multiple
++        markers) in the new optional `markers` field of the `feedback` and
++        `previousattempts` structures. Each marker entry contains the mark id,
++        the marker user id and the feedback plugins information for that
++        marker.
++      type: changed
+diff --git a/public/mod/assign/externallib.php b/public/mod/assign/externallib.php
+index a97ea97e385..6dd47ae6640 100644
+--- a/public/mod/assign/externallib.php
++++ b/public/mod/assign/externallib.php
+@@ -673,12 +673,16 @@ class mod_assign_external extends \mod_assign\external\external_api {
+     /**
+      * Return information (files and text fields) for the given plugins in the assignment.
+      *
++     * When a mark id is given, the information returned is the one related to that specific marker
++     * (multiple markers assignments). Otherwise, only the overall information is returned.
++     *
+      * @param  assign $assign the assignment object
+      * @param  array $assignplugins array of assignment plugins (submission or feedback)
+      * @param  stdClass $item the item object (submission or grade)
++     * @param  int|null $markid the assign_mark record id (only for feedback plugins in multiple markers assignments)
+      * @return array an array containing the plugins returned information
+      */
+-    private static function get_plugins_data($assign, $assignplugins, $item) {
++    private static function get_plugins_data($assign, $assignplugins, $item, ?int $markid = null) {
+         global $CFG;
+ 
+         $plugins = array();
+@@ -697,7 +701,13 @@ class mod_assign_external extends \mod_assign\external\external_api {
+             // Subtype is 'assignsubmission', type is currently 'file' or 'onlinetext'.
+             $component = $assignplugin->get_subtype().'_'.$assignplugin->get_type();
+ 
+-            $fileareas = $assignplugin->get_file_areas();
++            $isfeedbackplugin = $assignplugin instanceof assign_feedback_plugin;
++            // The mark id only makes sense for feedback plugins.
++            $pluginmarkid = $isfeedbackplugin ? $markid : null;
++
++            $fileareas = self::get_plugin_file_areas($assignplugin, $pluginmarkid);
++            $itemid = $pluginmarkid ?? $item->id;
++
+             foreach ($fileareas as $filearea => $name) {
+                 $fileareainfo = array('area' => $filearea);
+ 
+@@ -705,7 +715,7 @@ class mod_assign_external extends \mod_assign\external\external_api {
+                     $assign->get_context()->id,
+                     $component,
+                     $filearea,
+-                    $item->id
++                    $itemid
+                 );
+ 
+                 $plugin['fileareas'][] = $fileareainfo;
+@@ -713,10 +723,15 @@ class mod_assign_external extends \mod_assign\external\external_api {
+ 
+             $editorfields = $assignplugin->get_editor_fields();
+             foreach ($editorfields as $name => $description) {
++                if ($isfeedbackplugin) {
++                    $text = $assignplugin->get_editor_text($name, $item->id, $pluginmarkid);
++                } else {
++                    $text = $assignplugin->get_editor_text($name, $item->id);
++                }
+                 $editorfieldinfo = array(
+                     'name' => $name,
+                     'description' => $description,
+-                    'text' => $assignplugin->get_editor_text($name, $item->id),
++                    'text' => $text,
+                     'format' => $assignplugin->get_editor_format($name, $item->id)
+                 );
+ 
+@@ -724,7 +739,7 @@ class mod_assign_external extends \mod_assign\external\external_api {
+                 foreach ($fileareas as $filearea => $name) {
+                     list($editorfieldinfo['text'], $editorfieldinfo['format']) = \core_external\util::format_text(
+                         $editorfieldinfo['text'], $editorfieldinfo['format'], $assign->get_context(),
+-                        $component, $filearea, $item->id);
++                        $component, $filearea, $itemid);
+                 }
+ 
+                 $plugin['editorfields'][] = $editorfieldinfo;
+@@ -734,6 +749,42 @@ class mod_assign_external extends \mod_assign\external\external_api {
+         return $plugins;
+     }
+ 
++    /**
++     * Return the file areas of the given plugin to be used when retrieving the plugin information.
++     *
++     * Plugins supporting multiple markers store the marker files in file areas suffixed with "_marker" (using the
++     * assign_mark record id as item id), while the overall files are stored in the regular file areas (using the
++     * grade id as item id).
++     *
++     * @param  assign_plugin $assignplugin the assignment plugin
++     * @param  int|null $markid the assign_mark record id or null to get the overall file areas
++     * @return array an array of fileareas (keys) and descriptions (values)
++     */
++    private static function get_plugin_file_areas($assignplugin, ?int $markid = null): array {
++        $fileareas = $assignplugin->get_file_areas();
++        $overallareas = [];
++        $markerareas = [];
++        foreach ($fileareas as $filearea => $name) {
++            if (str_ends_with($filearea, '_marker')) {
++                $markerareas[$filearea] = $name;
++            } else {
++                $overallareas[$filearea] = $name;
++            }
++        }
++
++        if ($markid === null) {
++            return $overallareas;
++        }
++
++        if (empty($markerareas)) {
++            // The plugin does not declare the marker file areas explicitly, derive them from the overall ones.
++            foreach ($overallareas as $filearea => $name) {
++                $markerareas[$filearea . '_marker'] = $name;
++            }
++        }
++        return $markerareas;
++    }
++
+     /**
+      * Describes the parameters for get_submissions
+      *
+@@ -912,6 +963,23 @@ class mod_assign_external extends \mod_assign\external\external_api {
+         );
+     }
+ 
++    /**
++     * Creates the structure for the feedback given by a single marker (multiple markers assignments).
++     *
++     * @return external_single_structure the marker feedback structure
++     */
++    private static function get_marker_feedback_structure() {
++        return new external_single_structure(
++            array(
++                'markid' => new external_value(PARAM_INT, 'The mark id.'),
++                'marker' => new external_value(PARAM_INT, 'The marker user id (-1 if the grader is hidden).'),
++                'timemodified' => new external_value(PARAM_INT, 'The time the mark was last modified.'),
++                'plugins' => new external_multiple_structure(self::get_plugin_structure(),
++                    'Feedback plugins info for this marker.', VALUE_OPTIONAL),
++            )
++        );
++    }
++
+     /**
+      * Creates a submission structure.
+      *
+@@ -2383,7 +2451,7 @@ class mod_assign_external extends \mod_assign\external\external_api {
+      * @throws required_capability_exception
+      */
+     public static function get_submission_status($assignid, $userid = 0, $groupid = 0) {
+-        global $USER;
++        global $USER, $DB;
+ 
+         $warnings = array();
+ 
+@@ -2499,8 +2567,21 @@ class mod_assign_external extends \mod_assign\external\external_api {
+                 }
+                 $feedbackplugins = $assign->get_feedback_plugins();
+                 $feedback->plugins = self::get_plugins_data($assign, $feedbackplugins, $feedback->grade);
++
++                // Feedback given by each marker (multiple markers assignments).
++                $feedback->markers = [];
++                $markrecords = $DB->get_records('assign_mark', ['gradeid' => $feedback->grade->id], 'id ASC');
++                foreach ($markrecords as $markrecord) {
++                    $feedback->markers[] = [
++                        'markid' => $markrecord->id,
++                        'marker' => $showgradername ? $markrecord->marker : -1,
++                        'timemodified' => $markrecord->timemodified,
++                        'plugins' => self::get_plugins_data($assign, $feedbackplugins, $feedback->grade, $markrecord->id),
++                    ];
++                }
+             } else {
+                 unset($feedback->plugins);
++                unset($feedback->markers);
+                 unset($feedback->grade);
+             }
+ 
+@@ -2545,6 +2626,19 @@ class mod_assign_external extends \mod_assign\external\external_api {
+ 
+                     $attempt['grade'] = $grade;
+                     $attempt['feedbackplugins'] = $feedbackplugins;
++
++                    // Feedback given by each marker (multiple markers assignments).
++                    $attempt['markers'] = [];
++                    $markrecords = $DB->get_records('assign_mark', ['gradeid' => $grade->id], 'id ASC');
++                    foreach ($markrecords as $markrecord) {
++                        $attempt['markers'][] = [
++                            'markid' => $markrecord->id,
++                            'marker' => $showgradername ? $markrecord->marker : -1,
++                            'timemodified' => $markrecord->timemodified,
++                            'plugins' => self::get_plugins_data($assign, $previousattempts->feedbackplugins, $grade,
++                                $markrecord->id),
++                        ];
++                    }
+                 }
+                 $result['previousattempts'][] = $attempt;
+             }
+@@ -2633,6 +2727,11 @@ class mod_assign_external extends \mod_assign\external\external_api {
+                         'gradefordisplay' => new external_value(PARAM_RAW, 'Grade rendered into a format suitable for display.'),
+                         'gradeddate' => new external_value(PARAM_INT, 'The date the user was graded.'),
+                         'plugins' => new external_multiple_structure(self::get_plugin_structure(), 'Plugins info.', VALUE_OPTIONAL),
++                        'markers' => new external_multiple_structure(
++                            self::get_marker_feedback_structure(),
++                            'Feedback given by each marker (for assignments using multiple markers).',
++                            VALUE_OPTIONAL
++                        ),
+                     ), 'Feedback for the last attempt.', VALUE_OPTIONAL
+                 ),
+                 'previousattempts' => new external_multiple_structure(
+@@ -2643,6 +2742,11 @@ class mod_assign_external extends \mod_assign\external\external_api {
+                             'grade' => self::get_grade_structure(VALUE_OPTIONAL),
+                             'feedbackplugins' => new external_multiple_structure(self::get_plugin_structure(), 'Feedback info.',
+                                                                                     VALUE_OPTIONAL),
++                            'markers' => new external_multiple_structure(
++                                self::get_marker_feedback_structure(),
++                                'Feedback given by each marker (for assignments using multiple markers).',
++                                VALUE_OPTIONAL
++                            ),
+                         )
+                     ), 'List all the previous attempts did by the user.', VALUE_OPTIONAL
+                 ),
+diff --git a/public/mod/assign/tests/externallib_test.php b/public/mod/assign/tests/externallib_test.php
+index 0e81fb88513..8e90361dcd3 100644
+--- a/public/mod/assign/tests/externallib_test.php
++++ b/public/mod/assign/tests/externallib_test.php
+@@ -2408,6 +2408,128 @@ final class externallib_test extends \mod_assign\externallib_advanced_testcase {
+         $this->assertEquals(['attachments' => ['intro' => []]], $result['assignmentdata']);
+     }
+ 
++    /**
++     * Test get_submission_status returns the feedback given by each marker (multiple markers).
++     *
++     * @covers ::get_submission_status
++     */
++    public function test_get_submission_status_multiple_markers_feedback(): void {
++        global $DB;
++
++        $this->resetAfterTest(true);
++
++        list($assign, $instance, $student1, $student2, $teacher, $g1, $g2) = $this->create_submission_for_testing_status(true);
++
++        // Create a second marker.
++        $teacher2 = self::getDataGenerator()->create_user();
++        $teacherrole = $DB->get_record('role', ['shortname' => 'teacher']);
++        $this->getDataGenerator()->enrol_user($teacher2->id, $assign->get_course()->id, $teacherrole->id);
++
++        // Grade the assign for the student1 with an overall comment.
++        $this->setUser($teacher);
++
++        $data = new \stdClass();
++        $data->grade = '50.0';
++        $data->assignfeedbackcomments_editor = ['text' => 'Overall comment', 'format' => FORMAT_HTML];
++        $assign->testable_apply_grade_to_user($data, $student1->id, 0);
++        $grade = $assign->get_user_grade($student1->id, false);
++
++        // Simulate the feedback given by each marker.
++        $context = $assign->get_context();
++        $fs = get_file_storage();
++        $markids = [];
++        foreach ([$teacher, $teacher2] as $i => $marker) {
++            $markid = $DB->insert_record('assign_mark', [
++                'assignment' => $instance->id,
++                'gradeid' => $grade->id,
++                'timecreated' => time(),
++                'timemodified' => time(),
++                'marker' => $marker->id,
++                'mark' => 50 + $i,
++            ]);
++            $markids[$marker->id] = $markid;
++
++            $DB->insert_record('assignfeedback_comments', [
++                'assignment' => $instance->id,
++                'grade' => $grade->id,
++                'mark' => $markid,
++                'commenttext' => 'Comment from marker ' . ($i + 1),
++                'commentformat' => FORMAT_HTML,
++            ]);
++
++            $fs->create_file_from_string([
++                'contextid' => $context->id,
++                'component' => 'assignfeedback_file',
++                'filearea' => ASSIGNFEEDBACK_FILE_FILEAREA_MARKER,
++                'itemid' => $markid,
++                'filepath' => '/',
++                'filename' => 'marker' . ($i + 1) . '.txt',
++            ], 'marker feedback file');
++        }
++
++        $this->setUser($student1);
++
++        $result = mod_assign_external::get_submission_status($assign->get_instance()->id);
++        // We expect debugging because of the $PAGE object, this won't happen in a normal WS request.
++        $this->assertDebuggingCalled();
++        $result = external_api::clean_returnvalue(mod_assign_external::get_submission_status_returns(), $result);
++
++        $this->assertTrue(isset($result['feedback']));
++        $this->assertTrue(isset($result['feedback']['grade']));
++        $this->assertEquals($teacher->id, $result['feedback']['grade']['grader']);
++
++        // The overall feedback must not include the markers feedback.
++        $plugins = array_column($result['feedback']['plugins'], null, 'type');
++        $this->assertEquals('Overall comment', $plugins['comments']['editorfields'][0]['text']);
++        foreach ($plugins['file']['fileareas'] as $filearea) {
++            $this->assertStringEndsNotWith('_marker', $filearea['area']);
++            $this->assertEmpty($filearea['files']);
++        }
++
++        // Check the feedback given by each marker.
++        $this->assertCount(2, $result['feedback']['markers']);
++        foreach ([$teacher, $teacher2] as $i => $marker) {
++            $markerfeedback = $result['feedback']['markers'][$i];
++            $this->assertEquals($markids[$marker->id], $markerfeedback['markid']);
++            $this->assertEquals($marker->id, $markerfeedback['marker']);
++
++            $plugins = array_column($markerfeedback['plugins'], null, 'type');
++            $this->assertEquals('Comment from marker ' . ($i + 1), $plugins['comments']['editorfields'][0]['text']);
++            $this->assertEquals(ASSIGNFEEDBACK_COMMENTS_FILEAREA_MARKER, $plugins['comments']['fileareas'][0]['area']);
++
++            $this->assertCount(1, $plugins['file']['fileareas']);
++            $this->assertEquals(ASSIGNFEEDBACK_FILE_FILEAREA_MARKER, $plugins['file']['fileareas'][0]['area']);
++            $this->assertCount(1, $plugins['file']['fileareas'][0]['files']);
++            $this->assertEquals('marker' . ($i + 1) . '.txt', $plugins['file']['fileareas'][0]['files'][0]['filename']);
++        }
++
++        // Now hide the grader, the markers identities must be hidden too.
++        $this->setAdminUser();
++        $instance = $assign->get_instance();
++        $instance->instance = $instance->id;
++        $instance->hidegrader = true;
++        $assign->update_instance($instance);
++
++        $this->setUser($student1);
++        $result = mod_assign_external::get_submission_status($assign->get_instance()->id);
++        $result = external_api::clean_returnvalue(mod_assign_external::get_submission_status_returns(), $result);
++
++        $this->assertEquals(-1, $result['feedback']['grade']['grader']);
++        $this->assertCount(2, $result['feedback']['markers']);
++        foreach ($result['feedback']['markers'] as $i => $markerfeedback) {
++            $this->assertEquals(-1, $markerfeedback['marker']);
++            $plugins = array_column($markerfeedback['plugins'], null, 'type');
++            $this->assertEquals('Comment from marker ' . ($i + 1), $plugins['comments']['editorfields'][0]['text']);
++        }
++
++        // The teacher can see the markers identities.
++        $this->setUser($teacher);
++        $result = mod_assign_external::get_submission_status($assign->get_instance()->id, $student1->id);
++        $result = external_api::clean_returnvalue(mod_assign_external::get_submission_status_returns(), $result);
++        $this->assertEquals($teacher->id, $result['feedback']['markers'][0]['marker']);
++        $this->assertEquals($teacher2->id, $result['feedback']['markers'][1]['marker']);
++    }
++
+     /**
+      * Test get_submission_status with override for student.
+      */

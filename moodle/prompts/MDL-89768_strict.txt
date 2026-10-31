@@ -1,0 +1,45 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot run Moodle's test suite. You may run `php -l <file>` and read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-89768: Respect the Wiki createpage capability in the mobile app
+
+When the {{mod/wiki:createpage}} capability is removed for a specific role (for example, {{student}}), users with that role can still create new Wiki pages in the Moodle app.
+
+The behaviour is different from Moodle LMS, where the {{mod/wiki:createpage}} capability correctly controls whether a user can create a new page.
+
+h3. Steps to reproduce
+
+# Create a course containing a Wiki activity.
+# Assign a user the {{student}} role.
+# Override the {{mod/wiki:createpage}} capability for the {{student}} role and set it to *Prohibit* (or otherwise remove the capability).
+# Log in to the Moodle app as the student.
+# Open the Wiki activity.
+# Attempt to create a new page.
+
+h3. Actual behaviour
+
+The user can still create a new Wiki page from the Moodle app, despite not having the {{mod/wiki:createpage}} capability.
+
+The only way to prevent the user from creating a new page in the Moodle app is to remove the {{mod/wiki:editpage}} capability as well.
+
+h3. Expected behaviour
+
+The Moodle app should respect the {{mod/wiki:createpage}} capability when allowing a user to create a new Wiki page.
+
+A user who does not have {{mod/wiki:createpage}} should not be able to create a new page, regardless of whether they have the {{mod/wiki:editpage}} capability.
+
+The Web Services should also provide the app with enough information to determine whether the current user is allowed to create new Wiki pages, so that the corresponding UI/action can be hidden or disabled when the capability is not available.
+
+h3. Additional information
+
+This appears to require changes on the Web Services side to ensure that:
+
+* The relevant Web Service operation enforces the {{mod/wiki:createpage}} capability when creating a new page.
+* The Web Services response provides the necessary information for the Moodle app to determine whether the current user has permission to create pages.
+* The Moodle app can then use this information to prevent users without {{mod/wiki:createpage}} from being offered the option to create a new page.

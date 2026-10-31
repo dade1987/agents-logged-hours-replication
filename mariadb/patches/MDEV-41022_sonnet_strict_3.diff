@@ -1,0 +1,20 @@
+diff --git a/storage/innobase/fts/fts0que.cc b/storage/innobase/fts/fts0que.cc
+index b8f22076..e00f50a1 100644
+--- a/storage/innobase/fts/fts0que.cc
++++ b/storage/innobase/fts/fts0que.cc
+@@ -3009,7 +3009,14 @@ fts_query_visitor(
+ 		/* Force collection of doc ids and the positions. */
+ 		query->collect_positions = TRUE;
+ 
+-		query->error = fts_query_phrase_search(query, node);
++		{
++			/* fts_query_phrase_search() sets query->flags to
++			FTS_PHRASE or FTS_PROXIMITY; restore it so that
++			later wildcard terms are looked up in the cache. */
++			const ulint	saved_flags = query->flags;
++			query->error = fts_query_phrase_search(query, node);
++			query->flags = saved_flags;
++		}
+ 
+ 		query->collect_positions = FALSE;
+ 

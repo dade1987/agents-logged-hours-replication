@@ -1,0 +1,83 @@
+diff --git a/mysql-test/suite/innodb/r/import_bugs.result b/mysql-test/suite/innodb/r/import_bugs.result
+index 20e70f03..52e9cf4d 100644
+--- a/mysql-test/suite/innodb/r/import_bugs.result
++++ b/mysql-test/suite/innodb/r/import_bugs.result
+@@ -39,6 +39,9 @@ id INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,
+ PRIMARY KEY (id)
+ ) ENGINE=INNODB;
+ CREATE TABLE t2 LIKE t1;
++connect  mvcc,localhost,root;
++START TRANSACTION WITH CONSISTENT SNAPSHOT;
++connection default;
+ ALTER TABLE t2 DISCARD TABLESPACE;
+ INSERT INTO t1() VALUES();
+ INSERT INTO t1() VALUES();
+@@ -64,6 +67,14 @@ id
+ 3
+ 4
+ 5
++#
++# MDEV-41669 ALTER TABLE...IMPORT TABLESPACE may break MVCC
++#
++connection mvcc;
++SELECT * FROM t2;
++ERROR HY000: Table definition has changed, please retry transaction
++disconnect mvcc;
++connection default;
+ DROP TABLE t2;
+ #
+ # MDEV-34181  Instant table aborts after discard tablespace
+diff --git a/mysql-test/suite/innodb/t/import_bugs.test b/mysql-test/suite/innodb/t/import_bugs.test
+index 1b7edcf8..6c495391 100644
+--- a/mysql-test/suite/innodb/t/import_bugs.test
++++ b/mysql-test/suite/innodb/t/import_bugs.test
+@@ -53,6 +53,10 @@ CREATE TABLE t1(
+ 
+ CREATE TABLE t2 LIKE t1;
+ 
++--connect mvcc,localhost,root
++START TRANSACTION WITH CONSISTENT SNAPSHOT;
++--connection default
++
+ ALTER TABLE t2 DISCARD TABLESPACE;
+ 
+ INSERT INTO t1() VALUES();
+@@ -80,6 +84,15 @@ INSERT INTO t2() VALUES();
+ INSERT INTO t2() VALUES();
+ 
+ SELECT * FROM t2 ORDER BY id;
++
++--echo #
++--echo # MDEV-41669 ALTER TABLE...IMPORT TABLESPACE may break MVCC
++--echo #
++--connection mvcc
++--error ER_TABLE_DEF_CHANGED
++SELECT * FROM t2;
++--disconnect mvcc
++--connection default
+ DROP TABLE t2;
+ 
+ --echo #
+diff --git a/storage/innobase/row/row0import.cc b/storage/innobase/row/row0import.cc
+index c589b8f2..786f4b9d 100644
+--- a/storage/innobase/row/row0import.cc
++++ b/storage/innobase/row/row0import.cc
+@@ -5007,6 +5007,18 @@ row_import_for_mysql(
+ 	table->file_unreadable = false;
+ 	table->flags2 &= ~DICT_TF2_DISCARDED & ((1U << DICT_TF2_BITS) - 1);
+ 
++	/* The imported records were written with DB_TRX_ID=0, which
++	would make them visible to any read view, including read views
++	that were created before the IMPORT started. Mark all indexes
++	as having been created by this transaction, so that older read
++	views will report DB_MISSING_HISTORY (ER_TABLE_DEF_CHANGED)
++	instead of returning data that is not part of the snapshot. */
++	for (dict_index_t* index = dict_table_get_first_index(table);
++	     index != NULL;
++	     index = dict_table_get_next_index(index)) {
++		index->trx_id = trx->id;
++	}
++
+ 	/* Set autoinc value read from .cfg file, if one was specified.
+ 	Otherwise, read the PAGE_ROOT_AUTO_INC and set it to table autoinc. */
+ 	row_import_autoinc(table, prebuilt, autoinc);

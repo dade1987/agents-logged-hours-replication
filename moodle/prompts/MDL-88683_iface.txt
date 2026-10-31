@@ -1,0 +1,77 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot run Moodle's test suite. You may run `php -l <file>` and read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-88683: Themes: Add navigation to manage site blogs in Boost
+
+h2. Summary:
+
+Add clear Boost navigation from the user profile to personal and site-wide blog entries.
+
+h2. Problem statement:
+
+Boost does not currently provide a direct replacement for the Classic theme Navigation block link to site-wide blogs. With Classic being removed from Moodle LMS 5.3 under [MDL-83950], users who relied on the Navigation block will lose an obvious path to site-wide blog entries.
+
+The current user profile link is labelled "blog entries" and opens the viewed user's own blog entries. That label does not clearly distinguish personal blog entries from site-wide blog entries, and it does not provide access to the site-wide blog listing.
+
+h2. Current behaviour:
+
+* In Classic, users can access site-wide blogs through the Navigation block.
+* In Boost, there is no equivalent direct user interface link to /blog/index.php.
+* The user profile Miscellaneous section has a "blog entries" link for the viewed user's own blog entries only.
+* Some Behat tests use TODO [MDL-57120] workarounds to reach blog pages because the native Boost navigation path is missing.
+
+h2. Expected behaviour:
+
+* When blogs are enabled, the user profile Miscellaneous section provides two clear blog links wherever Moodle currently shows the existing blog profile link.
+* The existing personal blog link is renamed to "View my blog entries".
+* A new "View site blog entries" link is added and points to /blog/index.php.
+* When site blogs are disabled, neither blog link is shown.
+* Existing blog access controls and page behaviour are preserved.
+
+h2. Value:
+
+This preserves access to site-wide blogs as Classic is retired and makes the profile blog links clearer by separating personal blog entries from site-wide blog entries. It also removes the need for blog-related Behat workarounds that exist only because Boost lacks this navigation path.
+
+h2. Scope:
+
+h3. In scope:
+
+* Rename the existing user profile blog link from "blog entries" to "View my blog entries".
+* Add a new "View site blog entries" link in the user profile Miscellaneous section.
+* Ensure both links are shown only when blogs are enabled and in the same situations where Moodle currently shows the existing profile blog link.
+* Add or update Behat coverage for the new Boost navigation path.
+* Remove all blog-related TODO [MDL-57120] Behat workarounds found during implementation, including the currently identified files:
+** blocks/blog_recent/tests/behat/block_blog_recent_frontpage.feature
+** blocks/blog_tags/tests/behat/blogtag.feature
+** blog/tests/behat/comment.feature
+** blog/tests/behat/delete.feature
+* Create and attach a documentation draft as a markdown file summarising the user-visible UI change.
+
+h3. Out of scope:
+
+* Changing the functionality of personal or site-wide blog pages.
+* Changing blog permissions, capabilities, or access rules.
+* Adding blog links to other Boost navigation areas.
+* Reintroducing the Classic Navigation block in Boost.
+* Resolving non-blog items covered by [MDL-57120].
+
+h2. Acceptance criteria:
+
+* When blogs are enabled, the user profile Miscellaneous section shows both "View my blog entries" and "View site blog entries" wherever the existing profile blog link would currently be shown.
+* "View my blog entries" opens the viewed user's own blog entries.
+* "View site blog entries" opens the site-wide blog page at /blog/index.php.
+* When site blogs are disabled, neither blog link is shown.
+* Blog page behaviour, access controls, and permissions are unchanged.
+* Blog-related TODO [MDL-57120] Behat workarounds are removed and replaced with tests that use the new native Boost navigation path.
+* Automated coverage verifies the personal blog link, the site-wide blog link, and the disabled-blogs state.
+* A markdown documentation draft describing the UI change is attached to the ticket.
+
+
+The developers' tests for this issue use these new or changed classes, functions or web services (names and signatures only; you must implement them):
+(nessuna interfaccia nuova usata dai test)

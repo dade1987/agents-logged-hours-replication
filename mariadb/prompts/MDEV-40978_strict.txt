@@ -1,0 +1,27 @@
+You are a software engineer fixing an issue in MariaDB Server (C/C++). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot build MariaDB or run its test suite. Read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update mysql-test tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDEV-40978:  PREPARE with INTERVAL ? in Partition DDL Crashes the Server (DoS)
+
+Executing PREPARE on a CREATE TABLE ... PARTITION BY RANGE COLUMNS ... INTERVAL ? DAY statement containing an INTERVAL ? parameter placeholder crashes the server process immediately (abort + core). The crash happens during the prepare/parse phase (the parameter is not yet bound); the yacc action calls val_int() on the unbound Item_param, hitting the Item_param::can_return_value() assertion.
+
+Any client that can execute PREPARE (any authenticated user — not even CREATE TABLE privileges are needed since it crashes during parsing) can take down the server with a single statement, constituting a remote denial of service.
+
+
+{code:java}
+-- Single statement, server crashes immediately (assertion abort on debug builds;
+-- release-build behavior to be verified, likely reads undefined values)
+PREPARE s FROM 'CREATE TABLE db.t7(c DATE)
+  PARTITION BY RANGE COLUMNS(c)
+  INTERVAL ? DAY
+  (PARTITION p0 VALUES LESS THAN (?))';
+-- Client: ERROR 2026 (HY000): TLS/SSL error: unexpected eof while reading
+-- Then:   ERROR 2002 (HY000): Can't connect to server (115)
+{code}
+

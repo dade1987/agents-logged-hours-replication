@@ -1,0 +1,146 @@
+diff --git a/public/lib/classes/oauth2/api.php b/public/lib/classes/oauth2/api.php
+index 260ea355305..4558f950da7 100644
+--- a/public/lib/classes/oauth2/api.php
++++ b/public/lib/classes/oauth2/api.php
+@@ -300,6 +300,19 @@ class api {
+         }
+     }
+ 
++    /**
++     * Add an entry to the config log for an OAuth 2 change.
++     *
++     * @param string $name Name of the logged action.
++     * @param string|null $old Old value.
++     * @param string|null $new New value.
++     */
++    protected static function log_change(string $name, ?string $old, ?string $new): void {
++        global $CFG;
++        require_once($CFG->libdir . '/datalib.php');
++        add_to_config_log($name, $old, $new, 'core_oauth2');
++    }
++
+     /**
+      * Take the data from the mform and update the issuer.
+      *
+@@ -334,6 +347,7 @@ class api {
+         // Will throw exceptions on validation failures.
+         if ($create) {
+             $issuer->create();
++            self::log_change('issuer_created', null, $issuer->get('name'));
+ 
+             // Perform service discovery.
+             $classname = self::get_service_classname($issuer->get('servicetype'));
+@@ -341,6 +355,7 @@ class api {
+             self::guess_image($issuer);
+         } else {
+             $issuer->update();
++            self::log_change('issuer_updated', null, $issuer->get('name'));
+         }
+ 
+         return $issuer;
+@@ -380,6 +395,7 @@ class api {
+ 
+         // Will throw exceptions on validation failures.
+         $endpoint->update();
++        self::log_change('endpoint_updated', null, $endpoint->get('name'));
+ 
+         return $endpoint;
+     }
+@@ -396,6 +412,7 @@ class api {
+ 
+         // Will throw exceptions on validation failures.
+         $endpoint->create();
++        self::log_change('endpoint_created', null, $endpoint->get('name'));
+         return $endpoint;
+     }
+ 
+@@ -411,6 +428,7 @@ class api {
+ 
+         // Will throw exceptions on validation failures.
+         $userfieldmapping->update();
++        self::log_change('user_field_mapping_updated', null, $userfieldmapping->get('externalfield'));
+ 
+         return $userfieldmapping;
+     }
+@@ -427,6 +445,7 @@ class api {
+ 
+         // Will throw exceptions on validation failures.
+         $userfieldmapping->create();
++        self::log_change('user_field_mapping_created', null, $userfieldmapping->get('externalfield'));
+         return $userfieldmapping;
+     }
+ 
+@@ -459,6 +478,7 @@ class api {
+ 
+         // OK - all set.
+         $result = $current->update();
++        self::log_change('issuer_moved_up', (string) ($sortorder + 1), (string) $sortorder);
+ 
+         return $result;
+     }
+@@ -496,6 +516,7 @@ class api {
+ 
+         // OK - all set.
+         $result = $current->update();
++        self::log_change('issuer_moved_down', (string) ($sortorder - 1), (string) $sortorder);
+ 
+         return $result;
+     }
+@@ -513,7 +534,9 @@ class api {
+         $issuer = new issuer($id);
+ 
+         $issuer->set('enabled', 0);
+-        return $issuer->update();
++        $result = $issuer->update();
++        self::log_change('issuer_enabled', '1', '0');
++        return $result;
+     }
+ 
+ 
+@@ -530,7 +553,9 @@ class api {
+         $issuer = new issuer($id);
+ 
+         $issuer->set('enabled', 1);
+-        return $issuer->update();
++        $result = $issuer->update();
++        self::log_change('issuer_enabled', '0', '1');
++        return $result;
+     }
+ 
+     /**
+@@ -557,7 +582,10 @@ class api {
+         }
+ 
+         // Will throw exceptions on validation failures.
+-        return $issuer->delete();
++        $name = $issuer->get('name');
++        $result = $issuer->delete();
++        self::log_change('issuer_deleted', $name, null);
++        return $result;
+     }
+ 
+     /**
+@@ -573,7 +601,10 @@ class api {
+         $endpoint = new endpoint($id);
+ 
+         // Will throw exceptions on validation failures.
+-        return $endpoint->delete();
++        $name = $endpoint->get('name');
++        $result = $endpoint->delete();
++        self::log_change('endpoint_deleted', $name, null);
++        return $result;
+     }
+ 
+     /**
+@@ -589,7 +620,10 @@ class api {
+         $userfieldmapping = new user_field_mapping($id);
+ 
+         // Will throw exceptions on validation failures.
+-        return $userfieldmapping->delete();
++        $name = $userfieldmapping->get('externalfield');
++        $result = $userfieldmapping->delete();
++        self::log_change('user_field_mapping_deleted', $name, null);
++        return $result;
+     }
+ 
+     /**

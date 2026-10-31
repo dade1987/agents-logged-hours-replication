@@ -1,0 +1,30 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot run Moodle's test suite. You may run `php -l <file>` and read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-89881: Simple search returns no results when a search phrase contains a common word like "is" or "the"
+
+On a site using Microsoft SQL Server with full-text search enabled, Global search with the Simple search engine returns nothing for any search phrase that contains a common word such as "is", "a" or "the". Searching for a single word still works. Only multi-word searches that include one of these words fail, the user just sees "No results".
+
+ *Root cause*
+public/search/engine/simpledb/classes/engine.php, get_fulltext_query(), builds one required AND term per query word for MySQL and MSSQL ("Moodle is cool" becomes "Moodle\*" AND "is\*" AND "cool\*" on MSSQL). MySQL InnoDB and SQL Server full-text search do not index stopwords, so no indexed token matches the stopword term, and the whole AND collapses to zero rows.  MySQL already skips tokens shorter than innodb_ft_min_token_size, which accidentally protects short stopwords like "is", but does not protect longer default-stopword-list entries such as "the" or "about". 
+
+There was no equivalent guard on the MSSQL path at all.  
+
+*Fix*
+get_fulltext_query() now filters out database-level fulltext stopwords before building the per-term query, for both MySQL and MSSQL:  
+
+* MySQL: checks @@innodb_ft_enable_stopword and, when enabled with the default stopword table (no custom innodb_ft_server_stopword_table configured), filters against INFORMATION_SCHEMA.INNODB_FT_DEFAULT_STOPWORD.
+* MSSQL: looks up the stoplist_id actually attached to the search_simpledb_index fulltext index via sys.fulltext_indexes. For a custom stoplist (created via CREATE FULLTEXT STOPLIST), filters against sys.fulltext_stopwords. For the built-in system stoplist (stoplist_id 0) -- which is what search_simpledb's own installer (db/install.php) attaches, since it creates the index with no STOPLIST clause, and is therefore the default/out-of-the-box configuration used by every Moodle-on-MSSQL install -- filters against sys.fulltext_system_stopwords instead, keyed by the language(s) configured on the index's columns (sys.fulltext_index_columns). An earlier version of this fix only checked sys.fulltext_stopwords, which does not contain the system stoplist's words and so did not actually filter anything for the default configuration; that has been corrected. 
+* PostgreSQL is unchanged -- its 'simple' text search configuration does not strip stopwords, so it was never affected.  Both lookups are cached per request, mirroring the existing innodb_ft_min_token_size caching.
+
+Out of scope: sites using a custom MySQL innodb_ft_server_stopword_table are not filtered by this fix (falls back to the pre-existing, unfiltered behaviour for that specific non-default configuration).  
+
+
+The developers' tests for this issue use these new or changed classes, functions or web services (names and signatures only; you must implement them):
+(nessuna interfaccia nuova usata dai test)

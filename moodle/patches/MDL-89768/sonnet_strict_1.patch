@@ -1,0 +1,39 @@
+diff --git a/public/mod/wiki/classes/external.php b/public/mod/wiki/classes/external.php
+index ec0f9e72a74..a2b07179780 100644
+--- a/public/mod/wiki/classes/external.php
++++ b/public/mod/wiki/classes/external.php
+@@ -519,6 +519,7 @@ class mod_wiki_external extends external_api {
+ 
+         $result = array();
+         $result['pages'] = $returnedpages;
++        $result['cancreatepages'] = wiki_can_create_pages($context);
+         $result['warnings'] = $warnings;
+         return $result;
+     }
+@@ -557,6 +558,7 @@ class mod_wiki_external extends external_api {
+                         ), 'Pages'
+                     )
+                 ),
++                'cancreatepages' => new external_value(PARAM_BOOL, 'True if user can create pages.', VALUE_OPTIONAL),
+                 'warnings' => new external_warnings(),
+             )
+         );
+@@ -1009,6 +1011,8 @@ class mod_wiki_external extends external_api {
+                 // User cannot view page.
+                 throw new moodle_exception('cannoteditpage', 'wiki');
+             } else if ($subwiki->id < 0) {
++                require_capability('mod/wiki:createpage', $context);
++
+                 // Subwiki needed to check edit permissions.
+                 if (!wiki_user_can_edit($subwiki)) {
+                     throw new moodle_exception('cannoteditpage', 'wiki');
+@@ -1027,6 +1031,9 @@ class mod_wiki_external extends external_api {
+             throw new moodle_exception('cannoteditpage', 'wiki');
+         }
+ 
++        // The user also needs the capability to create pages.
++        require_capability('mod/wiki:createpage', $context);
++
+         if ($page = wiki_get_page_by_title($subwiki->id, $params['title'])) {
+             throw new moodle_exception('pageexists', 'wiki');
+         }

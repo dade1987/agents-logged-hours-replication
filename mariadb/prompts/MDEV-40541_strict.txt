@@ -1,0 +1,34 @@
+You are a software engineer fixing an issue in MariaDB Server (C/C++). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot build MariaDB or run its test suite. Read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update mysql-test tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDEV-40541: role vs user@localhost acl_cache key confusion
+
+{code:sql}
+create database db;
+create table db.t1(a varchar(40));
+insert into db.t1 values ('role-cache-collision-row');
+
+create role r1;
+create user r1@localhost identified by 'r1pass';
+create user u1@'127.0.0.1' identified by 'u1pass';
+
+grant select on db.* to r1@localhost;
+grant r1 to u1@'127.0.0.1';
+#flush privileges;
+
+connect r1,localhost,r1,r1pass;
+select a from db.t1;
+
+connect u1,127.0.0.1,u1,u1pass;
+set role r1;
+show grants;
+select a from db.t1;
+{code}
+
+Reported by [Andrew James Gonzalez|https://www.linkedin.com/in/andrew-gonzalez-6b8b68257/]

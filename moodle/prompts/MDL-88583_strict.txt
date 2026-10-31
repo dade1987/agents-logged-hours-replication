@@ -1,0 +1,29 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot run Moodle's test suite. You may run `php -l <file>` and read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-88583: H5P button not displayed in TinyMCE editor for Teachers after new textarea course custom field created
+
+*User facing problem*
+When a course custom field of type 'Text area' is created where a course already exists, when a user with the Teacher ('editingteacher') role visits the settings page for the course, the HVP button is not displayed in the text area wysiwyg editor. Once the user saves the form the button then appears. For a site admin, the HVP button is displayed.
+
+*Technical explanation*
+customfield_textarea\data_controller::value_editor_options() only passes a context to the editor helper when the {customfield_data} row already exists (based on $this->get('id')).
+
+Before anything is saved, that row doesn’t exist, so the helper receives null, TinyMCE falls back to context_system, and tiny_h5p checks tiny/h5p:addembed / moodle/h5p:deploy against system context—capabilities editing teachers don’t have there.
+
+As a result the H5P button is suppressed until the field data row (and its stored contextid) is created. This proposed fix ensures the editor always gets $this->get_context() (which derives the owning course via instanceid when contextid is empty), so even the first render uses the course context and editing teachers keep the H5P toolbar button.
+
+*Steps to replicate*
+
+# As a site admin, create or pick an existing course.
+# Enrol a user into the course with the Teacher (editingteacher) role
+# In Site administration ► Courses ► Course custom fields, add a New field of type Text area to the course-level field category, save it.
+# Login as the user with the editingteacher role, go to the course and visit its Settings page. Scroll to the bottom of the form and expand 'Other fields'. The new text area field will be rendered in the TinyMCE wysiwyg for the first time.
+# Look at the TinyMCE toolbar — the H5P button will be missing.
+# Submit the settings form (even without changing the field) and revisit the page; the H5P button now appears because the field data row has been created.

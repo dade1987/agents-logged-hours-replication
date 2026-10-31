@@ -1,0 +1,264 @@
+diff --git a/mysql-test/main/func_json.result b/mysql-test/main/func_json.result
+index da78b027..d5a1f1f3 100644
+--- a/mysql-test/main/func_json.result
++++ b/mysql-test/main/func_json.result
+@@ -2959,4 +2959,52 @@ NULL
+ SELECT JSON_OVERLAPS(JSON_ARRAY_INSERT(NULL,'$[0]',1), '[]') AS x;
+ x
+ NULL
++#
++# MDEV-32331 JSON path functions with no charset on path crash server
++#
++SELECT ( WITH x ( x ) AS ( WITH x ( x ) AS ( SELECT json_array_append ( 'x' , ( 'x' % 'x' ) , 1 , 'x' , 1 ) ) SELECT CASE WHEN x * x THEN x END FROM x ) ( SELECT 1 FROM x WHERE x ) ) ;
++( WITH x ( x ) AS ( WITH x ( x ) AS ( SELECT json_array_append ( 'x' , ( 'x' % 'x' ) , 1 , 'x' , 1 ) ) SELECT CASE WHEN x * x THEN x END FROM x ) ( SELECT 1 FROM x WHERE x ) )
++NULL
++Warnings:
++Warning	1365	Division by 0
++SELECT JSON_ARRAY_APPEND('[1]', 'x' % 'x', 1) AS x;
++x
++NULL
++Warnings:
++Warning	1365	Division by 0
++SELECT JSON_ARRAY_INSERT('[1]', 'x' % 'x', 1) AS x;
++x
++NULL
++Warnings:
++Warning	1365	Division by 0
++SELECT JSON_SET('{}', 'x' % 'x', 1) AS x;
++x
++NULL
++Warnings:
++Warning	1365	Division by 0
++SELECT JSON_KEYS('{}', 'x' % 'x') AS x;
++x
++NULL
++Warnings:
++Warning	1365	Division by 0
++SELECT JSON_LENGTH('[1]', 'x' % 'x') AS x;
++x
++NULL
++Warnings:
++Warning	1365	Division by 0
++SELECT JSON_CONTAINS('[1]', '1', 'x' % 'x') AS x;
++x
++NULL
++Warnings:
++Warning	1365	Division by 0
++SELECT JSON_EXISTS('[1]', 'x' % 'x') AS x;
++x
++NULL
++Warnings:
++Warning	1365	Division by 0
++SELECT JSON_VALUE('[1]', 'x' % 'x') AS x;
++x
++NULL
++Warnings:
++Warning	1365	Division by 0
+ # End of 10.11 Test
+diff --git a/mysql-test/main/func_json.test b/mysql-test/main/func_json.test
+index c9a65929..e45c6a49 100644
+--- a/mysql-test/main/func_json.test
++++ b/mysql-test/main/func_json.test
+@@ -2130,4 +2130,19 @@ SELECT JSON_ARRAY_INSERT (0,NULL,1) as j;
+ SELECT JSON_EQUALS('[]', JSON_ARRAY_INSERT(NULL,'$[0]',1)) AS x;
+ SELECT JSON_OVERLAPS(JSON_ARRAY_INSERT(NULL,'$[0]',1), '[]') AS x;
+ 
++
++--echo #
++--echo # MDEV-32331 JSON path functions with no charset on path crash server
++--echo #
++
++SELECT ( WITH x ( x ) AS ( WITH x ( x ) AS ( SELECT json_array_append ( 'x' , ( 'x' % 'x' ) , 1 , 'x' , 1 ) ) SELECT CASE WHEN x * x THEN x END FROM x ) ( SELECT 1 FROM x WHERE x ) ) ;
++SELECT JSON_ARRAY_APPEND('[1]', 'x' % 'x', 1) AS x;
++SELECT JSON_ARRAY_INSERT('[1]', 'x' % 'x', 1) AS x;
++SELECT JSON_SET('{}', 'x' % 'x', 1) AS x;
++SELECT JSON_KEYS('{}', 'x' % 'x') AS x;
++SELECT JSON_LENGTH('[1]', 'x' % 'x') AS x;
++SELECT JSON_CONTAINS('[1]', '1', 'x' % 'x') AS x;
++SELECT JSON_EXISTS('[1]', 'x' % 'x') AS x;
++SELECT JSON_VALUE('[1]', 'x' % 'x') AS x;
++
+ --echo # End of 10.11 Test
+diff --git a/sql/item_jsonfunc.cc b/sql/item_jsonfunc.cc
+index cfe244dc..fc3f8859 100644
+--- a/sql/item_jsonfunc.cc
++++ b/sql/item_jsonfunc.cc
+@@ -704,11 +704,13 @@ bool Item_func_json_exists::val_bool()
+   if (!path.parsed)
+   {
+     String *s_p= args[1]->val_str(&tmp_path);
+-    if (s_p &&
+-        json_path_setup(&path.p, s_p->charset(), (const uchar *) s_p->ptr(),
+-                        (const uchar *) s_p->ptr() + s_p->length()))
+-      goto err_return;
+-    path.parsed= path.constant;
++    if (s_p)
++    {
++      if (json_path_setup(&path.p, s_p->charset(), (const uchar *) s_p->ptr(),
++                          (const uchar *) s_p->ptr() + s_p->length()))
++        goto err_return;
++      path.parsed= path.constant;
++    }
+   }
+ 
+   if ((null_value= args[0]->null_value || args[1]->null_value))
+@@ -772,28 +774,30 @@ bool Json_path_extractor::extract(String *str, Item *item_js, Item *item_jp,
+   {
+     String *s_p= item_jp->val_str(&tmp_path);
+ 
+-    if (allow_wildcard)
+-    {
+-      if (s_p &&
+-        json_path_setup(&p, s_p->charset(), (const uchar *) s_p->ptr(),
+-                       (const uchar *) s_p->ptr() + s_p->length()))
+-        error= true;
+-    }
+-    else
++    if (s_p)
+     {
+-      if (s_p &&
+-        path_setup_nwc(&p, s_p->charset(), (const uchar *) s_p->ptr(),
+-                       (const uchar *) s_p->ptr() + s_p->length()))
+-        error= true;
+-    }
++      if (allow_wildcard)
++      {
++        if (json_path_setup(&p, s_p->charset(), (const uchar *) s_p->ptr(),
++                            (const uchar *) s_p->ptr() + s_p->length()))
++          error= true;
++      }
++      else
++      {
++        if (path_setup_nwc(&p, s_p->charset(), (const uchar *) s_p->ptr(),
++                           (const uchar *) s_p->ptr() + s_p->length()))
++          error= true;
++      }
+ 
+-    if (error)
+-    {
+-      report_path_error_ex(s_p->ptr(), &p, func_name.str, 1, Sql_condition::WARN_LEVEL_WARN);
+-      return true;
+-    }
++      if (error)
++      {
++        report_path_error_ex(s_p->ptr(), &p, func_name.str, 1,
++                             Sql_condition::WARN_LEVEL_WARN);
++        return true;
++      }
+ 
+-    parsed= constant;
++      parsed= constant;
++    }
+   }
+ 
+   if (item_js->null_value || item_jp->null_value)
+@@ -1603,14 +1607,16 @@ bool Item_func_json_contains::val_bool()
+     if (!path.parsed)
+     {
+       String *s_p= args[2]->val_str(&tmp_path);
+-      if (s_p &&
+-          path_setup_nwc(&path.p,s_p->charset(),(const uchar *) s_p->ptr(),
+-                         (const uchar *) s_p->end()))
++      if (s_p)
+       {
+-        report_path_error(s_p, &path.p, 2);
+-        goto return_null;
++        if (path_setup_nwc(&path.p,s_p->charset(),(const uchar *) s_p->ptr(),
++                           (const uchar *) s_p->end()))
++        {
++          report_path_error(s_p, &path.p, 2);
++          goto return_null;
++        }
++        path.parsed= path.constant;
+       }
+-      path.parsed= path.constant;
+     }
+     if (args[2]->null_value)
+       goto return_null;
+@@ -2164,14 +2170,16 @@ String *Item_func_json_array_append::val_str(String *str)
+     if (!c_path->parsed)
+     {
+       String *s_p= args[n_arg]->val_str(tmp_paths+n_path);
+-      if (s_p &&
+-          path_setup_nwc(&c_path->p,s_p->charset(),(const uchar *) s_p->ptr(),
+-                         (const uchar *) s_p->ptr() + s_p->length()))
++      if (s_p)
+       {
+-        report_path_error(s_p, &c_path->p, n_arg);
+-        goto return_null;
++        if (path_setup_nwc(&c_path->p,s_p->charset(),(const uchar *) s_p->ptr(),
++                           (const uchar *) s_p->ptr() + s_p->length()))
++        {
++          report_path_error(s_p, &c_path->p, n_arg);
++          goto return_null;
++        }
++        c_path->parsed= c_path->constant;
+       }
+-      c_path->parsed= c_path->constant;
+     }
+     if (args[n_arg]->null_value)
+       goto return_null;
+@@ -3165,14 +3173,16 @@ longlong Item_func_json_length::val_int()
+     if (!path.parsed)
+     {
+       String *s_p= args[1]->val_str(&tmp_path);
+-      if (s_p &&
+-          path_setup_nwc(&path.p, s_p->charset(), (const uchar *) s_p->ptr(),
+-                         (const uchar *) s_p->ptr() + s_p->length()))
++      if (s_p)
+       {
+-        report_path_error(s_p, &path.p, 1);
+-        goto null_return;
++        if (path_setup_nwc(&path.p, s_p->charset(), (const uchar *) s_p->ptr(),
++                           (const uchar *) s_p->ptr() + s_p->length()))
++        {
++          report_path_error(s_p, &path.p, 1);
++          goto null_return;
++        }
++        path.parsed= path.constant;
+       }
+-      path.parsed= path.constant;
+     }
+     if (args[1]->null_value)
+       goto null_return;
+@@ -3420,8 +3430,8 @@ String *Item_func_json_insert::val_str(String *str)
+ 
+         /* We search to the last step. */
+         c_path->p.last_step--;
++        c_path->parsed= c_path->constant;
+       }
+-      c_path->parsed= c_path->constant;
+     }
+     if (args[n_arg]->null_value)
+       goto return_null;
+@@ -3691,8 +3701,8 @@ String *Item_func_json_remove::val_str(String *str)
+           report_path_error(s_p, &c_path->p, n_arg);
+           goto null_return;
+         }
++        c_path->parsed= c_path->constant;
+       }
+-      c_path->parsed= c_path->constant;
+     }
+     if (args[n_arg]->null_value)
+       goto null_return;
+@@ -3905,14 +3915,16 @@ String *Item_func_json_keys::val_str(String *str)
+   if (!path.parsed)
+   {
+     String *s_p= args[1]->val_str(&tmp_path);
+-    if (s_p &&
+-        path_setup_nwc(&path.p, s_p->charset(), (const uchar *) s_p->ptr(),
+-                       (const uchar *) s_p->ptr() + s_p->length()))
++    if (s_p)
++    {
++      if (path_setup_nwc(&path.p, s_p->charset(), (const uchar *) s_p->ptr(),
++                         (const uchar *) s_p->ptr() + s_p->length()))
+       {
+         report_path_error(s_p, &path.p, 1);
+         goto null_return;
+       }
+-    path.parsed= path.constant;
++      path.parsed= path.constant;
++    }
+   }
+ 
+   if (args[1]->null_value)

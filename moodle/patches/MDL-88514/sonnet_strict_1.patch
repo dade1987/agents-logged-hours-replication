@@ -1,0 +1,34 @@
+diff --git a/public/mod/assign/locallib.php b/public/mod/assign/locallib.php
+index 2901a49b29a..f2a7c77b6bd 100644
+--- a/public/mod/assign/locallib.php
++++ b/public/mod/assign/locallib.php
+@@ -6656,11 +6656,15 @@ class assign {
+             $userid = $USER->id;
+         }
+ 
++        // Apply any user or group overrides for the user being checked.
++        $this->update_effective_access($userid);
++        $instance = $this->get_instance($userid);
++
+         $time = \core\di::get(\core\clock::class)->time();
+         $dateopen = true;
+         $finaldate = false;
+-        if ($this->get_instance()->cutoffdate) {
+-            $finaldate = $this->get_instance()->cutoffdate;
++        if ($instance->cutoffdate) {
++            $finaldate = $instance->cutoffdate;
+         }
+ 
+         if ($flags === false) {
+@@ -6681,9 +6685,9 @@ class assign {
+         }
+ 
+         if ($finaldate) {
+-            $dateopen = ($this->get_instance()->allowsubmissionsfromdate <= $time && $time <= $finaldate);
++            $dateopen = ($instance->allowsubmissionsfromdate <= $time && $time <= $finaldate);
+         } else {
+-            $dateopen = ($this->get_instance()->allowsubmissionsfromdate <= $time);
++            $dateopen = ($instance->allowsubmissionsfromdate <= $time);
+         }
+ 
+         if (!$dateopen) {

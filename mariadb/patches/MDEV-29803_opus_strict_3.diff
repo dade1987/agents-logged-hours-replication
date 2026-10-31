@@ -1,0 +1,94 @@
+diff --git a/client/mysqlbinlog.cc b/client/mysqlbinlog.cc
+index aaf75a4f..2d91adc9 100644
+--- a/client/mysqlbinlog.cc
++++ b/client/mysqlbinlog.cc
+@@ -127,7 +127,7 @@ static my_bool print_row_count_used= 0, print_row_event_positions_used= 0;
+ static my_bool debug_info_flag, debug_check_flag;
+ static my_bool force_if_open_opt= 1;
+ static my_bool opt_raw_mode= 0, opt_stop_never= 0;
+-my_bool opt_gtid_strict_mode= true;
++my_bool opt_gtid_strict_mode= false;
+ static ulong opt_stop_never_slave_server_id= 0;
+ static my_bool opt_verify_binlog_checksum= 1;
+ static ulonglong offset = 0;
+@@ -1885,9 +1885,10 @@ static struct my_option my_options[] =
+   {"gtid-strict-mode", 0, "Process binlog according to gtid-strict-mode "
+    "specification. The start, stop positions are verified to satisfy  "
+    "start < stop comparison condition. Sequence numbers of any gtid domain "
+-   "must comprise monotically growing sequence",
++   "must comprise monotically growing sequence. Disabled by default, to be "
++   "consistent with the server default @@global.gtid_strict_mode=OFF",
+    &opt_gtid_strict_mode, &opt_gtid_strict_mode, 0,
+-   GET_BOOL, NO_ARG, 1, 0, 0, 0, 0, 0},
++   GET_BOOL, NO_ARG, 0, 0, 0, 0, 0, 0},
+   {"stop-datetime", OPT_STOP_DATETIME,
+    "Stop reading the binlog at first event having a datetime equal or "
+    "posterior to the argument; the argument must be a date and time "
+diff --git a/man/mysqlbinlog.1 b/man/mysqlbinlog.1
+index 097fa438..d52b2dc5 100644
+--- a/man/mysqlbinlog.1
++++ b/man/mysqlbinlog.1
+@@ -1034,6 +1034,7 @@ This option is useful for point\-in\-time recovery\&.
+ Process binlog according to gtid-strict-mode specification\&. The start, stop
+ positions are verified to satisfy start < stop comparison condition\&. Sequence
+ numbers of any gtid domain must comprise monotically growing sequence\&.
++Disabled by default\&.
+ .RE
+ .sp
+ .RS 4
+diff --git a/mysql-test/suite/binlog/r/binlog_mysqlbinlog_gtid_replay.result b/mysql-test/suite/binlog/r/binlog_mysqlbinlog_gtid_replay.result
+new file mode 100644
+index 00000000..4635c17c
+--- /dev/null
++++ b/mysql-test/suite/binlog/r/binlog_mysqlbinlog_gtid_replay.result
+@@ -0,0 +1,11 @@
++RESET MASTER;
++CREATE TABLE t1 (a int);
++CREATE TABLE t2 (a int);
++DROP TABLE t1, t2;
++FLUSH BINARY LOGS;
++DROP TABLE IF EXISTS t1, t2;
++FLUSH BINARY LOGS;
++# Default (non-strict) mode must succeed
++# Explicit --gtid-strict-mode must still error
++RESET MASTER;
++End of the tests
+diff --git a/mysql-test/suite/binlog/t/binlog_mysqlbinlog_gtid_replay.test b/mysql-test/suite/binlog/t/binlog_mysqlbinlog_gtid_replay.test
+new file mode 100644
+index 00000000..c31ac1fd
+--- /dev/null
++++ b/mysql-test/suite/binlog/t/binlog_mysqlbinlog_gtid_replay.test
+@@ -0,0 +1,33 @@
++#
++# MDEV-29803: Unexpected ERROR: Found out of order GTID after replaying binlog
++# read from remote
++#
++# mariadb-binlog must not enforce GTID strict mode by default (to be
++# consistent with the server default @@global.gtid_strict_mode=OFF), so
++# processing binary logs that legitimately contain repeated/decreasing GTIDs
++# (e.g. after replaying old binlogs into the server) must succeed unless
++# --gtid-strict-mode is explicitly requested.
++#
++--source include/have_log_bin.inc
++
++RESET MASTER;
++CREATE TABLE t1 (a int);
++CREATE TABLE t2 (a int);
++DROP TABLE t1, t2;
++FLUSH BINARY LOGS;
++
++--exec $MYSQL_BINLOG --read-from-remote-server -uroot --protocol=tcp --port=$MASTER_MYPORT master-bin.000001 | $MYSQL test 2>&1
++
++DROP TABLE IF EXISTS t1, t2;
++FLUSH BINARY LOGS;
++
++--let $datadir= `select @@datadir`
++--echo # Default (non-strict) mode must succeed
++--exec $MYSQL_BINLOG $datadir/master-bin.000001 $datadir/master-bin.000002 > /dev/null
++
++--echo # Explicit --gtid-strict-mode must still error
++--error 1
++--exec $MYSQL_BINLOG --gtid-strict-mode $datadir/master-bin.000001 $datadir/master-bin.000002 > /dev/null 2>&1
++
++RESET MASTER;
++--echo End of the tests

@@ -1,0 +1,30 @@
+diff --git a/public/question/type/multichoice/renderer.php b/public/question/type/multichoice/renderer.php
+index cccaf774db8..238632d3387 100644
+--- a/public/question/type/multichoice/renderer.php
++++ b/public/question/type/multichoice/renderer.php
+@@ -152,7 +152,10 @@ abstract class qtype_multichoice_renderer_base extends qtype_with_combined_feedb
+             $legendclass = '';
+             $questionnumber = $options->add_question_identifier_to_label($this->prompt(), true, true);
+         } else {
+-            $questionnumber = $options->add_question_identifier_to_label(get_string('answer'), true, true);
++            // The legend names the radio group for screen readers, so it must contain the question text,
++            // not just a generic label. It is visually hidden; the question text is shown in the qtext div.
++            $questiontext = $question->make_html_inline($question->format_questiontext($qa));
++            $questionnumber = $options->add_question_identifier_to_label($questiontext, true, true);
+             $legendclass = 'visually-hidden';
+         }
+         $legendattrs = [
+diff --git a/public/question/type/multichoice/tests/walkthrough_test.php b/public/question/type/multichoice/tests/walkthrough_test.php
+index c09e39dd3e3..013cbf66fac 100644
+--- a/public/question/type/multichoice/tests/walkthrough_test.php
++++ b/public/question/type/multichoice/tests/walkthrough_test.php
+@@ -302,7 +302,8 @@ final class walkthrough_test extends \qbehaviour_walkthrough_test_base {
+         $this->render();
+ 
+         // Check for 'Show standard instruction'.
+-        $standardinstruction = \html_writer::tag('legend', get_string('answer'), [
++        // The legend names the radio group, so it must contain the question text.
++        $standardinstruction = \html_writer::tag('legend', $mc->questiontext, [
+             'class' => 'prompt h6 fw-normal visually-hidden',
+         ]);
+         $this->assertStringContainsString($standardinstruction, $this->currentoutput);

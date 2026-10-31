@@ -1,0 +1,89 @@
+diff --git a/public/lib/classes/task/manager.php b/public/lib/classes/task/manager.php
+index 1bd67857f72..bc595c4f1ea 100644
+--- a/public/lib/classes/task/manager.php
++++ b/public/lib/classes/task/manager.php
+@@ -158,7 +158,7 @@ class manager {
+                 self::configure_scheduled_task($task);
+             } else {
+                 // Ensure that the first run follows the schedule.
+-                $task->set_next_run_time($task->get_next_scheduled_time());
++                $task->set_next_run_time($task->get_next_scheduled_time(\core\di::get(\core\clock::class)->time()));
+ 
+                 // Insert the new task in the database.
+                 $record = self::record_from_scheduled_task($task);
+@@ -307,7 +307,7 @@ class manager {
+ 
+         $record = self::record_from_scheduled_task($task);
+         $record->id = $original->id;
+-        $record->nextruntime = $task->get_next_scheduled_time();
++        $record->nextruntime = $task->get_next_scheduled_time(\core\di::get(\core\clock::class)->time());
+         unset($record->lastruntime);
+         $result = $DB->update_record('task_scheduled', $record);
+ 
+@@ -1383,7 +1383,7 @@ class manager {
+             'id',
+             ['classname' => self::get_canonical_class_name($task)]
+         );
+-        $record->nextruntime = $task->get_next_scheduled_time();
++        $record->nextruntime = $task->get_next_scheduled_time(\core\di::get(\core\clock::class)->time());
+         $record->faildelay = 0;
+         $DB->update_record('task_scheduled', $record);
+     }
+@@ -1460,7 +1460,7 @@ class manager {
+         if ($record) {
+             $record->lastruntime = $clock->time();
+             $record->faildelay = 0;
+-            $record->nextruntime = $task->get_next_scheduled_time();
++            $record->nextruntime = $task->get_next_scheduled_time($clock->time());
+             $record->timestarted = null;
+             $record->hostname = null;
+             $record->pid = null;
+diff --git a/public/lib/classes/task/scheduled_task.php b/public/lib/classes/task/scheduled_task.php
+index 7d9071e5deb..63ecbee912f 100644
+--- a/public/lib/classes/task/scheduled_task.php
++++ b/public/lib/classes/task/scheduled_task.php
+@@ -531,7 +531,7 @@ abstract class scheduled_task extends task_base {
+      */
+     public function get_next_scheduled_time(int $now = 0): int {
+         if (!$now) {
+-            $now = time();
++            $now = \core\di::get(\core\clock::class)->time();
+         }
+ 
+         // We need to change to the server timezone before using php date() functions.
+diff --git a/public/lib/tests/task/manager_test.php b/public/lib/tests/task/manager_test.php
+index 062fa842bdd..d529fe6ebf9 100644
+--- a/public/lib/tests/task/manager_test.php
++++ b/public/lib/tests/task/manager_test.php
+@@ -673,7 +673,12 @@ final class manager_test extends \advanced_testcase {
+ 
+         $this->resetAfterTest();
+         $this->preventResetByRollback();
+-        $clock = $this->mock_clock_with_frozen();
++
++        // Freeze the clock at a fixed time well away from the scheduled hour (midnight), so that the
++        // next scheduled run time can never fall within the window being tested.
++        $clock = $this->mock_clock_with_frozen(
++            (new \DateTimeImmutable('2025-06-15 12:00:00', \core_date::get_server_timezone_object()))->getTimestamp(),
++        );
+ 
+         // Disable all the tasks, so we can insert our own and be sure it's the only one being run.
+         $DB->set_field('task_scheduled', 'disabled', 1);
+diff --git a/public/lib/tests/task/scheduled_task_test.php b/public/lib/tests/task/scheduled_task_test.php
+index 24b8a7a0502..74359539076 100644
+--- a/public/lib/tests/task/scheduled_task_test.php
++++ b/public/lib/tests/task/scheduled_task_test.php
+@@ -609,7 +609,12 @@ final class scheduled_task_test extends \advanced_testcase {
+         $record->disabled = 1;
+         $DB->insert_record('task_scheduled', $record);
+ 
+-        $now = time();
++        // Freeze the clock at a fixed time well away from the scheduled time (midnight), so that the
++        // next scheduled run time calculated when completing a task is always in the future.
++        $clock = $this->mock_clock_with_frozen(
++            (new \DateTimeImmutable('2025-06-15 12:00:00', \core_date::get_server_timezone_object()))->getTimestamp(),
++        );
++        $now = $clock->time();
+ 
+         // Should get handed the first task.
+         $task = manager::get_next_scheduled_task($now);

@@ -1,0 +1,57 @@
+diff --git a/mysql-test/suite/compat/oracle/r/sp-record.result b/mysql-test/suite/compat/oracle/r/sp-record.result
+index 5b66c6fa..b6ef8289 100644
+--- a/mysql-test/suite/compat/oracle/r/sp-record.result
++++ b/mysql-test/suite/compat/oracle/r/sp-record.result
+@@ -895,3 +895,12 @@ NULL;
+ END;
+ $$
+ ERROR HY000: Data type 'rec0_t' doesn't support CHARACTER SET attribute.
++#
++# MDEV-40153 Assertion `rec->field->head()->charset == nullptr' failed
++# in Type_handler_row::Column_definition_prepare_stage1 when a function
++# returns a RECORD type with a BLOB member
++#
++CREATE PACKAGE pk_mdev40153 AS TYPE r IS RECORD (b BLOB); FUNCTION f RETURN r; END;
++$$
++DROP PACKAGE pk_mdev40153;
++$$
+diff --git a/mysql-test/suite/compat/oracle/t/sp-record.test b/mysql-test/suite/compat/oracle/t/sp-record.test
+index b75a739d..583fa709 100644
+--- a/mysql-test/suite/compat/oracle/t/sp-record.test
++++ b/mysql-test/suite/compat/oracle/t/sp-record.test
+@@ -975,3 +975,16 @@ BEGIN
+ END;
+ $$
+ DELIMITER ;$$
++
++--echo #
++--echo # MDEV-40153 Assertion `rec->field->head()->charset == nullptr' failed
++--echo # in Type_handler_row::Column_definition_prepare_stage1 when a function
++--echo # returns a RECORD type with a BLOB member
++--echo #
++
++DELIMITER $$;
++CREATE PACKAGE pk_mdev40153 AS TYPE r IS RECORD (b BLOB); FUNCTION f RETURN r; END;
++$$
++DROP PACKAGE pk_mdev40153;
++$$
++DELIMITER ;$$
+diff --git a/sql/sql_type_row.cc b/sql/sql_type_row.cc
+index 97d48ed3..ef47f08f 100644
+--- a/sql/sql_type_row.cc
++++ b/sql/sql_type_row.cc
+@@ -252,7 +252,13 @@ bool Type_handler_row::
+   {
+     DBUG_ASSERT(rec->field);
+     DBUG_ASSERT(rec->field->elements);
+-    DBUG_ASSERT(rec->field->head()->charset == nullptr); // Not prepared
++    /*
++      Note, rec->field is not prepared in place: it is deep-copied below and
++      only the copy is prepared. We must not check the charset of the fields
++      here to detect "not prepared" state: fields of some types (e.g. BLOB,
++      VARBINARY) get a non-NULL charset already at parse time
++      (see field_type_lob, field_type_string in sql_yacc.yy).
++    */
+     Row_definition_list *row= rec->field->deep_copy(thd);
+     if (!row || thd->lex->sphead->row_fill_field_definitions(thd, row))
+       return true; // Error

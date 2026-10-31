@@ -1,0 +1,123 @@
+diff --git a/mysql-test/main/func_json.result b/mysql-test/main/func_json.result
+index 2f791dc4..4cff26af 100644
+--- a/mysql-test/main/func_json.result
++++ b/mysql-test/main/func_json.result
+@@ -5776,4 +5776,44 @@ JSON_SCHEMA_VALID(@schema, @value)
+ SELECT JSON_SCHEMA_VALID( '{"enum": ["x"]}', CONVERT(CONCAT('"', REPEAT('e', 100000), '"') USING ucs2)) AS r;
+ r
+ 0
++#
++# MDEV-41067: wrong result with json_overlaps when one of the arguments
++# has an empty nested array element
++#
++SELECT JSON_OVERLAPS('[[1]]', '[[]]');
++JSON_OVERLAPS('[[1]]', '[[]]')
++0
++SELECT JSON_OVERLAPS('[[1]]', '[[],123]');
++JSON_OVERLAPS('[[1]]', '[[],123]')
++0
++SELECT JSON_OVERLAPS('[[]]', '[[1]]');
++JSON_OVERLAPS('[[]]', '[[1]]')
++0
++SELECT JSON_OVERLAPS('[[]]', '[[]]');
++JSON_OVERLAPS('[[]]', '[[]]')
++1
++SELECT JSON_OVERLAPS('[[1,2]]', '[[1]]');
++JSON_OVERLAPS('[[1,2]]', '[[1]]')
++0
++SELECT JSON_OVERLAPS('[[1]]', '[[1,2]]');
++JSON_OVERLAPS('[[1]]', '[[1,2]]')
++0
++SELECT JSON_OVERLAPS('[[1],2]', '[[],2]');
++JSON_OVERLAPS('[[1],2]', '[[],2]')
++1
++SELECT JSON_OVERLAPS('[[[1]],2]', '[[[1]],3]');
++JSON_OVERLAPS('[[[1]],2]', '[[[1]],3]')
++1
++SELECT JSON_OVERLAPS('[[[1]],2]', '[[[1],5]],3]');
++JSON_OVERLAPS('[[[1]],2]', '[[[1],5]],3]')
++0
++SELECT JSON_OVERLAPS('{"a":[1]}', '{"a":[]}');
++JSON_OVERLAPS('{"a":[1]}', '{"a":[]}')
++0
++SELECT JSON_OVERLAPS('{"a":[]}', '{"a":[]}');
++JSON_OVERLAPS('{"a":[]}', '{"a":[]}')
++1
++SELECT JSON_OVERLAPS('{"a":[[1],2]}', '{"a":[1,3]}');
++JSON_OVERLAPS('{"a":[[1],2]}', '{"a":[1,3]}')
++0
+ # End of 11.4 tests
+diff --git a/mysql-test/main/func_json.test b/mysql-test/main/func_json.test
+index c6045cb2..96746a13 100644
+--- a/mysql-test/main/func_json.test
++++ b/mysql-test/main/func_json.test
+@@ -4450,4 +4450,22 @@ SELECT JSON_SCHEMA_VALID(@schema, @value);
+ 
+ SELECT JSON_SCHEMA_VALID( '{"enum": ["x"]}', CONVERT(CONCAT('"', REPEAT('e', 100000), '"') USING ucs2)) AS r;
+ 
+---echo # End of 11.4 tests
++--echo #
++--echo # MDEV-41067: wrong result with json_overlaps when one of the arguments
++--echo # has an empty nested array element
++--echo #
++
++SELECT JSON_OVERLAPS('[[1]]', '[[]]');
++SELECT JSON_OVERLAPS('[[1]]', '[[],123]');
++SELECT JSON_OVERLAPS('[[]]', '[[1]]');
++SELECT JSON_OVERLAPS('[[]]', '[[]]');
++SELECT JSON_OVERLAPS('[[1,2]]', '[[1]]');
++SELECT JSON_OVERLAPS('[[1]]', '[[1,2]]');
++SELECT JSON_OVERLAPS('[[1],2]', '[[],2]');
++SELECT JSON_OVERLAPS('[[[1]],2]', '[[[1]],3]');
++SELECT JSON_OVERLAPS('[[[1]],2]', '[[[1],5]],3]');
++SELECT JSON_OVERLAPS('{"a":[1]}', '{"a":[]}');
++SELECT JSON_OVERLAPS('{"a":[]}', '{"a":[]}');
++SELECT JSON_OVERLAPS('{"a":[[1],2]}', '{"a":[1,3]}');
++
++# End of 11.4 tests
+diff --git a/sql/item_jsonfunc.cc b/sql/item_jsonfunc.cc
+index 615d0cb4..55213e4f 100644
+--- a/sql/item_jsonfunc.cc
++++ b/sql/item_jsonfunc.cc
+@@ -4799,6 +4799,14 @@ bool json_compare_arrays_in_order(json_engine_t *js, json_engine_t *value)
+       return FALSE;
+     if (js->value_type != value->value_type)
+     {
++      /*
++        Skip the just-read values if they are non-scalar (they opened a new
++        level), then skip the rest of the arrays being compared.
++      */
++      if (!json_value_scalar(js))
++        json_skip_level(js);
++      if (!json_value_scalar(value))
++        json_skip_level(value);
+       json_skip_current_level(js, value);
+       return FALSE;
+     }
+@@ -4809,10 +4817,22 @@ bool json_compare_arrays_in_order(json_engine_t *js, json_engine_t *value)
+       return FALSE;
+     }
+   }
+-  res= (value->state == JST_ARRAY_END || value->state == JST_OBJ_END ?
+-        TRUE : FALSE);
+-  json_skip_current_level(js, value);
+-  return res;
++  /*
++    The arrays are equal only if both of them got exhausted at the same
++    time, i.e. both are at the end now. Otherwise one of them has more
++    elements than the other (e.g. '[1]' vs '[]') and they do not match.
++    Note that when an engine is at JST_ARRAY_END its stack is already
++    popped, so calling json_skip_level() on it would skip the parent
++    structure. Hence only skip the one(s) that did not reach the end yet.
++  */
++  if (js->state == JST_ARRAY_END && value->state == JST_ARRAY_END)
++    return TRUE;
++
++  if (js->state != JST_ARRAY_END)
++    json_skip_level(js);
++  if (value->state != JST_ARRAY_END)
++    json_skip_level(value);
++  return FALSE;
+ }
+ 
+ 

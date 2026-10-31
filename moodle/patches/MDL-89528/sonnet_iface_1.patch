@@ -1,0 +1,41 @@
+diff --git a/public/lib/classes/di.php b/public/lib/classes/di.php
+index 46dd11354eb..3314dfee349 100644
+--- a/public/lib/classes/di.php
++++ b/public/lib/classes/di.php
+@@ -78,6 +78,24 @@ class di {
+         $container->set($id, $value);
+     }
+ 
++    /**
++     * Resolve and create a new instance of the named class, injecting dependencies.
++     *
++     * Unlike get(), this always returns a new instance.
++     *
++     * @param string $name The class name or entry to create
++     * @param array $params Parameters to pass to the constructor, indexed by name
++     * @return mixed
++     */
++    public static function make(string $name, array $params = []): mixed {
++        // Please note that the `make` method is not a part of the PSR-11 standard.
++        // We currently make use of PHP-DI which does have this method, but its use is not guaranteed.
++
++        /** @var \DI\Container */
++        $container = self::get_container();
++        return $container->make($name, $params);
++    }
++
+     /**
+      * Create a new Container Instance.
+      *
+@@ -89,9 +107,9 @@ class di {
+         // Configure the Container builder.
+         $builder = new \DI\ContainerBuilder();
+ 
+-        // At the moment we are using autowiring, but not automatic attribute injection.
+-        // Automatic attribute injection is a php-di specific feature.
++        // Enable autowiring, and attribute-based injection (php-di specific feature, e.g. #[\DI\Attribute\Inject]).
+         $builder->useAutowiring(true);
++        $builder->useAttributes(true);
+ 
+         if (!$CFG->debugdeveloper) {
+             // Enable compilation of the container and write proxies to disk in production.

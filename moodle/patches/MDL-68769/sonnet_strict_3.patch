@@ -1,0 +1,49 @@
+diff --git a/public/course/lib.php b/public/course/lib.php
+index b40dbc83e1b..1830b408332 100644
+--- a/public/course/lib.php
++++ b/public/course/lib.php
+@@ -898,7 +898,12 @@ function course_module_bulk_update_calendar_events($modulename, $courseid = 0) {
+ 
+     foreach ($instances as $instance) {
+         if ($cm = get_coursemodule_from_instance($modulename, $instance->id, $instance->course)) {
+-            course_module_calendar_event_update_process($instance, $cm);
++            try {
++                course_module_calendar_event_update_process($instance, $cm);
++            } catch (moodle_exception $e) {
++                // The course module (or course) may have been deleted while this was running; do not fail forever.
++                mtrace("Skipping calendar events refresh for {$modulename} instance {$instance->id}: " . $e->getMessage());
++            }
+         }
+     }
+     return true;
+diff --git a/public/lib/classes/task/refresh_mod_calendar_events_task.php b/public/lib/classes/task/refresh_mod_calendar_events_task.php
+index 3e2641aea06..38d1751b818 100644
+--- a/public/lib/classes/task/refresh_mod_calendar_events_task.php
++++ b/public/lib/classes/task/refresh_mod_calendar_events_task.php
+@@ -61,6 +61,12 @@ class refresh_mod_calendar_events_task extends adhoc_task {
+             $courseid = 0;
+         }
+ 
++        global $DB;
++        if ($courseid && !$DB->record_exists('course', ['id' => $courseid])) {
++            mtrace("Course {$courseid} no longer exists, skipping calendar events refresh.");
++            return;
++        }
++
+         $pluginmanager = core_plugin_manager::instance();
+         $modplugins = $pluginmanager->get_plugins_of_type('mod');
+         foreach ($modplugins as $plugin) {
+@@ -71,7 +77,12 @@ class refresh_mod_calendar_events_task extends adhoc_task {
+             }
+             // Refresh events.
+             mtrace('Refreshing events for ' . $plugin->name);
+-            course_module_bulk_update_calendar_events($plugin->name, $courseid);
++            try {
++                course_module_bulk_update_calendar_events($plugin->name, $courseid);
++            } catch (\moodle_exception $e) {
++                // Do not let a deleted module/course make this ad-hoc task fail and retry forever.
++                mtrace('Error refreshing events for ' . $plugin->name . ': ' . $e->getMessage());
++            }
+         }
+     }
+ }

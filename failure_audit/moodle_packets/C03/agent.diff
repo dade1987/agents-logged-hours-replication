@@ -1,0 +1,89 @@
+diff --git a/public/completion/classes/progress.php b/public/completion/classes/progress.php
+index 48c8c2bf63f..1bca1544cfa 100644
+--- a/public/completion/classes/progress.php
++++ b/public/completion/classes/progress.php
+@@ -64,21 +64,46 @@ class progress {
+             return null;
+         }
+ 
++        $cache = self::get_request_cache();
++        $key = "{$course->id}_{$userid}_" . ($course->cacherev ?? 0);
++        $cached = $cache->get($key);
++        if ($cached !== false) {
++            return $cached['value'];
++        }
++
+         // Before we check how many modules have been completed see if the course has.
+         if ($completion->is_course_complete($userid)) {
+-            return 100;
++            $result = 100;
++        } else {
++            // Get the number of modules that support completion.
++            $modules = $completion->get_user_activities_with_completion($userid);
++            $count = count($modules);
++            if (!$count) {
++                $result = null;
++            } else {
++                // Get the number of modules that have been completed.
++                $totalcompleted = $completion->count_modules_completed($userid, array_keys($modules));
++                $result = ($totalcompleted / $count) * 100;
++            }
+         }
+ 
+-        // Get the number of modules that support completion.
+-        $modules = $completion->get_user_activities_with_completion($userid);
+-        $count = count($modules);
+-        if (!$count) {
+-            return null;
+-        }
++        $cache->set($key, ['value' => $result]);
++        return $result;
++    }
+ 
+-        // Get the number of modules that have been completed.
+-        $totalcompleted = $completion->count_modules_completed($userid, array_keys($modules));
++    /**
++     * Returns the per-request cache used to memoise course progress percentages.
++     *
++     * @return \cache_application|\cache_session|\cache_store
++     */
++    protected static function get_request_cache() {
++        return \cache::make_from_params(\cache_store::MODE_REQUEST, 'core_completion', 'progress_percentage');
++    }
+ 
+-        return ($totalcompleted / $count) * 100;
++    /**
++     * Purges the per-request memoised course progress percentages.
++     */
++    public static function purge_request_cache(): void {
++        self::get_request_cache()->purge();
+     }
+ }
+diff --git a/public/lib/completionlib.php b/public/lib/completionlib.php
+index 34405342e66..25dca54eb7d 100644
+--- a/public/lib/completionlib.php
++++ b/public/lib/completionlib.php
+@@ -1270,6 +1270,9 @@ class completion_info {
+         }
+         $transaction->allow_commit();
+ 
++        // Completion state changed, so purge any memoised course progress percentages for this request.
++        \core_completion\progress::purge_request_cache();
++
+         $cmcontext = context_module::instance($data->coursemoduleid);
+ 
+         $completioncache = cache::make('core', 'completion');
+@@ -1379,6 +1382,13 @@ class completion_info {
+                 continue;
+             }
+ 
++            // Fast path: no availability rule, not separate groups and no grouping restriction means
++            // the activity is accessible to every enrolled user.
++            if (empty($cm->availability) && $cm->groupmode != SEPARATEGROUPS && empty($cm->groupingid)) {
++                $visible[$cm->id] = 1;
++                continue;
++            }
++
+             // Step 2: Check if the user is excluded by group or grouping style restrictions.
+             $info = new \core_availability\info_module($cm);
+ 

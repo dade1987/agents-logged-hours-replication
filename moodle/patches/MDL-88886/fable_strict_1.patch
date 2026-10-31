@@ -1,0 +1,204 @@
+diff --git a/.upgradenotes/MDL-88886-2026102412000000.yml b/.upgradenotes/MDL-88886-2026102412000000.yml
+new file mode 100644
+index 00000000000..eaf125ab768
+--- /dev/null
++++ b/.upgradenotes/MDL-88886-2026102412000000.yml
+@@ -0,0 +1,11 @@
++issueNumber: MDL-88886
++notes:
++  core_backup:
++    - message: >-
++        The backup `file_logger` now serializes the path to its log file
++        relative to `$CFG->backuptempdir` (when the file lives there) instead of
++        the absolute path, rebuilding the full path on wakeup using the current
++        `$CFG->backuptempdir`. Loggers serialized by previous versions (absolute
++        paths) are still supported. A new `file_logger::get_fullpath()` method
++        has been added.
++      type: changed
+diff --git a/public/backup/util/loggers/file_logger.class.php b/public/backup/util/loggers/file_logger.class.php
+index 797ffa0e29f..4fad5f99530 100644
+--- a/public/backup/util/loggers/file_logger.class.php
++++ b/public/backup/util/loggers/file_logger.class.php
+@@ -62,15 +62,31 @@ class file_logger extends base_logger {
+             @fclose($this->fhandle);
+             $this->fhandle = null;
+         }
++        // Store the path relative to $CFG->backuptempdir whenever the log file lives there,
++        // so the serialized logger does not contain host specific (absolute) paths and the
++        // full path can be rebuilt on wakeup using the current $CFG->backuptempdir.
++        $this->fullpath = self::get_relative_path($this->fullpath);
+         return array('level', 'showdate', 'showlevel', 'next', 'fullpath');
+     }
+ 
+     public function __wakeup() {
+-        // If the stored path no longer exists, reconstruct it using the current backup temp dir.
+-        if (!empty($this->fullpath) && !file_exists(dirname($this->fullpath))) {
+-            $filename = basename($this->fullpath);
+-            $backuptempdir = make_backup_temp_directory('');
+-            $this->fullpath = $backuptempdir . '/' . $filename;
++        if (!empty($this->fullpath)) {
++            if (!self::is_absolute_path($this->fullpath)) {
++                // Relative path (to $CFG->backuptempdir), rebuild the full path using the current backup temp dir.
++                $filename = $this->fullpath;
++                if (strpos($filename, '..') !== false) {
++                    // Never allow to escape from the backup temp dir.
++                    $filename = basename($filename);
++                }
++                $backuptempdir = make_backup_temp_directory('');
++                $this->fullpath = $backuptempdir . '/' . $filename;
++            } else if (!file_exists(dirname($this->fullpath))) {
++                // Legacy absolute path (serialized by older versions) that no longer exists,
++                // reconstruct it using the current backup temp dir.
++                $filename = basename($this->fullpath);
++                $backuptempdir = make_backup_temp_directory('');
++                $this->fullpath = $backuptempdir . '/' . $filename;
++            }
+         }
+ 
+         if ($this->level > backup::LOG_NONE) { // Only create the file if we are going to log something
+@@ -80,6 +96,59 @@ class file_logger extends base_logger {
+         }
+     }
+ 
++    /**
++     * Returns the full path to the file where the logger is writing.
++     *
++     * @return string
++     */
++    public function get_fullpath() {
++        return $this->fullpath;
++    }
++
++    /**
++     * Converts the given path into a path relative to $CFG->backuptempdir, when the file
++     * is located there. Otherwise (extra loggers pointing to arbitrary locations) the
++     * path is returned unmodified.
++     *
++     * @param string $path Full path to the log file.
++     * @return string The relative path (to $CFG->backuptempdir) or the original path.
++     */
++    public static function get_relative_path($path) {
++        global $CFG;
++
++        if (empty($path) || empty($CFG->backuptempdir)) {
++            return $path;
++        }
++
++        $normalisedpath = str_replace('\\', '/', $path);
++        $backuptempdir = rtrim(str_replace('\\', '/', $CFG->backuptempdir), '/') . '/';
++
++        if ($backuptempdir !== '/' && strpos($normalisedpath, $backuptempdir) === 0) {
++            return substr($normalisedpath, strlen($backuptempdir));
++        }
++        return $path;
++    }
++
++    /**
++     * Checks if the given path is absolute (both unix and windows paths are supported).
++     *
++     * @param string $path The path to check.
++     * @return bool
++     */
++    public static function is_absolute_path($path) {
++        if ($path === '' || $path === null) {
++            return false;
++        }
++        if ($path[0] === '/' || $path[0] === '\\') {
++            return true;
++        }
++        // Windows drive letter (c:/ or c:\).
++        if (preg_match('/^[a-zA-Z]:[\/\\\\]/', $path)) {
++            return true;
++        }
++        return false;
++    }
++
+     /**
+      * Close the logger resources (file handle) if still open.
+      *
+diff --git a/public/backup/util/loggers/tests/logger_test.php b/public/backup/util/loggers/tests/logger_test.php
+index 6cb5b54a4bc..a54ae8843ec 100644
+--- a/public/backup/util/loggers/tests/logger_test.php
++++ b/public/backup/util/loggers/tests/logger_test.php
+@@ -360,6 +360,81 @@ final class logger_test extends \basic_testcase {
+         // Remove the test dir and any content
+         @remove_dir(dirname($file));
+     }
++
++    /**
++     * Test that file_logger serializes paths relative to $CFG->backuptempdir and
++     * rebuilds them using the current backup temp dir on wakeup.
++     *
++     * @covers \file_logger::__sleep
++     * @covers \file_logger::__wakeup
++     */
++    public function test_file_logger_serialization(): void {
++        global $CFG;
++
++        $this->resetAfterTest();
++
++        $backuptempdir = make_backup_temp_directory('');
++        $file = $backuptempdir . '/test_file_logger_serialization.log';
++        @unlink($file);
++
++        // Logger living in $CFG->backuptempdir is serialized with a relative path (just the file name).
++        $lo = new file_logger(backup::LOG_ERROR, true, true, $file);
++        $this->assertSame($file, $lo->get_fullpath());
++        $serialized = serialize($lo);
++        $this->assertStringNotContainsString($backuptempdir, $serialized);
++        $this->assertStringContainsString('test_file_logger_serialization.log', $serialized);
++
++        // Unserializing rebuilds the full path using the current backup temp dir.
++        $lo2 = unserialize($serialized);
++        $this->assertInstanceOf(file_logger::class, $lo2);
++        $this->assertSame($file, $lo2->get_fullpath());
++        $this->assertTrue($lo2->process('testing serialized file_logger', backup::LOG_ERROR));
++        $lo2->close();
++        $this->assertStringContainsString('testing serialized file_logger', file_get_contents($file));
++        @unlink($file);
++
++        // If the backup temp dir changes, the path is rebuilt pointing to the new one.
++        $newbackuptempdir = $CFG->tempdir . '/newbackuptempdir';
++        $CFG->backuptempdir = $newbackuptempdir;
++        $lo3 = unserialize($serialized);
++        $this->assertSame($newbackuptempdir . '/test_file_logger_serialization.log', $lo3->get_fullpath());
++        $this->assertTrue($lo3->process('testing moved file_logger', backup::LOG_ERROR));
++        $lo3->close();
++        $this->assertFileExists($newbackuptempdir . '/test_file_logger_serialization.log');
++
++        // Legacy serialized loggers (absolute path to a no longer existing dir) are still handled.
++        $legacy = str_replace(
++            's:' . strlen('test_file_logger_serialization.log') . ':"test_file_logger_serialization.log"',
++            's:' . strlen('/non/existing/dir/legacy.log') . ':"/non/existing/dir/legacy.log"',
++            $serialized
++        );
++        $lo4 = unserialize($legacy);
++        $this->assertSame($newbackuptempdir . '/legacy.log', $lo4->get_fullpath());
++        $lo4->close();
++
++        // Relative paths are never allowed to escape from the backup temp dir.
++        $escaping = str_replace(
++            's:' . strlen('test_file_logger_serialization.log') . ':"test_file_logger_serialization.log"',
++            's:' . strlen('../../escaping.log') . ':"../../escaping.log"',
++            $serialized
++        );
++        $lo5 = unserialize($escaping);
++        $this->assertSame($newbackuptempdir . '/escaping.log', $lo5->get_fullpath());
++        $lo5->close();
++        @remove_dir($newbackuptempdir);
++
++        // Loggers outside $CFG->backuptempdir (extra file loggers) keep their absolute path.
++        $CFG->backuptempdir = $backuptempdir;
++        check_dir_exists($CFG->tempdir . '/test');
++        $file = $CFG->tempdir . '/test/test_file_logger_extra.log';
++        $lo6 = new file_logger(backup::LOG_ERROR, true, true, $file);
++        $serialized = serialize($lo6);
++        $this->assertStringContainsString($file, $serialized);
++        $lo7 = unserialize($serialized);
++        $this->assertSame($file, $lo7->get_fullpath());
++        $lo7->close();
++        @remove_dir($CFG->tempdir . '/test');
++    }
+ }
+ 
+ 

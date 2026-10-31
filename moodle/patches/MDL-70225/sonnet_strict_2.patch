@@ -1,0 +1,130 @@
+diff --git a/public/search/engine/simpledb/classes/engine.php b/public/search/engine/simpledb/classes/engine.php
+index e2ab53558c2..145432a1ccb 100644
+--- a/public/search/engine/simpledb/classes/engine.php
++++ b/public/search/engine/simpledb/classes/engine.php
+@@ -128,29 +128,29 @@ class engine extends \core_search\engine {
+ 
+         // And finally the main query after applying all AND filters.
+         if (!empty($filters->q)) {
++            $terms = $this->get_search_terms($filters->q);
++            if (empty($terms)) {
++                return [];
++            }
+             switch ($DB->get_dbfamily()) {
+                 case 'postgres':
++                    // Every term must match (AND) as the start of a word.
++                    $tsquery = implode(' & ', array_map(fn($term) => $term . ':*', $terms));
+                     $ands[] = "(" .
+-                        "to_tsvector('simple', title) @@ plainto_tsquery('simple', ?) OR ".
+-                        "to_tsvector('simple', content) @@ plainto_tsquery('simple', ?) OR ".
+-                        "to_tsvector('simple', description1) @@ plainto_tsquery('simple', ?) OR ".
+-                        "to_tsvector('simple', description2) @@ plainto_tsquery('simple', ?)".
++                        "to_tsvector('simple', title) @@ to_tsquery('simple', ?) OR ".
++                        "to_tsvector('simple', content) @@ to_tsquery('simple', ?) OR ".
++                        "to_tsvector('simple', description1) @@ to_tsquery('simple', ?) OR ".
++                        "to_tsvector('simple', description2) @@ to_tsquery('simple', ?)".
+                         ")";
+-                    $params[] = $filters->q;
+-                    $params[] = $filters->q;
+-                    $params[] = $filters->q;
+-                    $params[] = $filters->q;
++                    $params[] = $tsquery;
++                    $params[] = $tsquery;
++                    $params[] = $tsquery;
++                    $params[] = $tsquery;
+                     break;
+                 case 'mysql':
+                     if ($DB->is_fulltext_search_supported()) {
+-                        $ands[] = "MATCH (title, content, description1, description2) AGAINST (?)";
+-                        $params[] = $filters->q;
+-
+-                        // Sorry for the hack, but it does not seem that we will have a solution for
+-                        // this soon (https://bugs.mysql.com/bug.php?id=78485).
+-                        if ($filters->q === '*') {
+-                            return array();
+-                        }
++                        $ands[] = "MATCH (title, content, description1, description2) AGAINST (? IN BOOLEAN MODE)";
++                        $params[] = implode(' ', array_map(fn($term) => '+' . $term . '*', $terms));
+                     } else {
+                         // Clumsy version for mysql versions with no fulltext support.
+                         list($queryand, $queryparams) = $this->get_simple_query($filters->q);
+@@ -161,10 +161,7 @@ class engine extends \core_search\engine {
+                 case 'mssql':
+                     if ($DB->is_fulltext_search_supported()) {
+                         $ands[] = "CONTAINS ((title, content, description1, description2), ?)";
+-                        // Special treatment for double quotes:
+-                        // - Puntuation is ignored so we can get rid of them.
+-                        // - Phrases should be enclosed in double quotation marks.
+-                        $params[] = '"' . str_replace('"', '', $filters->q) . '"';
++                        $params[] = implode(' AND ', array_map(fn($term) => '"' . $term . '*"', $terms));
+                     } else {
+                         // Clumsy version for mysql versions with no fulltext support.
+                         list($queryand, $queryparams) = $this->get_simple_query($filters->q);
+@@ -331,32 +328,50 @@ class engine extends \core_search\engine {
+         return $this->totalresults;
+     }
+ 
++    /**
++     * Splits a query string into search terms (words), removing punctuation and quotes.
++     *
++     * @param string $q The query string
++     * @return string[] List of terms
++     */
++    protected function get_search_terms(string $q): array {
++        $terms = preg_split('/[^\p{L}\p{N}_]+/u', $q, -1, PREG_SPLIT_NO_EMPTY);
++        return $terms ?: [];
++    }
++
+     /**
+      * Returns the default query for db engines.
+      *
++     * Every term of the query must match (AND) the start of a word in any of the searchable fields.
++     *
+      * @param string $q The query string
+      * @return array SQL string and params list
+      */
+     protected function get_simple_query($q) {
+         global $DB;
+ 
+-        $sql = '(' .
+-            $DB->sql_like('title', '?', false, false) . ' OR ' .
+-            $DB->sql_like('content', '?', false, false) . ' OR ' .
+-            $DB->sql_like('description1', '?', false, false) . ' OR ' .
+-            $DB->sql_like('description2', '?', false, false) .
+-            ')';
+-
+-        // Remove single and double quotes from the query.
+-        $q = str_replace(['"', "'"], '', $q);
+-        $params = [
+-            '%' . $q . '%',
+-            '%' . $q . '%',
+-            '%' . $q . '%',
+-            '%' . $q . '%'
+-        ];
+-
+-        return array($sql, $params);
++        $terms = $this->get_search_terms($q);
++        if (empty($terms)) {
++            return ['1 = 0', []];
++        }
++
++        $fields = ['title', 'content', 'description1', 'description2'];
++        $termsqls = [];
++        $params = [];
++        foreach ($terms as $term) {
++            $like = $DB->sql_like_escape($term);
++            $fieldsqls = [];
++            foreach ($fields as $field) {
++                // Match the term at the start of the field or at the start of any word.
++                $fieldsqls[] = $DB->sql_like($field, '?', false, false) . ' OR ' .
++                    $DB->sql_like($field, '?', false, false);
++                $params[] = $like . '%';
++                $params[] = '% ' . $like . '%';
++            }
++            $termsqls[] = '(' . implode(' OR ', $fieldsqls) . ')';
++        }
++
++        return ['(' . implode(' AND ', $termsqls) . ')', $params];
+     }
+ 
+     /**

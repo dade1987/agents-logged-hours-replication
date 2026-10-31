@@ -1,0 +1,115 @@
+diff --git a/mysql-test/main/func_json.result b/mysql-test/main/func_json.result
+index dd40304f..538eaeba 100644
+--- a/mysql-test/main/func_json.result
++++ b/mysql-test/main/func_json.result
+@@ -1805,5 +1805,42 @@ SELECT JSON_EXISTS('[[[[[Y[[[[[[[[[[[[[[[[[[Vn]]]]]]]]]]]]]],]]:]]]](', '$[0 to
+ je
+ NULL
+ #
++# MDEV-39817 JSON_ARRAYAGG() returns garbage because of off-by-one error
++#
++set session group_concat_max_len = 9;
++create temporary table t (c varchar(20) character set latin1);
++insert into t values ('ab'), ('cd'), ('ef');
++select json_arrayagg(c order by c) from t;
++json_arrayagg(c order by c)
++["ab","cd"]
++Warnings:
++Warning	1260	Row 3 was cut by JSON_ARRAYAGG()
++set session group_concat_max_len = 10;
++select json_arrayagg(c order by c) from t;
++json_arrayagg(c order by c)
++["ab","cd"]
++Warnings:
++Warning	1260	Row 3 was cut by JSON_ARRAYAGG()
++set session group_concat_max_len = 11;
++select json_arrayagg(c order by c) from t;
++json_arrayagg(c order by c)
++["ab","cd"]
++Warnings:
++Warning	1260	Row 3 was cut by JSON_ARRAYAGG()
++set session group_concat_max_len = 12;
++select json_arrayagg(c order by c) from t;
++json_arrayagg(c order by c)
++["ab","cd",""]
++Warnings:
++Warning	1260	Row 3 was cut by JSON_ARRAYAGG()
++set session group_concat_max_len = 13;
++select json_arrayagg(c order by c) from t;
++json_arrayagg(c order by c)
++["ab","cd","e"]
++Warnings:
++Warning	1260	Row 3 was cut by JSON_ARRAYAGG()
++drop temporary table t;
++set session group_concat_max_len = default;
++#
+ # End of 10.6 tests
+ #
+diff --git a/mysql-test/main/func_json.test b/mysql-test/main/func_json.test
+index 842ce772..b4fbf71a 100644
+--- a/mysql-test/main/func_json.test
++++ b/mysql-test/main/func_json.test
+@@ -1256,6 +1256,31 @@ SELECT JSON_EXISTS(CONCAT('[', REPEAT('[', 4000), 'Y', REPEAT(']', 4000), ', 1]'
+ SELECT JSON_EXISTS('[[[[[Y[[[[n[[[[[[[[[[[n[[[Vn]]]]]]]]]]]]]],]]:]]]](', '$[0 to rrrrrRR-1]') as je;
+ SELECT JSON_EXISTS('[[[[[Y[[[[[[[[[[[[[[[[[[Vn]]]]]]]]]]]]]],]]:]]]](', '$[0 to rrrrRR-1]') as je;
+ 
++--echo #
++--echo # MDEV-39817 JSON_ARRAYAGG() returns garbage because of off-by-one error
++--echo #
++
++set session group_concat_max_len = 9;
++create temporary table t (c varchar(20) character set latin1);
++insert into t values ('ab'), ('cd'), ('ef');
++--disable_cursor_protocol
++--disable_view_protocol
++--disable_ps2_protocol
++select json_arrayagg(c order by c) from t;
++set session group_concat_max_len = 10;
++select json_arrayagg(c order by c) from t;
++set session group_concat_max_len = 11;
++select json_arrayagg(c order by c) from t;
++set session group_concat_max_len = 12;
++select json_arrayagg(c order by c) from t;
++set session group_concat_max_len = 13;
++select json_arrayagg(c order by c) from t;
++--enable_ps2_protocol
++--enable_view_protocol
++--enable_cursor_protocol
++drop temporary table t;
++set session group_concat_max_len = default;
++
+ --echo #
+ --echo # End of 10.6 tests
+ --echo #
+diff --git a/sql/item_jsonfunc.cc b/sql/item_jsonfunc.cc
+index cf5bb9be..3e6bd743 100644
+--- a/sql/item_jsonfunc.cc
++++ b/sql/item_jsonfunc.cc
+@@ -4101,6 +4101,27 @@ void Item_func_json_arrayagg::cut_max_length(String *result,
+     return;
+   }
+ 
++  /*
++    The last appended value is a JSON string. We cut it to max_length-1
++    bytes and then append the closing quote, so that the result stays
++    a valid JSON string.
++
++    However, there must be enough room after the previous content
++    (old_length) for the separator, the opening quote and the closing
++    quote. Otherwise max_length-1 could be smaller than old_length, and
++    Item_func_group_concat::cut_max_length() would be called with
++    an end pointer that precedes the start pointer, which results in
++    garbage (an arbitrarily long, uninitialized result).
++    In that case drop the whole last value, including the separator.
++  */
++  size_t min_length= (size_t) old_length +
++                     (old_length ? separator->length() : 0) + 2;
++  if ((size_t) max_length < min_length)
++  {
++    result->length(old_length);
++    return;
++  }
++
+   Item_func_group_concat::cut_max_length(result, old_length, max_length-1);
+   result->append('"');
+ }

@@ -1,0 +1,27 @@
+diff --git a/sql/sql_acl.cc b/sql/sql_acl.cc
+index 70984625..161229d7 100644
+--- a/sql/sql_acl.cc
++++ b/sql/sql_acl.cc
+@@ -14423,9 +14423,19 @@ bool Sql_cmd_grant::should_bypass_revoke_deny(THD *thd)
+   TABLE_LIST tl;
+   tl.init_one_table(&MYSQL_SCHEMA_NAME, &MYSQL_TABLE_NAME[USER_TABLE],
+                     NULL, TL_WRITE);
+-  return !check_access(thd, UPDATE_ACL, tl.db.str, &tl.grant.privilege,
+-                       &tl.grant.m_internal, 0, 1) &&
+-         !check_grant(thd, UPDATE_ACL, &tl, FALSE, 1, TRUE);
++  if (check_access(thd, UPDATE_ACL, tl.db.str, &tl.grant.privilege,
++                   &tl.grant.m_internal, 0, 1) ||
++      check_grant(thd, UPDATE_ACL, &tl, FALSE, 1, TRUE))
++    return false;
++
++  /*
++    check_grant() also succeeds when the user only has UPDATE on some
++    columns (the column check is deferred). Column-level UPDATE on
++    unrelated columns must not be enough, so require UPDATE on the whole
++    table (db/table/global level).
++  */
++  return (tl.grant.privilege & UPDATE_ACL) == UPDATE_ACL &&
++         tl.grant.privilege.denied_privs(UPDATE_ACL) == NO_ACL;
+ }
+ 
+ 

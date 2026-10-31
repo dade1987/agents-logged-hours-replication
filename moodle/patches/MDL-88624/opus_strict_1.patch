@@ -1,0 +1,57 @@
+diff --git a/public/mod/h5pactivity/classes/local/manager.php b/public/mod/h5pactivity/classes/local/manager.php
+index acb0a063802..fc58ee2817d 100644
+--- a/public/mod/h5pactivity/classes/local/manager.php
++++ b/public/mod/h5pactivity/classes/local/manager.php
+@@ -318,7 +318,7 @@ class manager {
+         }
+ 
+         $usersjoin = $this->get_active_users_join();
+-        $sql = "SELECT COUNT(*)
++        $sql = "SELECT COUNT(DISTINCT ha.id)
+                  FROM {user} u $usersjoin->joins
+                  WHERE $usersjoin->wheres";
+         $params = array_merge($usersjoin->params);
+diff --git a/public/mod/h5pactivity/tests/local/manager_test.php b/public/mod/h5pactivity/tests/local/manager_test.php
+index 77a99eb3af6..3f183c0b78f 100644
+--- a/public/mod/h5pactivity/tests/local/manager_test.php
++++ b/public/mod/h5pactivity/tests/local/manager_test.php
+@@ -601,6 +601,39 @@ final class manager_test extends \advanced_testcase {
+         $this->assertEquals(9, $manager->count_attempts(groups: [$g1->id => $g1, $g2->id => $g2]));
+     }
+ 
++    /**
++     * Test count_attempts when users are enrolled using several enrolment methods.
++     */
++    public function test_count_attempts_multiple_enrolments(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $this->setAdminUser();
++
++        $course = $this->getDataGenerator()->create_course();
++        $activity = $this->getDataGenerator()->create_module('h5pactivity', ['course' => $course]);
++        $manager = manager::create_from_instance($activity);
++
++        // Enable self enrolment in the course.
++        $selfplugin = enrol_get_plugin('self');
++        $selfinstance = $DB->get_record('enrol', ['courseid' => $course->id, 'enrol' => 'self'], '*', MUST_EXIST);
++        $selfplugin->update_status($selfinstance, ENROL_INSTANCE_ENABLED);
++        $studentroleid = $DB->get_field('role', 'id', ['shortname' => 'student']);
++
++        // User enrolled with manual and self enrolment methods.
++        $user1 = $this->getDataGenerator()->create_and_enrol($course, 'student');
++        $selfplugin->enrol_user($selfinstance, $user1->id, $studentroleid);
++        $this->generate_fake_attempts($activity, $user1, 1);
++
++        // User enrolled with manual enrolment only.
++        $user2 = $this->getDataGenerator()->create_and_enrol($course, 'student');
++        $this->generate_fake_attempts($activity, $user2, 1);
++
++        $this->assertEquals(3, $manager->count_attempts($user1->id));
++        $this->assertEquals(3, $manager->count_attempts($user2->id));
++        $this->assertEquals(6, $manager->count_attempts());
++    }
++
+     /**
+      * Test static count_attempts of all active participants.
+      *

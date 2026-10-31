@@ -1,0 +1,53 @@
+diff --git a/client/mysqltest.cc b/client/mysqltest.cc
+index d43b1c79..3ff5d81c 100644
+--- a/client/mysqltest.cc
++++ b/client/mysqltest.cc
+@@ -5340,7 +5340,7 @@ void do_sync_with_master(struct st_command *command)
+   long offset= 0;
+   char *p= command->first_argument;
+   const char *offset_start= p;
+-  char *start, *buff= 0;
++  char *start, *buff= 0, *buff_start= 0;
+   start= const_cast<char*>("");
+ 
+   if (*offset_start)
+@@ -5358,15 +5358,19 @@ void do_sync_with_master(struct st_command *command)
+       p++;
+       while (*p && my_isspace(charset_info, *p))
+         p++;
+-      start= buff= (char*)my_malloc(PSI_NOT_INSTRUMENTED, strlen(p)+1,
+-                                    MYF(MY_WME|MY_FAE));
+-      get_string(&buff, &p, command);
++      buff_start= buff= (char*)my_malloc(PSI_NOT_INSTRUMENTED, strlen(p)+1,
++                                         MYF(MY_WME|MY_FAE));
++      /*
++        get_string() returns the value of a $variable if the argument
++        was one, otherwise a pointer into buff_start
++      */
++      start= get_string(&buff, &p, command);
+     }
+     command->last_argument= p;
+   }
+   do_sync_with_master2(command, offset, start);
+-  if (buff)
+-    my_free(start);
++  if (buff_start)
++    my_free(buff_start);
+   return;
+ }
+ 
+diff --git a/mysql-test/suite/rpl/t/rpl_gtid_mdev4485.test b/mysql-test/suite/rpl/t/rpl_gtid_mdev4485.test
+index 6c37ceaf..11d81d9b 100644
+--- a/mysql-test/suite/rpl/t/rpl_gtid_mdev4485.test
++++ b/mysql-test/suite/rpl/t/rpl_gtid_mdev4485.test
+@@ -31,7 +31,9 @@ drop table t2;
+ --save_master_pos
+ 
+ --connection server_3
+---sync_with_master 0,'m2'
++# MDEV-40996: connection name given as a $variable
++--let $connection= m2
++--sync_with_master 0, $connection
+ set default_master_connection = 'm2';
+ --source include/stop_slave.inc
+ RESET SLAVE ALL;

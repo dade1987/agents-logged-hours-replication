@@ -1,0 +1,1126 @@
+diff --git a/public/lang/en/error.php b/public/lang/en/error.php
+index 4b7568610f0..e3fb8a1f040 100644
+--- a/public/lang/en/error.php
++++ b/public/lang/en/error.php
+@@ -500,6 +500,9 @@ $string['notownerofkey'] = 'You are not owner of this key';
+ $string['nousers'] = 'No such user!';
+ $string['oauth1accesstoken'] = 'OAuth 1.0 error: We did not obtain the access token.';
+ $string['oauth1requesttoken'] = 'OAuth 1.0 error: We did not obtain the request token - the service provider may be temporarily down.';
++$string['oauth2clientnotrevoked'] = 'The OAuth 2 client must be revoked before it can be deleted.';
++$string['oauth2clientsecretlimit'] = 'The OAuth 2 client already has the maximum number of active secrets ({$a}). Revoke an existing secret before generating a new one.';
++$string['oauth2invalidredirecturi'] = 'Invalid OAuth 2 redirect URI: {$a}. Redirect URIs must be absolute and use HTTPS, unless they point to a loopback address (localhost).';
+ $string['oauth2upgradetokenerror'] = 'Could not upgrade OAuth 2 token. HTTP status for remote endpoint: {$a}';
+ $string['oauth2refreshtokenerror'] = 'Could not refresh OAuth 2 token. HTTP status for remote endpoint: {$a}';
+ $string['oauth2refreshtokentaskerror'] = 'Could not refresh OAuth 2 token for one or more issuers. View task output for details.';
+diff --git a/public/lib/classes/oauth2/server/client_manager.php b/public/lib/classes/oauth2/server/client_manager.php
+new file mode 100644
+index 00000000000..242e1fb9d04
+--- /dev/null
++++ b/public/lib/classes/oauth2/server/client_manager.php
+@@ -0,0 +1,601 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\oauth2\server;
++
++use core\clock;
++use core\exception\moodle_exception;
++use core\oauth2\server\entity\access_token_entity;
++use core\oauth2\server\entity\auth_code_entity;
++use core\oauth2\server\entity\client_entity;
++use core\oauth2\server\entity\refresh_token_entity;
++
++/**
++ * Manager for OAuth2 server clients, their secrets and redirect URIs.
++ *
++ * This class is intended to be loaded through dependency injection:
++ *
++ *     $manager = \core\di::get(\core\oauth2\server\client_manager::class);
++ *
++ * @package    core
++ * @copyright  2026 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class client_manager {
++    /** @var int The maximum number of active (non-revoked, non-expired) secrets a single client may have. */
++    public const int MAX_ACTIVE_SECRETS = 2;
++
++    /** @var int The default lifetime of a generated client secret, in seconds. */
++    public const int DEFAULT_SECRET_LIFETIME = YEARSECS;
++
++    /** @var string Clients table. */
++    protected const string TABLE_CLIENTS = 'oauth2_server_clients';
++
++    /** @var string Client secrets table. */
++    protected const string TABLE_SECRETS = 'oauth2_server_client_secrets';
++
++    /** @var string Client redirect URIs table. */
++    protected const string TABLE_REDIRECT_URIS = 'oauth2_server_client_redirect_uris';
++
++    /** @var string Access tokens table. */
++    protected const string TABLE_ACCESS_TOKENS = 'oauth2_server_client_access_tokens';
++
++    /** @var string Refresh tokens table. */
++    protected const string TABLE_REFRESH_TOKENS = 'oauth2_server_client_refresh_tokens';
++
++    /** @var string Authorisation codes table. */
++    protected const string TABLE_AUTH_CODES = 'oauth2_server_client_auth_codes';
++
++    /** @var string Granted scopes table. */
++    protected const string TABLE_GRANTED_SCOPES = 'oauth2_server_client_granted_scopes';
++
++    /**
++     * Constructor.
++     *
++     * @param \moodle_database $db The database instance.
++     * @param clock $clock The clock instance.
++     */
++    public function __construct(
++        /** @var \moodle_database The database instance */
++        protected readonly \moodle_database $db,
++        /** @var clock The clock instance */
++        protected readonly clock $clock,
++    ) {
++    }
++
++    // Clients.
++
++    /**
++     * Create a new client.
++     *
++     * @param string $name The human-readable name of the client.
++     * @param \core\context $ownercontext The context which owns the client.
++     * @param bool $isconfidential Whether the client is confidential (can securely store a secret).
++     * @param string|null $description An optional description.
++     * @param string[] $redirecturis The redirect URIs to register for the client.
++     * @return client_entity
++     */
++    public function create_client(
++        string $name,
++        \core\context $ownercontext,
++        bool $isconfidential = true,
++        ?string $description = null,
++        array $redirecturis = [],
++    ): client_entity {
++        // Validate all redirect URIs before creating anything.
++        foreach ($redirecturis as $uri) {
++            $this->require_valid_redirect_uri($uri);
++        }
++
++        $transaction = $this->db->start_delegated_transaction();
++
++        $record = (object) [
++            'name' => $name,
++            'description' => $description,
++            'clientidentifier' => $this->generate_client_identifier(),
++            'ownercontext' => $ownercontext->id,
++            'status' => client_entity::STATUS_ACTIVE,
++            'isconfidential' => (int) $isconfidential,
++            'timecreated' => $this->clock->time(),
++            'timemodified' => $this->clock->time(),
++        ];
++        $record->id = $this->db->insert_record(self::TABLE_CLIENTS, $record);
++
++        foreach (array_unique($redirecturis) as $uri) {
++            $this->db->insert_record(self::TABLE_REDIRECT_URIS, (object) [
++                'clientidentifier' => $record->clientidentifier,
++                'uri' => $uri,
++            ]);
++        }
++
++        $transaction->allow_commit();
++
++        return $this->get_client_by_id($record->id);
++    }
++
++    /**
++     * Fetch a client by its database ID.
++     *
++     * @param int $id The client ID.
++     * @return client_entity|null The client, or null if it does not exist.
++     */
++    public function get_client_by_id(int $id): ?client_entity {
++        $record = $this->db->get_record(self::TABLE_CLIENTS, ['id' => $id]);
++
++        return $record ? $this->create_entity($record) : null;
++    }
++
++    /**
++     * Fetch a client by its public client identifier.
++     *
++     * @param string $clientidentifier The client identifier.
++     * @return client_entity|null The client, or null if it does not exist.
++     */
++    public function get_client_by_identifier(string $clientidentifier): ?client_entity {
++        $record = $this->db->get_record(self::TABLE_CLIENTS, ['clientidentifier' => $clientidentifier]);
++
++        return $record ? $this->create_entity($record) : null;
++    }
++
++    /**
++     * Update the administrative metadata of a client.
++     *
++     * Only the name and description may be changed. Any other keys are ignored.
++     *
++     * @param string $clientidentifier The client identifier.
++     * @param array $updates Associative array of field => value (only 'name' and 'description' are honoured).
++     * @return client_entity The updated client.
++     * @throws \dml_missing_record_exception If the client does not exist.
++     */
++    public function update_client(string $clientidentifier, array $updates): client_entity {
++        $record = $this->get_client_record($clientidentifier);
++
++        $allowedfields = ['name', 'description'];
++        $filteredupdates = array_intersect_key($updates, array_flip($allowedfields));
++
++        if (!empty($filteredupdates)) {
++            if (array_key_exists('name', $filteredupdates) && trim((string) $filteredupdates['name']) === '') {
++                throw new \core\exception\coding_exception('The OAuth2 client name cannot be empty');
++            }
++            foreach ($filteredupdates as $field => $value) {
++                $record->{$field} = $value;
++            }
++            $record->timemodified = $this->clock->time();
++            $this->db->update_record(self::TABLE_CLIENTS, $record);
++        }
++
++        return $this->create_entity($record);
++    }
++
++    /**
++     * Revoke a client.
++     *
++     * Revoking a client also immediately revokes all of its active secrets, access tokens, refresh tokens and
++     * authorisation codes, fully cutting off access.
++     *
++     * @param string $clientidentifier The client identifier.
++     * @throws \dml_missing_record_exception If the client does not exist.
++     */
++    public function revoke_client(string $clientidentifier): void {
++        $record = $this->get_client_record($clientidentifier);
++
++        $transaction = $this->db->start_delegated_transaction();
++
++        $this->db->update_record(self::TABLE_CLIENTS, (object) [
++            'id' => $record->id,
++            'status' => client_entity::STATUS_REVOKED,
++            'timemodified' => $this->clock->time(),
++        ]);
++
++        // Revoke all secrets.
++        $this->db->set_field(
++            self::TABLE_SECRETS,
++            'revoked',
++            client_entity::SECRET_REVOKED_YES,
++            ['clientidentifier' => $clientidentifier],
++        );
++
++        // Revoke refresh tokens linked to this client's access tokens.
++        $this->db->set_field_select(
++            self::TABLE_REFRESH_TOKENS,
++            'revoked',
++            refresh_token_entity::REVOKED_YES,
++            'accesstokenidentifier IN (SELECT identifier FROM {' . self::TABLE_ACCESS_TOKENS . '}
++                                        WHERE clientidentifier = :clientidentifier)',
++            ['clientidentifier' => $clientidentifier],
++        );
++
++        // Revoke access tokens.
++        $this->db->set_field(
++            self::TABLE_ACCESS_TOKENS,
++            'revoked',
++            access_token_entity::REVOKED_YES,
++            ['clientidentifier' => $clientidentifier],
++        );
++
++        // Revoke authorisation codes.
++        $this->db->set_field(
++            self::TABLE_AUTH_CODES,
++            'revoked',
++            auth_code_entity::REVOKED_YES,
++            ['clientidentifier' => $clientidentifier],
++        );
++
++        $transaction->allow_commit();
++    }
++
++    /**
++     * Reactivate a previously revoked client.
++     *
++     * Only the client record itself is restored. Previously revoked secrets and tokens remain revoked.
++     *
++     * @param string $clientidentifier The client identifier.
++     * @throws \dml_missing_record_exception If the client does not exist.
++     */
++    public function reactivate_client(string $clientidentifier): void {
++        $record = $this->get_client_record($clientidentifier);
++
++        if ((int) $record->status === client_entity::STATUS_ACTIVE) {
++            return;
++        }
++
++        $this->db->update_record(self::TABLE_CLIENTS, (object) [
++            'id' => $record->id,
++            'status' => client_entity::STATUS_ACTIVE,
++            'timemodified' => $this->clock->time(),
++        ]);
++    }
++
++    /**
++     * Permanently delete a client and all associated data.
++     *
++     * The client must already be revoked.
++     *
++     * @param string $clientidentifier The client identifier.
++     * @throws \dml_missing_record_exception If the client does not exist.
++     * @throws moodle_exception If the client has not been revoked.
++     */
++    public function delete_client(string $clientidentifier): void {
++        $record = $this->get_client_record($clientidentifier);
++
++        if ((int) $record->status !== client_entity::STATUS_REVOKED) {
++            throw new moodle_exception('oauth2clientnotrevoked', 'error');
++        }
++
++        $transaction = $this->db->start_delegated_transaction();
++
++        $params = ['clientidentifier' => $clientidentifier];
++
++        $this->db->delete_records_select(
++            self::TABLE_REFRESH_TOKENS,
++            'accesstokenidentifier IN (SELECT identifier FROM {' . self::TABLE_ACCESS_TOKENS . '}
++                                        WHERE clientidentifier = :clientidentifier)',
++            $params,
++        );
++        $this->db->delete_records(self::TABLE_ACCESS_TOKENS, $params);
++        $this->db->delete_records(self::TABLE_AUTH_CODES, $params);
++        $this->db->delete_records(self::TABLE_GRANTED_SCOPES, $params);
++        $this->db->delete_records(self::TABLE_SECRETS, $params);
++        $this->db->delete_records(self::TABLE_REDIRECT_URIS, $params);
++        $this->db->delete_records(self::TABLE_CLIENTS, ['id' => $record->id]);
++
++        $transaction->allow_commit();
++    }
++
++    // Secrets.
++
++    /**
++     * Generate a new secret for a client.
++     *
++     * The plain-text secret is returned only once; only its hash is stored. A client may have at most
++     * {@see self::MAX_ACTIVE_SECRETS} active (non-revoked, non-expired) secrets at any one time.
++     *
++     * @param string $clientidentifier The client identifier.
++     * @param int|null $expirytime The expiry timestamp of the secret. Defaults to now + {@see self::DEFAULT_SECRET_LIFETIME}.
++     * @return string The plain-text secret.
++     * @throws \dml_missing_record_exception If the client does not exist.
++     * @throws moodle_exception If the client already has the maximum number of active secrets.
++     */
++    public function generate_client_secret(string $clientidentifier, ?int $expirytime = null): string {
++        $record = $this->get_client_record($clientidentifier);
++        $now = $this->clock->time();
++
++        if ((int) $record->status !== client_entity::STATUS_ACTIVE) {
++            throw new \core\exception\coding_exception('Cannot generate a secret for a revoked OAuth2 client');
++        }
++
++        if ($expirytime !== null && $expirytime <= $now) {
++            throw new \core\exception\coding_exception('The OAuth2 client secret expiry time must be in the future');
++        }
++
++        if ($this->count_active_client_secrets($clientidentifier) >= self::MAX_ACTIVE_SECRETS) {
++            throw new moodle_exception('oauth2clientsecretlimit', 'error', '', self::MAX_ACTIVE_SECRETS);
++        }
++
++        $secret = bin2hex(random_bytes(32));
++
++        $this->db->insert_record(self::TABLE_SECRETS, (object) [
++            'clientidentifier' => $clientidentifier,
++            'secret' => password_hash($secret, PASSWORD_DEFAULT),
++            'expirytime' => $expirytime ?? ($now + self::DEFAULT_SECRET_LIFETIME),
++            'revoked' => client_entity::SECRET_REVOKED_NO,
++            'timecreated' => $now,
++        ]);
++
++        return $secret;
++    }
++
++    /**
++     * Fetch the secrets of a client.
++     *
++     * The hashed secret value is never returned.
++     *
++     * @param string $clientidentifier The client identifier.
++     * @param bool $includeinactive Whether to include revoked and expired secrets.
++     * @return \stdClass[] Secret records (id, clientidentifier, expirytime, revoked, timecreated, lastaccessed), keyed by id.
++     */
++    public function get_client_secrets(string $clientidentifier, bool $includeinactive = false): array {
++        $select = 'clientidentifier = :clientidentifier';
++        $params = ['clientidentifier' => $clientidentifier];
++
++        if (!$includeinactive) {
++            $select .= ' AND revoked = :revoked AND expirytime > :now';
++            $params['revoked'] = client_entity::SECRET_REVOKED_NO;
++            $params['now'] = $this->clock->time();
++        }
++
++        return $this->db->get_records_select(
++            self::TABLE_SECRETS,
++            $select,
++            $params,
++            'timecreated DESC, id DESC',
++            'id, clientidentifier, expirytime, revoked, timecreated, lastaccessed',
++        );
++    }
++
++    /**
++     * Count the active (non-revoked, non-expired) secrets of a client.
++     *
++     * @param string $clientidentifier The client identifier.
++     * @return int
++     */
++    public function count_active_client_secrets(string $clientidentifier): int {
++        return $this->db->count_records_select(
++            self::TABLE_SECRETS,
++            'clientidentifier = :clientidentifier AND revoked = :revoked AND expirytime > :now',
++            [
++                'clientidentifier' => $clientidentifier,
++                'revoked' => client_entity::SECRET_REVOKED_NO,
++                'now' => $this->clock->time(),
++            ],
++        );
++    }
++
++    /**
++     * Revoke a client secret.
++     *
++     * @param string $clientidentifier The client identifier the secret belongs to.
++     * @param int $secretid The secret ID.
++     * @throws \dml_missing_record_exception If the secret does not exist for the given client.
++     */
++    public function revoke_client_secret(string $clientidentifier, int $secretid): void {
++        $secret = $this->db->get_record(
++            self::TABLE_SECRETS,
++            ['id' => $secretid, 'clientidentifier' => $clientidentifier],
++            'id, revoked',
++            MUST_EXIST,
++        );
++
++        if ((int) $secret->revoked === client_entity::SECRET_REVOKED_YES) {
++            return;
++        }
++
++        $this->db->set_field(self::TABLE_SECRETS, 'revoked', client_entity::SECRET_REVOKED_YES, ['id' => $secret->id]);
++    }
++
++    // Redirect URIs.
++
++    /**
++     * Fetch the redirect URIs of a client.
++     *
++     * @param string $clientidentifier The client identifier.
++     * @return string[] The redirect URIs, keyed by record id.
++     */
++    public function get_redirect_uris(string $clientidentifier): array {
++        return $this->db->get_records_menu(
++            self::TABLE_REDIRECT_URIS,
++            ['clientidentifier' => $clientidentifier],
++            'id ASC',
++            'id, uri',
++        );
++    }
++
++    /**
++     * Add a redirect URI to a client.
++     *
++     * @param string $clientidentifier The client identifier.
++     * @param string $uri The redirect URI.
++     * @return int The ID of the redirect URI record (an existing one if the URI is already registered).
++     * @throws \dml_missing_record_exception If the client does not exist.
++     * @throws moodle_exception If the redirect URI is not valid.
++     */
++    public function add_redirect_uri(string $clientidentifier, string $uri): int {
++        $this->get_client_record($clientidentifier);
++        $this->require_valid_redirect_uri($uri);
++
++        $existing = array_search($uri, $this->get_redirect_uris($clientidentifier), true);
++        if ($existing !== false) {
++            return (int) $existing;
++        }
++
++        return $this->db->insert_record(self::TABLE_REDIRECT_URIS, (object) [
++            'clientidentifier' => $clientidentifier,
++            'uri' => $uri,
++        ]);
++    }
++
++    /**
++     * Remove a redirect URI from a client.
++     *
++     * @param string $clientidentifier The client identifier.
++     * @param string $uri The redirect URI to remove (exact match).
++     * @return bool True if a redirect URI was removed.
++     */
++    public function remove_redirect_uri(string $clientidentifier, string $uri): bool {
++        $ids = array_keys($this->get_redirect_uris($clientidentifier), $uri, true);
++
++        if (empty($ids)) {
++            return false;
++        }
++
++        $this->db->delete_records_list(self::TABLE_REDIRECT_URIS, 'id', $ids);
++
++        return true;
++    }
++
++    /**
++     * Validate a redirect URI supplied in a request against those registered for a client.
++     *
++     * The URI must exactly match (no prefix or wildcard matching) one of the registered URIs and must itself be
++     * a valid redirect URI (HTTPS, or a loopback address).
++     *
++     * @param string $clientidentifier The client identifier.
++     * @param string $uri The redirect URI to validate.
++     * @return bool
++     */
++    public function validate_redirect_uri(string $clientidentifier, string $uri): bool {
++        if (!$this->is_valid_redirect_uri($uri)) {
++            return false;
++        }
++
++        return in_array($uri, $this->get_redirect_uris($clientidentifier), true);
++    }
++
++    /**
++     * Check whether a URI is acceptable as a redirect URI.
++     *
++     * The URI must be absolute, must not contain a fragment, and must use HTTPS unless its host is a
++     * loopback address (localhost, 127.0.0.0/8 or ::1), in which case HTTP is also permitted.
++     *
++     * @param string $uri The URI.
++     * @return bool
++     */
++    public function is_valid_redirect_uri(string $uri): bool {
++        if ($uri === '' || $uri !== trim($uri) || preg_match('/[\s\x00-\x1f\x7f]/', $uri)) {
++            return false;
++        }
++
++        $parts = parse_url($uri);
++        if ($parts === false || empty($parts['scheme']) || empty($parts['host'])) {
++            return false;
++        }
++
++        // Fragments are not permitted in redirect URIs (RFC 6749 section 3.1.2).
++        if (str_contains($uri, '#')) {
++            return false;
++        }
++
++        // Credentials in the URI are not permitted.
++        if (isset($parts['user']) || isset($parts['pass'])) {
++            return false;
++        }
++
++        $scheme = strtolower($parts['scheme']);
++        if ($scheme === 'https') {
++            return true;
++        }
++
++        return $scheme === 'http' && $this->is_loopback_host($parts['host']);
++    }
++
++    // Internal helpers.
++
++    /**
++     * Throw an exception if the redirect URI is not valid.
++     *
++     * @param string $uri The URI.
++     * @throws moodle_exception
++     */
++    protected function require_valid_redirect_uri(string $uri): void {
++        if (!$this->is_valid_redirect_uri($uri)) {
++            throw new moodle_exception('oauth2invalidredirecturi', 'error', '', s($uri));
++        }
++    }
++
++    /**
++     * Whether the given host is a loopback address.
++     *
++     * @param string $host The host as returned by parse_url().
++     * @return bool
++     */
++    protected function is_loopback_host(string $host): bool {
++        $host = strtolower(trim($host, '[]'));
++
++        if ($host === 'localhost') {
++            return true;
++        }
++
++        if (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
++            return str_starts_with($host, '127.');
++        }
++
++        if (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
++            return inet_pton($host) === inet_pton('::1');
++        }
++
++        return false;
++    }
++
++    /**
++     * Fetch a client record or throw.
++     *
++     * @param string $clientidentifier The client identifier.
++     * @return \stdClass
++     * @throws \dml_missing_record_exception
++     */
++    protected function get_client_record(string $clientidentifier): \stdClass {
++        return $this->db->get_record(self::TABLE_CLIENTS, ['clientidentifier' => $clientidentifier], '*', MUST_EXIST);
++    }
++
++    /**
++     * Build a client entity from a record.
++     *
++     * @param \stdClass $record The client record.
++     * @return client_entity
++     */
++    protected function create_entity(\stdClass $record): client_entity {
++        $urirecords = $this->db->get_records(
++            self::TABLE_REDIRECT_URIS,
++            ['clientidentifier' => $record->clientidentifier],
++            'id ASC',
++        );
++
++        return client_entity::create_from_record($record, $urirecords);
++    }
++
++    /**
++     * Generate a new, unique client identifier.
++     *
++     * @return string
++     */
++    protected function generate_client_identifier(): string {
++        do {
++            $identifier = bin2hex(random_bytes(16));
++        } while ($this->db->record_exists(self::TABLE_CLIENTS, ['clientidentifier' => $identifier]));
++
++        return $identifier;
++    }
++}
+diff --git a/public/lib/classes/oauth2/server/entity/client_entity.php b/public/lib/classes/oauth2/server/entity/client_entity.php
+index c29a4e98bba..e80ed3b6e59 100644
+--- a/public/lib/classes/oauth2/server/entity/client_entity.php
++++ b/public/lib/classes/oauth2/server/entity/client_entity.php
+@@ -45,6 +45,9 @@ class client_entity implements ClientEntityInterface {
+     /** @var int Client secret is revoked */
+     public const int SECRET_REVOKED_YES = 1;
+ 
++    /** @var int|null The database ID of the client */
++    protected ?int $id = null;
++
+     /** @var \core\context The owner context */
+     protected \core\context $ownercontext;
+ 
+@@ -54,6 +57,15 @@ class client_entity implements ClientEntityInterface {
+     /** @var string|null The description of the client */
+     protected ?string $description = null;
+ 
++    /**
++     * Get the database ID of the client.
++     *
++     * @return int|null
++     */
++    public function get_id(): ?int {
++        return $this->id;
++    }
++
+     /**
+      * Get the context of the client owner.
+      *
+@@ -109,6 +121,7 @@ class client_entity implements ClientEntityInterface {
+      */
+     public static function create_from_record(\stdClass $clientrecord, array $redirecturis): self {
+         $client = new self();
++        $client->id = isset($clientrecord->id) ? (int) $clientrecord->id : null;
+         $client->setIdentifier($clientrecord->clientidentifier);
+         $client->name = $clientrecord->name;
+         $client->description = $clientrecord->description;
+diff --git a/public/lib/tests/oauth2/server/client_manager_test.php b/public/lib/tests/oauth2/server/client_manager_test.php
+new file mode 100644
+index 00000000000..4a64fd5d360
+--- /dev/null
++++ b/public/lib/tests/oauth2/server/client_manager_test.php
+@@ -0,0 +1,461 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\oauth2\server;
++
++use PHPUnit\Framework\Attributes\CoversClass;
++use PHPUnit\Framework\Attributes\DataProvider;
++use core\oauth2\server\entity\access_token_entity;
++use core\oauth2\server\entity\auth_code_entity;
++use core\oauth2\server\entity\client_entity;
++use core\oauth2\server\entity\refresh_token_entity;
++use core\oauth2\server\repository\client_repository;
++
++/**
++ * Tests for {@see client_manager}.
++ *
++ * @package    core
++ * @copyright  2026 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++#[CoversClass(client_manager::class)]
++final class client_manager_test extends \advanced_testcase {
++    /**
++     * Get the manager via DI.
++     *
++     * @return client_manager
++     */
++    protected function get_manager(): client_manager {
++        return \core\di::get(client_manager::class);
++    }
++
++    /**
++     * Create a client for tests.
++     *
++     * @param array $uris Redirect URIs.
++     * @return client_entity
++     */
++    protected function create_client(array $uris = ['https://example.test/callback']): client_entity {
++        return $this->get_manager()->create_client(
++            'Test client',
++            \core\context\system::instance(),
++            true,
++            'Description',
++            $uris,
++        );
++    }
++
++    /**
++     * Insert token records for a client.
++     *
++     * @param string $clientidentifier
++     * @param string $suffix
++     */
++    protected function insert_tokens(string $clientidentifier, string $suffix = '1'): void {
++        global $DB;
++        $user = $this->getDataGenerator()->create_user();
++        $DB->insert_record('oauth2_server_client_access_tokens', (object) [
++            'identifier' => "access-{$suffix}",
++            'userid' => $user->id,
++            'clientidentifier' => $clientidentifier,
++            'scopes' => 'a b',
++            'expirytime' => time() + HOURSECS,
++            'revoked' => access_token_entity::REVOKED_NO,
++            'timecreated' => time(),
++        ]);
++        $DB->insert_record('oauth2_server_client_refresh_tokens', (object) [
++            'identifier' => "refresh-{$suffix}",
++            'accesstokenidentifier' => "access-{$suffix}",
++            'expirytime' => time() + DAYSECS,
++            'revoked' => refresh_token_entity::REVOKED_NO,
++            'timecreated' => time(),
++        ]);
++        $DB->insert_record('oauth2_server_client_auth_codes', (object) [
++            'identifier' => "code-{$suffix}",
++            'userid' => $user->id,
++            'clientidentifier' => $clientidentifier,
++            'redirecturi' => 'https://example.test/callback',
++            'scopes' => 'a',
++            'expirytime' => time() + 600,
++            'revoked' => auth_code_entity::REVOKED_NO,
++            'timecreated' => time(),
++        ]);
++        $DB->insert_record('oauth2_server_client_granted_scopes', (object) [
++            'clientidentifier' => $clientidentifier,
++            'userid' => $user->id,
++            'scope' => 'a',
++            'timecreated' => time(),
++        ]);
++    }
++
++    public function test_resolvable_via_di(): void {
++        $this->assertInstanceOf(client_manager::class, \core\di::get(client_manager::class));
++        $reflection = new \ReflectionClass(client_manager::class);
++        foreach ($reflection->getMethods(\ReflectionMethod::IS_PUBLIC) as $method) {
++            $this->assertFalse($method->isStatic(), "{$method->getName()} must not be static");
++        }
++    }
++
++    public function test_create_and_get_client(): void {
++        $this->resetAfterTest();
++
++        $client = $this->create_client(['https://example.test/a', 'http://localhost:8080/cb']);
++        $manager = $this->get_manager();
++
++        $byid = $manager->get_client_by_id($client->get_id());
++        $byidentifier = $manager->get_client_by_identifier($client->getIdentifier());
++
++        foreach ([$byid, $byidentifier] as $fetched) {
++            $this->assertSame($client->getIdentifier(), $fetched->getIdentifier());
++            $this->assertSame('Test client', $fetched->getName());
++            $this->assertSame('Description', $fetched->get_description());
++            $this->assertSame(client_entity::STATUS_ACTIVE, $fetched->get_status());
++            $this->assertTrue($fetched->isConfidential());
++            $this->assertSame(['https://example.test/a', 'http://localhost:8080/cb'], array_values($fetched->getRedirectUri()));
++        }
++
++        $this->assertNull($manager->get_client_by_id($client->get_id() + 1000));
++        $this->assertNull($manager->get_client_by_identifier('nope'));
++    }
++
++    public function test_create_client_invalid_redirect_uri(): void {
++        global $DB;
++        $this->resetAfterTest();
++
++        try {
++            $this->create_client(['http://example.test/cb']);
++            $this->fail('Exception expected');
++        } catch (\moodle_exception $e) {
++            $this->assertSame('oauth2invalidredirecturi', $e->errorcode);
++        }
++        $this->assertSame(0, $DB->count_records('oauth2_server_clients'));
++    }
++
++    public function test_update_client(): void {
++        global $DB;
++        $this->resetAfterTest();
++
++        $client = $this->create_client();
++        $updated = $this->get_manager()->update_client($client->getIdentifier(), [
++            'name' => 'New name',
++            'description' => 'New description',
++            'status' => client_entity::STATUS_REVOKED,
++            'clientidentifier' => 'hijack',
++            'isconfidential' => 0,
++        ]);
++
++        $this->assertSame('New name', $updated->getName());
++        $this->assertSame('New description', $updated->get_description());
++
++        $record = $DB->get_record('oauth2_server_clients', ['id' => $client->get_id()]);
++        $this->assertSame('New name', $record->name);
++        $this->assertSame('New description', $record->description);
++        $this->assertEquals(client_entity::STATUS_ACTIVE, $record->status);
++        $this->assertSame($client->getIdentifier(), $record->clientidentifier);
++        $this->assertEquals(1, $record->isconfidential);
++
++        $this->expectException(\dml_missing_record_exception::class);
++        $this->get_manager()->update_client('missing', ['name' => 'x']);
++    }
++
++    public function test_revoke_client_cascades(): void {
++        global $DB;
++        $this->resetAfterTest();
++
++        $manager = $this->get_manager();
++        $client = $this->create_client();
++        $other = $this->create_client();
++        $id = $client->getIdentifier();
++
++        $secret = $manager->generate_client_secret($id);
++        $manager->generate_client_secret($other->getIdentifier());
++        $this->insert_tokens($id, '1');
++        $this->insert_tokens($other->getIdentifier(), '2');
++
++        $this->assertTrue((new client_repository())->validateClient($id, $secret, null));
++
++        $manager->revoke_client($id);
++
++        $this->assertSame(client_entity::STATUS_REVOKED, $manager->get_client_by_identifier($id)->get_status());
++        $this->assertSame(0, $manager->count_active_client_secrets($id));
++        $this->assertFalse((new client_repository())->validateClient($id, $secret, null));
++        $this->assertEquals(access_token_entity::REVOKED_YES,
++            $DB->get_field('oauth2_server_client_access_tokens', 'revoked', ['identifier' => 'access-1']));
++        $this->assertEquals(refresh_token_entity::REVOKED_YES,
++            $DB->get_field('oauth2_server_client_refresh_tokens', 'revoked', ['identifier' => 'refresh-1']));
++        $this->assertEquals(auth_code_entity::REVOKED_YES,
++            $DB->get_field('oauth2_server_client_auth_codes', 'revoked', ['identifier' => 'code-1']));
++
++        // The other client is untouched.
++        $this->assertSame(client_entity::STATUS_ACTIVE, $manager->get_client_by_identifier($other->getIdentifier())->get_status());
++        $this->assertSame(1, $manager->count_active_client_secrets($other->getIdentifier()));
++        $this->assertEquals(access_token_entity::REVOKED_NO,
++            $DB->get_field('oauth2_server_client_access_tokens', 'revoked', ['identifier' => 'access-2']));
++        $this->assertEquals(refresh_token_entity::REVOKED_NO,
++            $DB->get_field('oauth2_server_client_refresh_tokens', 'revoked', ['identifier' => 'refresh-2']));
++        $this->assertEquals(auth_code_entity::REVOKED_NO,
++            $DB->get_field('oauth2_server_client_auth_codes', 'revoked', ['identifier' => 'code-2']));
++    }
++
++    public function test_reactivate_client_does_not_restore_secrets_or_tokens(): void {
++        global $DB;
++        $this->resetAfterTest();
++
++        $manager = $this->get_manager();
++        $client = $this->create_client();
++        $id = $client->getIdentifier();
++        $secret = $manager->generate_client_secret($id);
++        $this->insert_tokens($id);
++
++        $manager->revoke_client($id);
++        $manager->reactivate_client($id);
++
++        $this->assertSame(client_entity::STATUS_ACTIVE, $manager->get_client_by_identifier($id)->get_status());
++        $this->assertSame(0, $manager->count_active_client_secrets($id));
++        $this->assertCount(1, $manager->get_client_secrets($id, true));
++        $this->assertFalse((new client_repository())->validateClient($id, $secret, null));
++        $this->assertEquals(access_token_entity::REVOKED_YES,
++            $DB->get_field('oauth2_server_client_access_tokens', 'revoked', ['identifier' => 'access-1']));
++        $this->assertEquals(refresh_token_entity::REVOKED_YES,
++            $DB->get_field('oauth2_server_client_refresh_tokens', 'revoked', ['identifier' => 'refresh-1']));
++
++        // A new secret can be generated and works.
++        $newsecret = $manager->generate_client_secret($id);
++        $this->assertTrue((new client_repository())->validateClient($id, $newsecret, null));
++    }
++
++    public function test_delete_client_requires_revocation(): void {
++        global $DB;
++        $this->resetAfterTest();
++
++        $manager = $this->get_manager();
++        $client = $this->create_client();
++        $id = $client->getIdentifier();
++
++        try {
++            $manager->delete_client($id);
++            $this->fail('Exception expected');
++        } catch (\moodle_exception $e) {
++            $this->assertSame('oauth2clientnotrevoked', $e->errorcode);
++        }
++        $this->assertTrue($DB->record_exists('oauth2_server_clients', ['clientidentifier' => $id]));
++    }
++
++    public function test_delete_client(): void {
++        global $DB;
++        $this->resetAfterTest();
++
++        $manager = $this->get_manager();
++        $client = $this->create_client();
++        $other = $this->create_client();
++        $id = $client->getIdentifier();
++        $manager->generate_client_secret($id);
++        $this->insert_tokens($id, '1');
++        $this->insert_tokens($other->getIdentifier(), '2');
++
++        $manager->revoke_client($id);
++        $manager->delete_client($id);
++
++        $this->assertNull($manager->get_client_by_identifier($id));
++        foreach ([
++            'oauth2_server_client_secrets',
++            'oauth2_server_client_redirect_uris',
++            'oauth2_server_client_access_tokens',
++            'oauth2_server_client_auth_codes',
++            'oauth2_server_client_granted_scopes',
++        ] as $table) {
++            $this->assertFalse($DB->record_exists($table, ['clientidentifier' => $id]), $table);
++        }
++        $this->assertFalse($DB->record_exists('oauth2_server_client_refresh_tokens', ['identifier' => 'refresh-1']));
++        $this->assertTrue($DB->record_exists('oauth2_server_client_refresh_tokens', ['identifier' => 'refresh-2']));
++        $this->assertNotNull($manager->get_client_by_identifier($other->getIdentifier()));
++    }
++
++    public function test_generate_client_secret_limit(): void {
++        global $DB;
++        $this->resetAfterTest();
++        $clock = $this->mock_clock_with_frozen();
++
++        $manager = $this->get_manager();
++        $client = $this->create_client();
++        $other = $this->create_client();
++        $id = $client->getIdentifier();
++
++        $secret1 = $manager->generate_client_secret($id);
++        $secret2 = $manager->generate_client_secret($id);
++        $this->assertNotSame($secret1, $secret2);
++        $this->assertSame(2, $manager->count_active_client_secrets($id));
++
++        $records = $DB->get_records('oauth2_server_client_secrets', ['clientidentifier' => $id]);
++        foreach ($records as $record) {
++            $this->assertNotSame($secret1, $record->secret);
++            $this->assertEquals($clock->time() + client_manager::DEFAULT_SECRET_LIFETIME, $record->expirytime);
++        }
++
++        // Third active secret is rejected.
++        try {
++            $manager->generate_client_secret($id);
++            $this->fail('Exception expected');
++        } catch (\moodle_exception $e) {
++            $this->assertSame('oauth2clientsecretlimit', $e->errorcode);
++        }
++
++        // Limit is per client.
++        $manager->generate_client_secret($other->getIdentifier());
++        $manager->generate_client_secret($other->getIdentifier());
++
++        // Revoking one frees up a slot.
++        $secrets = $manager->get_client_secrets($id);
++        $this->assertCount(2, $secrets);
++        $this->assertObjectNotHasProperty('secret', reset($secrets));
++        $manager->revoke_client_secret($id, reset($secrets)->id);
++        $this->assertSame(1, $manager->count_active_client_secrets($id));
++        $this->assertCount(1, $manager->get_client_secrets($id));
++        $this->assertCount(2, $manager->get_client_secrets($id, true));
++        $manager->generate_client_secret($id);
++
++        // Expired secrets do not count.
++        $clock->bump(client_manager::DEFAULT_SECRET_LIFETIME + 1);
++        $this->assertSame(0, $manager->count_active_client_secrets($id));
++        $manager->generate_client_secret($id, $clock->time() + DAYSECS);
++        $manager->generate_client_secret($id);
++        $this->assertSame(2, $manager->count_active_client_secrets($id));
++    }
++
++    public function test_revoke_client_secret_wrong_client(): void {
++        $this->resetAfterTest();
++
++        $manager = $this->get_manager();
++        $client = $this->create_client();
++        $other = $this->create_client();
++        $manager->generate_client_secret($client->getIdentifier());
++        $secrets = $manager->get_client_secrets($client->getIdentifier());
++        $secret = reset($secrets);
++
++        $this->expectException(\dml_missing_record_exception::class);
++        $manager->revoke_client_secret($other->getIdentifier(), $secret->id);
++    }
++
++    public function test_redirect_uri_management(): void {
++        $this->resetAfterTest();
++
++        $manager = $this->get_manager();
++        $client = $this->create_client([]);
++        $id = $client->getIdentifier();
++
++        $this->assertSame([], $manager->get_redirect_uris($id));
++
++        $uriid = $manager->add_redirect_uri($id, 'https://example.test/cb');
++        $this->assertSame($uriid, $manager->add_redirect_uri($id, 'https://example.test/cb'));
++        $manager->add_redirect_uri($id, 'http://127.0.0.1:1234/cb');
++        $this->assertSame(['https://example.test/cb', 'http://127.0.0.1:1234/cb'], array_values($manager->get_redirect_uris($id)));
++
++        try {
++            $manager->add_redirect_uri($id, 'http://example.test/cb');
++            $this->fail('Exception expected');
++        } catch (\moodle_exception $e) {
++            $this->assertSame('oauth2invalidredirecturi', $e->errorcode);
++        }
++
++        $this->assertTrue($manager->remove_redirect_uri($id, 'https://example.test/cb'));
++        $this->assertFalse($manager->remove_redirect_uri($id, 'https://example.test/cb'));
++        $this->assertSame(['http://127.0.0.1:1234/cb'], array_values($manager->get_redirect_uris($id)));
++    }
++
++    /**
++     * Test validate_redirect_uri.
++     *
++     * @param string $uri The URI to validate.
++     * @param bool $expected The expected result.
++     */
++    #[DataProvider('validate_redirect_uri_provider')]
++    public function test_validate_redirect_uri(string $uri, bool $expected): void {
++        global $DB;
++        $this->resetAfterTest();
++
++        $client = $this->create_client([
++            'https://example.test/callback',
++            'http://localhost:8080/callback',
++            'http://127.0.0.1/callback',
++        ]);
++        // Insert an insecure URI directly to verify it is rejected even if registered.
++        $DB->insert_record('oauth2_server_client_redirect_uris', (object) [
++            'clientidentifier' => $client->getIdentifier(),
++            'uri' => 'http://example.test/insecure',
++        ]);
++
++        $this->assertSame($expected, $this->get_manager()->validate_redirect_uri($client->getIdentifier(), $uri));
++    }
++
++    /**
++     * Data provider for test_validate_redirect_uri.
++     *
++     * @return array
++     */
++    public static function validate_redirect_uri_provider(): array {
++        return [
++            'exact https' => ['https://example.test/callback', true],
++            'exact localhost' => ['http://localhost:8080/callback', true],
++            'exact loopback' => ['http://127.0.0.1/callback', true],
++            'prefix match' => ['https://example.test/callback/extra', false],
++            'query appended' => ['https://example.test/callback?x=1', false],
++            'trailing slash' => ['https://example.test/callback/', false],
++            'case difference' => ['https://EXAMPLE.test/callback', false],
++            'shorter' => ['https://example.test/', false],
++            'different port' => ['http://localhost:9090/callback', false],
++            'insecure registered' => ['http://example.test/insecure', false],
++            'http variant' => ['http://example.test/callback', false],
++        ];
++    }
++
++    /**
++     * Test is_valid_redirect_uri.
++     *
++     * @param string $uri The URI.
++     * @param bool $expected The expected result.
++     */
++    #[DataProvider('is_valid_redirect_uri_provider')]
++    public function test_is_valid_redirect_uri(string $uri, bool $expected): void {
++        $this->assertSame($expected, $this->get_manager()->is_valid_redirect_uri($uri));
++    }
++
++    /**
++     * Data provider for test_is_valid_redirect_uri.
++     *
++     * @return array
++     */
++    public static function is_valid_redirect_uri_provider(): array {
++        return [
++            'https' => ['https://example.test/cb', true],
++            'https with query' => ['https://example.test/cb?a=b', true],
++            'http localhost' => ['http://localhost/cb', true],
++            'http localhost port' => ['http://localhost:3000/cb', true],
++            'http 127.0.0.1' => ['http://127.0.0.1:3000/cb', true],
++            'http 127.x' => ['http://127.1.2.3/cb', true],
++            'http ipv6 loopback' => ['http://[::1]:8080/cb', true],
++            'http remote' => ['http://example.test/cb', false],
++            'http localhost lookalike' => ['http://localhost.example.test/cb', false],
++            'ftp' => ['ftp://example.test/cb', false],
++            'javascript' => ['javascript:alert(1)', false],
++            'custom scheme' => ['myapp://callback', false],
++            'relative' => ['/callback', false],
++            'empty' => ['', false],
++            'fragment' => ['https://example.test/cb#frag', false],
++            'credentials' => ['https://user:pass@example.test/cb', false],
++            'whitespace' => [' https://example.test/cb', false],
++        ];
++    }
++}

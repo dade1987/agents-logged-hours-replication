@@ -1,0 +1,133 @@
+diff --git a/mysql-test/suite/compat/oracle/r/func_to_date.result b/mysql-test/suite/compat/oracle/r/func_to_date.result
+index fc40cbb8..23c4b521 100644
+--- a/mysql-test/suite/compat/oracle/r/func_to_date.result
++++ b/mysql-test/suite/compat/oracle/r/func_to_date.result
+@@ -961,3 +961,53 @@ NULL
+ Warnings:
+ Warning	1411	Incorrect datetime value: '-2024-05-10' for function to_date
+ # End of 12.3 tests
++#
++# MDEV-41657 TO_DATE no longer works as a variable
++#
++SET sql_mode=DEFAULT;
++CREATE TABLE t1 (to_date DATE);
++INSERT INTO t1 VALUES ('2001-01-01');
++SELECT to_date FROM t1;
++to_date
++2001-01-01
++SELECT t1.to_date FROM t1;
++to_date
++2001-01-01
++DROP TABLE t1;
++CREATE PROCEDURE p1()
++BEGIN
++DECLARE to_date DATE DEFAULT '2001-01-01';
++SET to_date = DATE_ADD(to_date, INTERVAL 1 DAY);
++SELECT to_date;
++END;
++$$
++CALL p1;
++to_date
++2001-01-02
++DROP PROCEDURE p1;
++SET @to_date='2001-01-01';
++SELECT @to_date;
++@to_date
++2001-01-01
++SET sql_mode=ORACLE;
++CREATE TABLE t1 (to_date DATE);
++INSERT INTO t1 VALUES ('2001-01-01');
++SELECT to_date FROM t1;
++to_date
++2001-01-01
++SELECT TO_DATE(to_date, 'YYYY-MM-DD') FROM t1;
++TO_DATE(to_date, 'YYYY-MM-DD')
++2001-01-01 00:00:00
++DROP TABLE t1;
++CREATE PROCEDURE p1 AS
++to_date DATE := '2001-01-01';
++BEGIN
++to_date := TO_DATE('2002-02-02', 'YYYY-MM-DD');
++SELECT to_date;
++END;
++$$
++CALL p1;
++to_date
++2002-02-02
++DROP PROCEDURE p1;
++# End of 12.3 tests
+diff --git a/mysql-test/suite/compat/oracle/t/func_to_date.test b/mysql-test/suite/compat/oracle/t/func_to_date.test
+index b3894243..aa41e888 100644
+--- a/mysql-test/suite/compat/oracle/t/func_to_date.test
++++ b/mysql-test/suite/compat/oracle/t/func_to_date.test
+@@ -508,3 +508,50 @@ SELECT TO_DATE('2002 February 10', 'YYYY MONTH DD') AS t;
+ SELECT TO_DATE('-2024-05-10', 'SYYYY-MM-DD') AS t;
+ 
+ --echo # End of 12.3 tests
++
++--echo #
++--echo # MDEV-41657 TO_DATE no longer works as a variable
++--echo #
++
++SET sql_mode=DEFAULT;
++CREATE TABLE t1 (to_date DATE);
++INSERT INTO t1 VALUES ('2001-01-01');
++SELECT to_date FROM t1;
++SELECT t1.to_date FROM t1;
++DROP TABLE t1;
++
++DELIMITER $$;
++CREATE PROCEDURE p1()
++BEGIN
++  DECLARE to_date DATE DEFAULT '2001-01-01';
++  SET to_date = DATE_ADD(to_date, INTERVAL 1 DAY);
++  SELECT to_date;
++END;
++$$
++DELIMITER ;$$
++CALL p1;
++DROP PROCEDURE p1;
++
++SET @to_date='2001-01-01';
++SELECT @to_date;
++
++SET sql_mode=ORACLE;
++CREATE TABLE t1 (to_date DATE);
++INSERT INTO t1 VALUES ('2001-01-01');
++SELECT to_date FROM t1;
++SELECT TO_DATE(to_date, 'YYYY-MM-DD') FROM t1;
++DROP TABLE t1;
++
++DELIMITER $$;
++CREATE PROCEDURE p1 AS
++  to_date DATE := '2001-01-01';
++BEGIN
++  to_date := TO_DATE('2002-02-02', 'YYYY-MM-DD');
++  SELECT to_date;
++END;
++$$
++DELIMITER ;$$
++CALL p1;
++DROP PROCEDURE p1;
++
++--echo # End of 12.3 tests
+diff --git a/sql/lex.h b/sql/lex.h
+index 709d949c..7f81d051 100644
+--- a/sql/lex.h
++++ b/sql/lex.h
+@@ -675,7 +675,6 @@ SYMBOL symbols[] = {
+   { "TINYINT",		SYM(TINYINT)},
+   { "TINYTEXT",		SYM(TINYTEXT)},
+   { "TO",		SYM(TO_SYM)},
+-  { "TO_DATE",		SYM(TO_DATE)},
+   { "TRAILING",		SYM(TRAILING)},
+   { "TRANSACTION",	SYM(TRANSACTION_SYM)},
+   { "TRANSACTIONAL",	SYM(TRANSACTIONAL_SYM)},
+@@ -791,6 +790,7 @@ SYMBOL sql_functions[] = {
+   { "SUBSTRING",	SYM(SUBSTRING)},
+   { "SUM",		SYM(SUM_SYM)},
+   { "SYSTEM_USER",      SYM(USER_SYM)},
++  { "TO_DATE",		SYM(TO_DATE)},
+   { "TRIM",		SYM(TRIM)},
+   { "TRIM_ORACLE",	SYM(TRIM_ORACLE)},
+   { "VARIANCE",		SYM(VARIANCE_SYM)},

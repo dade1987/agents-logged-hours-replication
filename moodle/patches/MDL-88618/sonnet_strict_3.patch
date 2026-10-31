@@ -1,0 +1,99 @@
+diff --git a/public/lib/editor/tiny/amd/build/defaults.min.js b/public/lib/editor/tiny/amd/build/defaults.min.js
+index 19f6ae353759f93de61887415c2366fd35b1d56d..41365c1299f19b2c20fdd26895f1bfed23d9410e 100644
+GIT binary patch
+delta 22
+ecmZ1`zd?S(TV~G0<mCLKl+66R&2N}@aRUHr7ztMZ
+
+delta 17
+ZcmdlWzf69^TjtFLyv$6Sf3a@k1OP#-2HOAt
+
+diff --git a/public/lib/editor/tiny/amd/src/defaults.js b/public/lib/editor/tiny/amd/src/defaults.js
+index 3042c376cea..769cc601724 100644
+--- a/public/lib/editor/tiny/amd/src/defaults.js
++++ b/public/lib/editor/tiny/amd/src/defaults.js
+@@ -36,7 +36,7 @@ export const getDefaultMenu = () => {
+         file: {title: 'File', items: 'newdocument restoredraft | preview | export print | deleteallconversations'},
+         edit: {title: 'Edit', items: 'undo redo | cut copy paste pastetext | selectall | searchreplace'},
+         view: {title: 'View', items: 'code | visualaid visualchars visualblocks | spellchecker | preview fullscreen | showcomments'},
+-        insert: {title: 'Insert', items: 'image link media addcomment pageembed template codesample inserttable | charmap emoticons hr | pagebreak nonbreaking anchor tableofcontents | insertdatetime'},
++        insert: {title: 'Insert', items: 'image link media addcomment pageembed template codesample inserttable accordion | charmap emoticons hr | pagebreak nonbreaking anchor tableofcontents | insertdatetime'},
+         format: {title: 'Format', items: 'bold italic underline strikethrough superscript subscript codeformat | styles blocks fontfamily fontsize align lineheight | forecolor backcolor | language | removeformat'},
+         tools: {title: 'Tools', items: 'spellchecker spellcheckerlanguage | a11ycheck code wordcount'},
+         table: {title: 'Table', items: 'inserttable | cell row column | advtablesort | tableprops deletetable'},
+diff --git a/public/lib/editor/tiny/classes/manager.php b/public/lib/editor/tiny/classes/manager.php
+index 57f10a42bb7..9a49bfcbc69 100644
+--- a/public/lib/editor/tiny/classes/manager.php
++++ b/public/lib/editor/tiny/classes/manager.php
+@@ -275,6 +275,20 @@ class manager {
+         // The following list is defined at:
+         // https://www.tiny.cloud/docs/advanced/available-toolbar-buttons/#thecoretoolbarbuttons.
+         return [
++            'accordion' => [
++                'buttons' => [
++                    'accordion',
++                    'accordiontoggle',
++                    'accordionremove',
++                ],
++                'menuitems' => [
++                    'accordion' => 'insert',
++                ],
++            ],
++            'advlist' => [
++                // The advlist plugin extends the bullist and numlist buttons provided by the lists plugin.
++                // It requires the lists plugin to be enabled.
++            ],
+             'anchor' => [
+                 'buttons' => [
+                     'anchor',
+diff --git a/public/lib/editor/tiny/tests/manager_test.php b/public/lib/editor/tiny/tests/manager_test.php
+new file mode 100644
+index 00000000000..0ba4b7e2cc5
+--- /dev/null
++++ b/public/lib/editor/tiny/tests/manager_test.php
+@@ -0,0 +1,46 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++declare(strict_types=1);
++
++namespace editor_tiny;
++
++use advanced_testcase;
++use ReflectionMethod;
++
++/**
++ * Unit tests for the editor_tiny manager.
++ *
++ * @package     editor_tiny
++ * @covers      \editor_tiny\manager
++ * @copyright   2025 Moodle Pty Ltd
++ * @license     http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++final class manager_test extends advanced_testcase {
++    /**
++     * Test that the accordion, advlist, and lists plugins are in the shipped plugin list.
++     */
++    public function test_shipped_plugins_include_accordion_and_advlist(): void {
++        $manager = new manager();
++        $method = new ReflectionMethod($manager, 'get_shipped_plugins');
++        $plugins = $method->invoke($manager);
++
++        $this->assertArrayHasKey('accordion', $plugins);
++        $this->assertArrayHasKey('advlist', $plugins);
++        // The advlist plugin depends on the lists plugin.
++        $this->assertArrayHasKey('lists', $plugins);
++    }
++}

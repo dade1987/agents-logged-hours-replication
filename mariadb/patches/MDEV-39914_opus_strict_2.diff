@@ -1,0 +1,44 @@
+diff --git a/mysql-test/main/spatial_utility_function_simplify.result b/mysql-test/main/spatial_utility_function_simplify.result
+index 43544702..2c786dfc 100644
+--- a/mysql-test/main/spatial_utility_function_simplify.result
++++ b/mysql-test/main/spatial_utility_function_simplify.result
+@@ -557,5 +557,11 @@ SELECT ST_ASTEXT(ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((0 0,0 10,10 10,10 0,0 0,0
+ ERROR HY000: Incorrect arguments to st_simplify
+ SELECT ST_ASTEXT(ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((0 0,0 10,10 10,10 0,0 0,0 0,0 0,0 0))'), a));
+ ERROR 42S22: Unknown column 'a' in 'SELECT'
++#
++# MDEV-39914 Crash with ST_SIMPLIFY() inside IN list
++#
++SELECT 'a' IN ('b', ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((10 2,5 2,5 10,-5 10,-5 2,-10 2,-10 -2,-5 -2,-5 -10,5 -10,5 -2,10 -2,10 2))'), 3), 'c') AS c;
++c
++0
+ # Clean up
+ DROP TABLE gis_geometrycollection;
+diff --git a/mysql-test/main/spatial_utility_function_simplify.test b/mysql-test/main/spatial_utility_function_simplify.test
+index 8ef99c7e..9a88ccb9 100644
+--- a/mysql-test/main/spatial_utility_function_simplify.test
++++ b/mysql-test/main/spatial_utility_function_simplify.test
+@@ -497,5 +497,11 @@ SELECT ST_ASTEXT(ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((0 0,0 10,10 10,10 0,0 0,0
+ --error ER_BAD_FIELD_ERROR
+ SELECT ST_ASTEXT(ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((0 0,0 10,10 10,10 0,0 0,0 0,0 0,0 0))'), a));
+ 
++
++--echo #
++--echo # MDEV-39914 Crash with ST_SIMPLIFY() inside IN list
++--echo #
++SELECT 'a' IN ('b', ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((10 2,5 2,5 10,-5 10,-5 2,-10 2,-10 -2,-5 -2,-5 -10,5 -10,5 -2,10 -2,10 2))'), 3), 'c') AS c;
++
+ --echo # Clean up
+ DROP TABLE gis_geometrycollection;
+diff --git a/sql/item_geofunc.cc b/sql/item_geofunc.cc
+index 307f198c..02730731 100644
+--- a/sql/item_geofunc.cc
++++ b/sql/item_geofunc.cc
+@@ -2321,6 +2321,7 @@ String *Item_func_simplify::val_str(String *str)
+     }
+   }
+ 
++  str->set_charset(&my_charset_bin);
+   if (geometry->simplify(str, max_distance))
+   {
+     null_value= 1;

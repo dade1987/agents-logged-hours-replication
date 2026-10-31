@@ -1,0 +1,195 @@
+diff --git a/.upgradenotes/MDL-89528-2025102610000000.yml b/.upgradenotes/MDL-89528-2025102610000000.yml
+new file mode 100644
+index 00000000000..78606bb5057
+--- /dev/null
++++ b/.upgradenotes/MDL-89528-2025102610000000.yml
+@@ -0,0 +1,21 @@
++issueNumber: MDL-89528
++notes:
++  core:
++    - message: >-
++        The DI container now supports attribute-based injection using the
++        `\DI\Attribute\Inject` attribute on properties, constructors, and
++        methods. This also enables the use of `injectOn()` to inject
++        dependencies onto an existing instance, for example from within a
++        constructor:
++
++        ```php
++        class example {
++            #[\DI\Attribute\Inject]
++            private \core\http_client $client;
++
++            public function __construct() {
++                \core\di::get_container()->injectOn($this);
++            }
++        }
++        ```
++      type: improved
+diff --git a/public/lib/classes/di.php b/public/lib/classes/di.php
+index 46dd11354eb..c4767013b13 100644
+--- a/public/lib/classes/di.php
++++ b/public/lib/classes/di.php
+@@ -89,9 +89,13 @@ class di {
+         // Configure the Container builder.
+         $builder = new \DI\ContainerBuilder();
+ 
+-        // At the moment we are using autowiring, but not automatic attribute injection.
+-        // Automatic attribute injection is a php-di specific feature.
++        // Enable autowiring, and attribute-based injection.
++        // Attribute-based injection is a php-di specific feature which supports the use of the
++        // \DI\Attribute\Inject attribute on class properties, constructors, and methods.
++        // It also allows for the use of the \DI\Container::injectOn() method to inject dependencies
++        // into an existing instance.
+         $builder->useAutowiring(true);
++        $builder->useAttributes(true);
+ 
+         if (!$CFG->debugdeveloper) {
+             // Enable compilation of the container and write proxies to disk in production.
+diff --git a/public/lib/tests/di_test.php b/public/lib/tests/di_test.php
+index b99707f5aeb..12707a2dcee 100644
+--- a/public/lib/tests/di_test.php
++++ b/public/lib/tests/di_test.php
+@@ -159,4 +159,56 @@ final class di_test extends \advanced_testcase {
+             $stringmanager,
+         );
+     }
++
++    /**
++     * Test that properties annotated with the Inject attribute are injected when fetched from the container.
++     */
++    public function test_attribute_property_injection(): void {
++        global $CFG;
++        require_once("{$CFG->libdir}/tests/fixtures/di_attribute_injection.php");
++
++        $instance = di::get(\core\fixtures\di_attribute_injection::class);
++        $this->assertInstanceOf(\core\fixtures\di_attribute_injection::class, $instance);
++        $this->assertInstanceOf(http_client::class, $instance->client);
++        $this->assertInstanceOf(clock::class, $instance->clock);
++        $this->assertSame('unchanged', $instance->notinjected);
++
++        // The injected dependencies are the same instances held by the container.
++        $this->assertSame(di::get(http_client::class), $instance->get_client());
++        $this->assertSame(di::get(clock::class), $instance->clock);
++    }
++
++    /**
++     * Test that a mocked dependency is injected into properties annotated with the Inject attribute.
++     */
++    public function test_attribute_property_injection_mocked(): void {
++        global $CFG;
++        require_once("{$CFG->libdir}/tests/fixtures/di_attribute_injection.php");
++
++        $mockedclient = $this->createStub(http_client::class);
++        di::set(http_client::class, $mockedclient);
++
++        $instance = di::get(\core\fixtures\di_attribute_injection::class);
++        $this->assertSame($mockedclient, $instance->get_client());
++        $this->assertInstanceOf(Stub::class, $instance->get_client());
++    }
++
++    /**
++     * Test that dependencies can be injected onto an existing instance using injectOn.
++     */
++    public function test_attribute_inject_on(): void {
++        global $CFG;
++        require_once("{$CFG->libdir}/tests/fixtures/di_attribute_injection.php");
++
++        $instance = new \core\fixtures\di_attribute_injection_inject_on();
++        $this->assertInstanceOf(http_client::class, $instance->get_client());
++        $this->assertSame(di::get(http_client::class), $instance->get_client());
++
++        // A mocked dependency is also injected.
++        $mockedclient = $this->createStub(http_client::class);
++        di::set(http_client::class, $mockedclient);
++
++        $instance = new \core\fixtures\di_attribute_injection_inject_on();
++        $this->assertSame($mockedclient, $instance->get_client());
++    }
+ }
+diff --git a/public/lib/tests/fixtures/di_attribute_injection.php b/public/lib/tests/fixtures/di_attribute_injection.php
+new file mode 100644
+index 00000000000..2f2e853a938
+--- /dev/null
++++ b/public/lib/tests/fixtures/di_attribute_injection.php
+@@ -0,0 +1,81 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\fixtures;
++
++use core\clock;
++use core\http_client;
++use DI\Attribute\Inject;
++
++/**
++ * Fixture class which uses attribute-based property injection.
++ *
++ * @package    core
++ * @copyright  2025 Andrew Lyons <andrew@nicols.co.uk>
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class di_attribute_injection {
++    /** @var http_client The http client, injected by the container */
++    #[Inject]
++    public http_client $client;
++
++    /** @var clock The clock, injected by the container */
++    #[Inject]
++    public clock $clock;
++
++    /** @var string A property which is not injected */
++    public string $notinjected = 'unchanged';
++
++    /**
++     * Fetch the injected client.
++     *
++     * @return http_client
++     */
++    public function get_client(): http_client {
++        return $this->client;
++    }
++}
++
++/**
++ * Fixture class which uses injectOn to inject dependencies into an existing instance.
++ *
++ * @package    core
++ * @copyright  2025 Andrew Lyons <andrew@nicols.co.uk>
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class di_attribute_injection_inject_on {
++    /** @var http_client The http client, injected by the container */
++    #[Inject]
++    private http_client $client;
++
++    /**
++     * Constructor which injects dependencies onto this instance.
++     */
++    public function __construct() {
++        /** @var \DI\Container $container */
++        $container = \core\di::get_container();
++        $container->injectOn($this);
++    }
++
++    /**
++     * Fetch the injected client.
++     *
++     * @return http_client
++     */
++    public function get_client(): http_client {
++        return $this->client;
++    }
++}

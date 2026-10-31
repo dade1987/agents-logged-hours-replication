@@ -1,0 +1,84 @@
+diff --git a/public/admin/tool/mobile/classes/api.php b/public/admin/tool/mobile/classes/api.php
+index 6e77938c5bd..dc6bc89b338 100644
+--- a/public/admin/tool/mobile/classes/api.php
++++ b/public/admin/tool/mobile/classes/api.php
+@@ -336,6 +336,7 @@ class api {
+             $settings->tool_mobile_customusermenuitems = $customusermenuitems;
+             $settings->tool_mobile_scriptallowlist = get_config('tool_mobile', 'scriptallowlist');
+             $settings->tool_mobile_apppolicy = get_config('tool_mobile', 'apppolicy');
++            $settings->tool_mobile_showlogoinappheader = (int) get_config('tool_mobile', 'showlogoinappheader');
+             // This setting could be not set in some edge cases such as bad upgrade.
+             $mintimereq = get_config('tool_mobile', 'autologinmintimebetweenreq');
+             $mintimereq = empty($mintimereq) ? 6 * MINSECS : $mintimereq;
+diff --git a/public/admin/tool/mobile/lang/en/tool_mobile.php b/public/admin/tool/mobile/lang/en/tool_mobile.php
+index ac256a847f2..77ec8fdcc56 100644
+--- a/public/admin/tool/mobile/lang/en/tool_mobile.php
++++ b/public/admin/tool/mobile/lang/en/tool_mobile.php
+@@ -199,6 +199,8 @@ Inline JavaScript is always blocked and cannot be allowed.';
+ $string['selfsignedoruntrustedcertificatewarning'] = 'It seems that the HTTPS certificate is self-signed or not trusted. The mobile app will only work with trusted sites. Please use any online SSL checker to diagnose the problem. If it indicates that your certificate is OK, you can ignore this warning.';
+ $string['setuplink'] = 'App download page';
+ $string['setuplink_desc'] = 'URL of page with options to download the mobile app from the App Store and Google Play. The app download page link is displayed in the page footer and in a user\'s profile. Leave blank to not display a link.';
++$string['showlogoinappheader'] = 'Show site logo in app header';
++$string['showlogoinappheader_desc'] = 'Display the site logo in the app\'s home and dashboard header instead of the site name. Requires a site logo to be configured in <em>Site administration > Appearance</em>.';
+ $string['showingcacheddata'] = 'Last synced: {$a->since} days ago ({$a->date}).';
+ $string['showinglivedata'] = 'View live data in the <a href="{$a}" target="_blank">Moodle Apps Portal</a>.';
+ $string['siteplugins'] = 'Site plugins';
+diff --git a/public/admin/tool/mobile/settings.php b/public/admin/tool/mobile/settings.php
+index d405e714dfe..f84dc154d90 100644
+--- a/public/admin/tool/mobile/settings.php
++++ b/public/admin/tool/mobile/settings.php
+@@ -241,6 +241,13 @@ if ($hassiteconfig || has_capability('moodle/site:configview', context_system::i
+         PARAM_URL
+     ));
+ 
++    $temp->add(new admin_setting_configcheckbox(
++        'tool_mobile/showlogoinappheader',
++        new lang_string('showlogoinappheader', 'tool_mobile'),
++        new lang_string('showlogoinappheader_desc', 'tool_mobile'),
++        0
++    ));
++
+     $temp->add(new admin_setting_heading(
+         'tool_mobile/customisation',
+         new lang_string('customisation', 'tool_mobile'),
+diff --git a/public/admin/tool/mobile/tests/externallib_test.php b/public/admin/tool/mobile/tests/externallib_test.php
+index 2e5e913a342..3dd16f83e50 100644
+--- a/public/admin/tool/mobile/tests/externallib_test.php
++++ b/public/admin/tool/mobile/tests/externallib_test.php
+@@ -218,6 +218,7 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+             [ 'name' => 'tool_mobile_customusermenuitems', 'value' => '' ],
+             [ 'name' => 'tool_mobile_scriptallowlist', 'value' => '' ],
+             [ 'name' => 'tool_mobile_apppolicy', 'value' => '' ],
++            [ 'name' => 'tool_mobile_showlogoinappheader', 'value' => 0 ],
+             [ 'name' => 'tool_mobile_autologinmintimebetweenreq', 'value' => 6 * MINSECS ],
+             [ 'name' => 'tool_mobile_autologout', 'value' => get_config('tool_mobile', 'autologout') ],
+             [ 'name' => 'tool_mobile_autologouttime', 'value' => get_config('tool_mobile', 'autologouttime') ],
+@@ -291,6 +292,15 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+         $result = external_api::clean_returnvalue(external::get_config_returns(), $result);
+         $this->assertCount(0, $result['warnings']);
+         $this->assertEquals($expected, $result['settings']);
++
++        // Enable the show logo in app header setting and check the mobileapp section.
++        set_config('showlogoinappheader', 1, 'tool_mobile');
++        $result = external::get_config('mobileapp');
++        $result = external_api::clean_returnvalue(external::get_config_returns(), $result);
++        $this->assertCount(0, $result['warnings']);
++        $settings = array_column($result['settings'], 'value', 'name');
++        $this->assertArrayHasKey('tool_mobile_showlogoinappheader', $settings);
++        $this->assertEquals(1, $settings['tool_mobile_showlogoinappheader']);
+     }
+ 
+     /*
+diff --git a/public/admin/tool/mobile/version.php b/public/admin/tool/mobile/version.php
+index f38610927ac..411ac76fa5d 100644
+--- a/public/admin/tool/mobile/version.php
++++ b/public/admin/tool/mobile/version.php
+@@ -23,7 +23,7 @@
+  */
+ 
+ defined('MOODLE_INTERNAL') || die();
+-$plugin->version   = 2026042000; // The current plugin version (Date: YYYYMMDDXX).
++$plugin->version   = 2026042001; // The current plugin version (Date: YYYYMMDDXX).
+ $plugin->requires  = 2026041000; // Requires this Moodle version.
+ $plugin->component = 'tool_mobile'; // Full name of the plugin (used for diagnostics).
+ $plugin->dependencies = [

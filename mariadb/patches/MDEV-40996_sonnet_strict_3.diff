@@ -1,0 +1,23 @@
+diff --git a/client/mysqltest.cc b/client/mysqltest.cc
+index d43b1c79..1786b2c2 100644
+--- a/client/mysqltest.cc
++++ b/client/mysqltest.cc
+@@ -5361,6 +5361,18 @@ void do_sync_with_master(struct st_command *command)
+       start= buff= (char*)my_malloc(PSI_NOT_INSTRUMENTED, strlen(p)+1,
+                                     MYF(MY_WME|MY_FAE));
+       get_string(&buff, &p, command);
++      if (*start == '$')
++      {
++        /* Connection name given as a variable */
++        VAR *v= var_get(start, 0, 0, 0);
++        char *val= (char*) my_malloc(PSI_NOT_INSTRUMENTED,
++                                     v->str_val_len + 1,
++                                     MYF(MY_WME|MY_FAE));
++        memcpy(val, v->str_val, v->str_val_len);
++        val[v->str_val_len]= 0;
++        my_free(start);
++        start= buff= val;
++      }
+     }
+     command->last_argument= p;
+   }

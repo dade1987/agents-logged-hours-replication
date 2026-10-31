@@ -1,0 +1,120 @@
+diff --git a/mysql-test/main/deny_revoke_public.result b/mysql-test/main/deny_revoke_public.result
+index a82947a6..b79ed0f0 100644
+--- a/mysql-test/main/deny_revoke_public.result
++++ b/mysql-test/main/deny_revoke_public.result
+@@ -165,6 +165,36 @@ REVOKE DENY SELECT ON test.t1 FROM r1;
+ DROP USER u_role@localhost;
+ DROP ROLE r1;
+ #
++# MDEV-41343 REVOKE DENY ... FROM PUBLIC bypass via unrelated
++# column-level UPDATE grant on mysql.global_priv
++#
++CREATE USER u_colupd@localhost;
++GRANT SELECT ON test.t1 TO u_colupd@localhost;
++GRANT UPDATE (Host) ON mysql.global_priv TO u_colupd@localhost;
++DENY SELECT ON test.t1 TO PUBLIC;
++connect  con_colupd1, localhost, u_colupd,,test;
++SELECT * FROM t1;
++ERROR 42000: SELECT command denied to user 'u_colupd'@'localhost' for table `test`.`t1`
++# Should FAIL - UPDATE on Host column does not allow changing Priv
++REVOKE DENY SELECT ON test.t1 FROM PUBLIC;
++ERROR 42000: SELECT, GRANT command denied to user 'u_colupd'@'localhost' for table `test`.`t1`
++SELECT * FROM t1;
++ERROR 42000: SELECT command denied to user 'u_colupd'@'localhost' for table `test`.`t1`
++disconnect con_colupd1;
++connection default;
++GRANT UPDATE (Priv) ON mysql.global_priv TO u_colupd@localhost;
++connect  con_colupd2, localhost, u_colupd,,test;
++SELECT * FROM t1;
++ERROR 42000: SELECT command denied to user 'u_colupd'@'localhost' for table `test`.`t1`
++# UPDATE on Priv column is enough
++REVOKE DENY SELECT ON test.t1 FROM PUBLIC;
++SELECT * FROM t1;
++id	data
++1	100
++disconnect con_colupd2;
++connection default;
++DROP USER u_colupd@localhost;
++#
+ # Known limitation: denying the bypass's own privilege is unrecoverable
+ #
+ DENY UPDATE ON *.* TO PUBLIC;
+diff --git a/mysql-test/main/deny_revoke_public.test b/mysql-test/main/deny_revoke_public.test
+index 9df13f0a..50672bdb 100644
+--- a/mysql-test/main/deny_revoke_public.test
++++ b/mysql-test/main/deny_revoke_public.test
+@@ -190,6 +190,39 @@ REVOKE DENY SELECT ON test.t1 FROM r1;
+ DROP USER u_role@localhost;
+ DROP ROLE r1;
+ 
++--echo #
++--echo # MDEV-41343 REVOKE DENY ... FROM PUBLIC bypass via unrelated
++--echo # column-level UPDATE grant on mysql.global_priv
++--echo #
++CREATE USER u_colupd@localhost;
++GRANT SELECT ON test.t1 TO u_colupd@localhost;
++GRANT UPDATE (Host) ON mysql.global_priv TO u_colupd@localhost;
++DENY SELECT ON test.t1 TO PUBLIC;
++
++connect (con_colupd1, localhost, u_colupd,,test);
++--error ER_TABLEACCESS_DENIED_ERROR
++SELECT * FROM t1;
++--echo # Should FAIL - UPDATE on Host column does not allow changing Priv
++--error ER_TABLEACCESS_DENIED_ERROR
++REVOKE DENY SELECT ON test.t1 FROM PUBLIC;
++--error ER_TABLEACCESS_DENIED_ERROR
++SELECT * FROM t1;
++disconnect con_colupd1;
++connection default;
++
++GRANT UPDATE (Priv) ON mysql.global_priv TO u_colupd@localhost;
++
++connect (con_colupd2, localhost, u_colupd,,test);
++--error ER_TABLEACCESS_DENIED_ERROR
++SELECT * FROM t1;
++--echo # UPDATE on Priv column is enough
++REVOKE DENY SELECT ON test.t1 FROM PUBLIC;
++SELECT * FROM t1;
++disconnect con_colupd2;
++connection default;
++
++DROP USER u_colupd@localhost;
++
+ --echo #
+ --echo # Known limitation: denying the bypass's own privilege is unrecoverable
+ --echo #
+diff --git a/sql/sql_acl.cc b/sql/sql_acl.cc
+index 70984625..be4be958 100644
+--- a/sql/sql_acl.cc
++++ b/sql/sql_acl.cc
+@@ -14419,13 +14419,26 @@ bool Sql_cmd_grant::should_bypass_revoke_deny(THD *thd)
+       return false;
+   }
+ 
+-  /* Does current user have UPDATE grant for mysql.global_priv ? */
++  /*
++    Does current user have UPDATE grant for mysql.global_priv ?
++
++    check_grant() succeeds also when UPDATE is granted only on some
++    columns of the table (the column-level check is normally done later,
++    per column). DENYs are stored in the Priv column, so UPDATE must be
++    available for that column specifically (either directly on the column
++    or on the table/db/global level). UPDATE on an unrelated column, e.g.
++    Host, is not enough.
++  */
+   TABLE_LIST tl;
+   tl.init_one_table(&MYSQL_SCHEMA_NAME, &MYSQL_TABLE_NAME[USER_TABLE],
+                     NULL, TL_WRITE);
+-  return !check_access(thd, UPDATE_ACL, tl.db.str, &tl.grant.privilege,
+-                       &tl.grant.m_internal, 0, 1) &&
+-         !check_grant(thd, UPDATE_ACL, &tl, FALSE, 1, TRUE);
++  if (check_access(thd, UPDATE_ACL, tl.db.str, &tl.grant.privilege,
++                   &tl.grant.m_internal, 0, 1) ||
++      check_grant(thd, UPDATE_ACL, &tl, FALSE, 1, TRUE))
++    return false;
++
++  return (get_column_grant(thd, &tl.grant, tl.db.str, tl.table_name.str,
++                           "Priv"_Lex_ident_column) & UPDATE_ACL) != NO_ACL;
+ }
+ 
+ 

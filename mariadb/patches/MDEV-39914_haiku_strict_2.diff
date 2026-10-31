@@ -1,0 +1,38 @@
+diff --git a/sql/item_cmpfunc.cc b/sql/item_cmpfunc.cc
+index eaa70564..fbdf0bd5 100644
+--- a/sql/item_cmpfunc.cc
++++ b/sql/item_cmpfunc.cc
+@@ -3898,6 +3898,19 @@ in_string::~in_string()
+ bool in_string::set(uint pos, Item *item)
+ {
+   String *str=((String*) base)+pos;
++  /*
++    The base array is zero-allocated (thd_calloc), so the charset of 'str'
++    is NULL until set below. item->val_str() may write to 'str' directly
++    (e.g. String::append() calls mbminlen() on it), so the charset must be
++    initialized before the call.
++  */
++  if (!str->charset())
++  {
++    CHARSET_INFO *cs;
++    if (!(cs= item->collation.collation))
++      cs= &my_charset_bin;		// Should never happen for STR items
++    str->set_charset(cs);
++  }
+   String *res=item->val_str(str);
+   if (res && res != str)
+   {
+@@ -3908,13 +3921,6 @@ bool in_string::set(uint pos, Item *item)
+     else
+       *str= *res;
+   }
+-  if (!str->charset())
+-  {
+-    CHARSET_INFO *cs;
+-    if (!(cs= item->collation.collation))
+-      cs= &my_charset_bin;		// Should never happen for STR items
+-    str->set_charset(cs);
+-  }
+   return res == NULL;
+ }
+ 

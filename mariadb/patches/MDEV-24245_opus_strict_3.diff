@@ -1,0 +1,99 @@
+diff --git a/mysql-test/suite/archive/repair.result b/mysql-test/suite/archive/repair.result
+index 9b17fdc7..28efae27 100644
+--- a/mysql-test/suite/archive/repair.result
++++ b/mysql-test/suite/archive/repair.result
+@@ -9,3 +9,42 @@ repair table t1;
+ Table	Op	Msg_type	Msg_text
+ test.t1	repair	error	Corrupt
+ drop table t1;
++#
++# MDEV-24245 REPAIR on ARCHIVE table destroys TEXT data
++#
++create table t1 (a int, t text, b blob, c varchar(10)) engine=archive;
++insert into t1 values (1, 'Testtext', 'blobdata', 'x'), (2, NULL, '', 'y'), (3, repeat('z', 1000), repeat('w', 2000), NULL);
++select a, t, b, c, length(t), length(b) from t1 where a < 3;
++a	t	b	c	length(t)	length(b)
++1	Testtext	blobdata	x	8	8
++2	NULL		y	NULL	0
++select a, length(t), length(b), md5(t), md5(b) from t1;
++a	length(t)	length(b)	md5(t)	md5(b)
++1	8	8	353b547363efaa5dfc474a9633a6ea47	a75fb09628f475fef180af802753bec3
++2	NULL	0	NULL	d41d8cd98f00b204e9800998ecf8427e
++3	1000	2000	93f8e2ed34e2c6727cf1ee6f138267e9	c303714c4312deb287806576c8462782
++repair table t1;
++Table	Op	Msg_type	Msg_text
++test.t1	repair	status	OK
++select a, t, b, c, length(t), length(b) from t1 where a < 3;
++a	t	b	c	length(t)	length(b)
++1	Testtext	blobdata	x	8	8
++2	NULL		y	NULL	0
++select a, length(t), length(b), md5(t), md5(b) from t1;
++a	length(t)	length(b)	md5(t)	md5(b)
++1	8	8	353b547363efaa5dfc474a9633a6ea47	a75fb09628f475fef180af802753bec3
++2	NULL	0	NULL	d41d8cd98f00b204e9800998ecf8427e
++3	1000	2000	93f8e2ed34e2c6727cf1ee6f138267e9	c303714c4312deb287806576c8462782
++optimize table t1;
++Table	Op	Msg_type	Msg_text
++test.t1	optimize	status	OK
++select a, t, b, c, length(t), length(b) from t1 where a < 3;
++a	t	b	c	length(t)	length(b)
++1	Testtext	blobdata	x	8	8
++2	NULL		y	NULL	0
++select a, length(t), length(b), md5(t), md5(b) from t1;
++a	length(t)	length(b)	md5(t)	md5(b)
++1	8	8	353b547363efaa5dfc474a9633a6ea47	a75fb09628f475fef180af802753bec3
++2	NULL	0	NULL	d41d8cd98f00b204e9800998ecf8427e
++3	1000	2000	93f8e2ed34e2c6727cf1ee6f138267e9	c303714c4312deb287806576c8462782
++drop table t1;
+diff --git a/mysql-test/suite/archive/repair.test b/mysql-test/suite/archive/repair.test
+index 48ec6b70..57581cec 100644
+--- a/mysql-test/suite/archive/repair.test
++++ b/mysql-test/suite/archive/repair.test
+@@ -17,3 +17,18 @@ select * from t1;
+ insert into t1 values (2);
+ repair table t1;
+ drop table t1;
++
++--echo #
++--echo # MDEV-24245 REPAIR on ARCHIVE table destroys TEXT data
++--echo #
++create table t1 (a int, t text, b blob, c varchar(10)) engine=archive;
++insert into t1 values (1, 'Testtext', 'blobdata', 'x'), (2, NULL, '', 'y'), (3, repeat('z', 1000), repeat('w', 2000), NULL);
++select a, t, b, c, length(t), length(b) from t1 where a < 3;
++select a, length(t), length(b), md5(t), md5(b) from t1;
++repair table t1;
++select a, t, b, c, length(t), length(b) from t1 where a < 3;
++select a, length(t), length(b), md5(t), md5(b) from t1;
++optimize table t1;
++select a, t, b, c, length(t), length(b) from t1 where a < 3;
++select a, length(t), length(b), md5(t), md5(b) from t1;
++drop table t1;
+diff --git a/storage/archive/ha_archive.cc b/storage/archive/ha_archive.cc
+index 2d623507..d0ca9af7 100644
+--- a/storage/archive/ha_archive.cc
++++ b/storage/archive/ha_archive.cc
+@@ -1580,6 +1580,24 @@ int ha_archive::optimize(THD* thd, HA_CHECK_OPT* check_opt)
+ 
+       while (!(rc= get_row(&archive, table->record[0])))
+       {
++        /*
++          Blob data unpacked by get_row() points into record_buffer, which
++          is reused (and possibly reallocated) by pack_row() when writing
++          the row. Copy blob values to their own storage first.
++        */
++        for (uint *ptr= table->s->blob_field,
++                  *end= ptr + table->s->blob_fields;
++             ptr != end; ptr++)
++        {
++          Field_blob *blob= (Field_blob*) table->field[*ptr];
++          if (!blob->is_null() && blob->copy())
++          {
++            rc= HA_ERR_OUT_OF_MEM;
++            break;
++          }
++        }
++        if (rc)
++          break;
+         real_write_row(table->record[0], &writer);
+         /*
+           Long term it should be possible to optimize this so that

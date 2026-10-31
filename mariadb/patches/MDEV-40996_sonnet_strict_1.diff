@@ -1,0 +1,33 @@
+diff --git a/client/mysqltest.cc b/client/mysqltest.cc
+index d43b1c79..b2518f41 100644
+--- a/client/mysqltest.cc
++++ b/client/mysqltest.cc
+@@ -5358,9 +5358,25 @@ void do_sync_with_master(struct st_command *command)
+       p++;
+       while (*p && my_isspace(charset_info, *p))
+         p++;
+-      start= buff= (char*)my_malloc(PSI_NOT_INSTRUMENTED, strlen(p)+1,
+-                                    MYF(MY_WME|MY_FAE));
+-      get_string(&buff, &p, command);
++      if (*p == '$')
++      {
++        const char *var_end= NULL;
++        VAR *v= var_get(p, &var_end, 0, 0);
++        start= buff= (char*)my_malloc(PSI_NOT_INSTRUMENTED,
++                                      v->str_val_len + 1,
++                                      MYF(MY_WME|MY_FAE));
++        memcpy(buff, v->str_val, v->str_val_len);
++        buff[v->str_val_len]= 0;
++        p= const_cast<char*>(var_end) + 1; /* var_end is the last char */
++        while (*p && my_isspace(charset_info, *p))
++          p++;
++      }
++      else
++      {
++        start= buff= (char*)my_malloc(PSI_NOT_INSTRUMENTED, strlen(p)+1,
++                                      MYF(MY_WME|MY_FAE));
++        get_string(&buff, &p, command);
++      }
+     }
+     command->last_argument= p;
+   }

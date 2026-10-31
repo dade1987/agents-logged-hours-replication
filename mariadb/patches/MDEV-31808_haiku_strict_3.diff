@@ -1,0 +1,23 @@
+diff --git a/sql/sql_base.cc b/sql/sql_base.cc
+index 379337af..30cdd444 100644
+--- a/sql/sql_base.cc
++++ b/sql/sql_base.cc
+@@ -4994,8 +4994,16 @@ bool open_and_lock_internal_tables(TABLE *table, bool lock_table)
+   TABLE_LIST *tmp= table->internal_tables;
+   DML_prelocking_strategy prelocking_strategy;
+ 
+-  if (open_tables(thd, thd->lex->create_info, &tmp, &counter, 0,
+-                  &prelocking_strategy))
++  /*
++    Ignore pending/flushed tables: the statement may already hold tables that
++    were flushed by this thread itself (e.g. ALTER TABLE ... LOCK=EXCLUSIVE
++    calls wait_while_table_is_used()). Without this flag open_table() would
++    ask for a reopen, which calls close_tables_for_reopen(), closing all open
++    tables and unlocking thd->lock. That would leave save_lock below NULL and
++    crash in mysql_lock_merge().
++  */
++  if (open_tables(thd, thd->lex->create_info, &tmp, &counter,
++                  MYSQL_OPEN_IGNORE_FLUSH, &prelocking_strategy))
+     goto err;
+ 
+   if (lock_table)

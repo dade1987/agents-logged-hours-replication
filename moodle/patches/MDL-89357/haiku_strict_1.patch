@@ -1,0 +1,89 @@
+diff --git a/public/ai/classes/aiactions/base.php b/public/ai/classes/aiactions/base.php
+index 3a764df9ac1..72bfaf91fbd 100644
+--- a/public/ai/classes/aiactions/base.php
++++ b/public/ai/classes/aiactions/base.php
+@@ -68,7 +68,7 @@ abstract class base {
+      * @return string
+      */
+     public static function get_name(): string {
+-        $stringid = 'action_' . self::get_basename();
++        $stringid = 'action_' . static::get_basename();
+         return get_string($stringid, 'core_ai');
+     }
+ 
+@@ -80,7 +80,7 @@ abstract class base {
+      * @return string
+      */
+     public static function get_description(): string {
+-        $stringid = 'action_' . self::get_basename() . '_desc';
++        $stringid = 'action_' . static::get_basename() . '_desc';
+         return get_string($stringid, 'core_ai');
+     }
+ 
+@@ -90,7 +90,7 @@ abstract class base {
+      * @return string The system instruction for the action.
+      */
+     public static function get_system_instruction(): string {
+-        $stringid = 'action_' . self::get_basename() . '_instruction';
++        $stringid = 'action_' . static::get_basename() . '_instruction';
+ 
+         // If the string doesn't exist, return an empty string.
+         if (!get_string_manager()->string_exists($stringid, 'core_ai')) {
+@@ -126,6 +126,6 @@ abstract class base {
+      * @return string The class name of the response object.
+      */
+     public static function get_response_classname(): string {
+-        return responses::class . '\\response_' . self::get_basename();
++        return responses::class . '\\response_' . static::get_basename();
+     }
+ }
+diff --git a/public/ai/tests/aiactions/base_test.php b/public/ai/tests/aiactions/base_test.php
+index f9894e3493e..2534a34bdb0 100644
+--- a/public/ai/tests/aiactions/base_test.php
++++ b/public/ai/tests/aiactions/base_test.php
+@@ -57,6 +57,45 @@ final class base_test extends \advanced_testcase {
+         );
+     }
+ 
++    /**
++     * Test that child classes overriding static methods are invoked from base class context.
++     */
++    public function test_static_override_is_used_by_base(): void {
++        $child = new class(1) extends \core_ai\aiactions\base {
++            /**
++             * Store the response.
++             * @param response_base $response
++             * @return int
++             */
++            public function store(response_base $response): int {
++                return 0;
++            }
++
++            /**
++             * Override the basename so the base class must late bind to this implementation.
++             *
++             * @return string
++             */
++            public static function get_basename(): string {
++                return 'summarise_text';
++            }
++        };
++        $classname = get_class($child);
++
++        $this->assertEquals(
++            get_string('action_summarise_text', 'core_ai'),
++            $classname::get_name()
++        );
++        $this->assertEquals(
++            get_string('action_summarise_text_desc', 'core_ai'),
++            $classname::get_description()
++        );
++        $this->assertEquals(
++            responses::class . '\\response_summarise_text',
++            $classname::get_response_classname()
++        );
++    }
++
+     /**
+      * Test that every action class implements a constructor.
+      */

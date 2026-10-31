@@ -1,0 +1,135 @@
+diff --git a/plugin/type_mysql_json/mysql_json.cc b/plugin/type_mysql_json/mysql_json.cc
+index c28a403a..a61ac3d6 100644
+--- a/plugin/type_mysql_json/mysql_json.cc
++++ b/plugin/type_mysql_json/mysql_json.cc
+@@ -223,6 +223,9 @@ static bool print_mysql_datetime_value(String *buffer, enum_field_types type,
+       DBUG_ASSERT(0);
+       return true;
+   }
++  /* A corrupted packed value can produce an out-of-range MYSQL_TIME. */
++  if (check_datetime_range(&t))
++    return true;
+   /* Wrap all datetime strings within double quotes. */
+   buffer->append('\"');
+   buffer->reserve(MAX_DATE_STRING_REP_LENGTH);
+@@ -274,13 +277,18 @@ static bool parse_mysql_scalar(String *buffer, size_t value_json_type,
+     size_t string_length, store_bytes;
+ 
+     return read_variable_length(data, len, &string_length, &store_bytes) ||
+-           len < store_bytes + string_length ||
++           len < store_bytes ||
++           len - store_bytes < string_length ||
+            buffer->append('"') ||
+            append_string_json(buffer, data + store_bytes, string_length) ||
+            buffer->append('"');
+   }
+   case JSONB_TYPE_OPAQUE:
+   {
++    /* Expect at least the type byte and one byte of the length. */
++    if (len < 2)
++      return true;
++
+     /* The field_type maps directly to enum_field_types. */
+     const uchar type_value= *data;
+     const enum_field_types field_type= static_cast<enum_field_types>(type_value);
+@@ -288,8 +296,9 @@ static bool parse_mysql_scalar(String *buffer, size_t value_json_type,
+     size_t UNINIT_VAR(blob_length), length_bytes;
+     const uchar *blob_start;
+ 
+-    if (read_variable_length(data + 1, len, &blob_length, &length_bytes) ||
+-        len < length_bytes + blob_length)
++    if (read_variable_length(data + 1, len - 1, &blob_length, &length_bytes) ||
++        len - 1 < length_bytes ||
++        len - 1 - length_bytes < blob_length)
+       return true;
+     blob_start= data + length_bytes + 1;
+ 
+@@ -309,6 +318,15 @@ static bool parse_mysql_scalar(String *buffer, size_t value_json_type,
+       const int precision= blob_start[0];
+       const int scale= blob_start[1];
+ 
++      /*
++        Validate precision and scale before using them: bin2decimal() and
++        decimal_bin_size() assume 1 <= precision <= DECIMAL_MAX_PRECISION
++        and 0 <= scale <= min(precision, DECIMAL_MAX_SCALE).
++      */
++      if (precision < 1 || precision > DECIMAL_MAX_PRECISION ||
++          scale > DECIMAL_MAX_SCALE || scale > precision)
++        return true;
++
+       my_decimal d;
+ 
+       /* The decimal value is encoded after the two prec/scale bytes. */
+@@ -366,6 +384,13 @@ static bool parse_mysql_scalar_or_value(String *buffer, const uchar *data,
+                                         size_t len, size_t value_type_offset,
+                                         bool large, size_t depth)
+ {
++  /*
++    The value entry (type byte followed by either the inlined value or
++    the offset to the value) must fit completely into the data.
++  */
++  if (len < value_size(large) || value_type_offset > len - value_size(large))
++    return true;
++
+   /* Get the type of the value stored at the key. */
+   const JSONB_TYPES value_type=
+     static_cast<JSONB_TYPES>(data[value_type_offset]);
+@@ -373,8 +398,9 @@ static bool parse_mysql_scalar_or_value(String *buffer, const uchar *data,
+   if (type_is_stored_inline(value_type, large))
+   {
+     const size_t value_start = value_type_offset + 1;
++    /* Inlined values never use more than the offset field (2 or 4 bytes). */
+     if (parse_mysql_scalar(buffer, value_type, data + value_start,
+-                           len - value_start))
++                           value_size(large) - 1))
+       return true;
+   }
+   else
+@@ -383,6 +409,13 @@ static bool parse_mysql_scalar_or_value(String *buffer, const uchar *data,
+        of the Object / Array */
+     const size_t value_start= read_offset_or_size(
+                                       data + value_type_offset + 1, large);
++    /*
++      The value must be located after the type/offset entry (it cannot
++      point into the header) and must start inside the data.
++    */
++    if (value_start < value_type_offset + value_size(large) ||
++        value_start >= len)
++      return true;
+     if (parse_mysql_json_value(buffer, value_type, data + value_start,
+                                len - value_start, depth))
+       return true;
+@@ -419,7 +452,17 @@ static bool parse_array_or_object(String *buffer, const uchar *data, size_t len,
+   const size_t bytes= read_offset_or_size(data + offset_size, large);
+ 
+   /* The value can't have more bytes than what's available in the buffer. */
+-  if (bytes > len)
++  if (bytes > len || bytes < 2 * offset_size)
++    return true;
++
++  /*
++    The header (two length fields, the key entries for objects and the
++    value entries) must fit into the declared number of bytes.
++    Use ulonglong to avoid overflow in the multiplication on 32-bit systems.
++  */
++  const ulonglong entry_size= (handle_as_object ? key_size(large) : 0) +
++                              value_size(large);
++  if ((ulonglong) element_count * entry_size > (ulonglong) bytes - 2 * offset_size)
+     return true;
+ 
+   if (buffer->append(handle_as_object ? '{' : '['))
+@@ -452,6 +495,14 @@ static bool parse_array_or_object(String *buffer, const uchar *data, size_t len,
+                                       element_count * key_size(large) +
+                                       i * value_size(large));
+ 
++      /*
++        The key must be located after the header (it cannot point into
++        the header) and must fit completely into the data.
++      */
++      if (key_start < 2 * offset_size + element_count * entry_size ||
++          key_start > bytes || bytes - key_start < key_len)
++        return true;
++
+       /* First print the key. */
+       if (buffer->append('"') ||
+           append_string_json(buffer, data + key_start, key_len) ||

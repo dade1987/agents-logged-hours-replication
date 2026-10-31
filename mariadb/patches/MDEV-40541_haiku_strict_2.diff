@@ -1,0 +1,36 @@
+diff --git a/sql/sql_acl.cc b/sql/sql_acl.cc
+index d4a7606d..b46845aa 100644
+--- a/sql/sql_acl.cc
++++ b/sql/sql_acl.cc
+@@ -647,6 +647,8 @@ bool ROLE_GRANT_PAIR::init(MEM_ROOT *mem, const char *username,
+ #define IP_ADDR_STRLEN (3 + 1 + 3 + 1 + 3 + 1 + 3)
+ #define ACL_KEY_LENGTH (IP_ADDR_STRLEN + 1 + NAME_LEN + \
+                         1 + USERNAME_LENGTH + 1)
++/* first byte of acl_cache keys for roles; never a valid first byte of an ip */
++#define ACL_ROLE_CACHE_KEY_PREFIX '\1'
+ 
+ #if defined(HAVE_OPENSSL)
+ /*
+@@ -3701,10 +3703,21 @@ privilege_t acl_get(const char *host, const char *ip,
+   uint i;
+   size_t key_length;
+   char key[ACL_KEY_LENGTH],*tmp_db,*end;
++  char *key_ip= key;
+   acl_entry *entry;
+   DBUG_ENTER("acl_get");
+ 
+-  tmp_db= strmov(strmov(key, safe_str(ip)) + 1, user) + 1;
++  /*
++    Role lookups are called with an empty host and ip. Without a marker
++    their cache key would be identical to the key of a user connected
++    through a socket (ip is NULL there), so a role and a user with the
++    same name would share one cache entry. Prefix role keys with a byte
++    that a user key never starts with, so the two cannot collide.
++  */
++  if (!host || !host[0])
++    *key_ip++= ACL_ROLE_CACHE_KEY_PREFIX;
++
++  tmp_db= strmov(strmov(key_ip, safe_str(ip)) + 1, user) + 1;
+   end= strnmov(tmp_db, db, key + sizeof(key) - tmp_db);
+ 
+   if (end >= key + sizeof(key)) // db name was truncated

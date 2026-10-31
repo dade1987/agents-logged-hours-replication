@@ -1,0 +1,84 @@
+diff --git a/mysql-test/suite/sql_sequence/default.result b/mysql-test/suite/sql_sequence/default.result
+index a6f6d127..159e5c6f 100644
+--- a/mysql-test/suite/sql_sequence/default.result
++++ b/mysql-test/suite/sql_sequence/default.result
+@@ -346,4 +346,23 @@ id1	id2
+ 9	1
+ drop table t1,t2,t3;
+ drop sequence s1,s2;
++#
++# MDEV-31808 Server crash upon altering table with NEXTVAL for default
++# under exclusive lock
++#
++create sequence s;
++create table t (a int default(nextval(s)), b int);
++alter table t force, algorithm=copy, lock=exclusive;
++insert into t (b) values (1);
++select * from t;
++a	b
++1	1
++create table t2 (a int default(nextval(s)), b int) engine=myisam;
++alter table t2 force, algorithm=copy, lock=exclusive;
++insert into t2 (b) values (1);
++select * from t2;
++a	b
++2	1
++drop table t, t2;
++drop sequence s;
+ # End of 10.6 tests
+diff --git a/mysql-test/suite/sql_sequence/default.test b/mysql-test/suite/sql_sequence/default.test
+index 45ef4b31..05e5d340 100644
+--- a/mysql-test/suite/sql_sequence/default.test
++++ b/mysql-test/suite/sql_sequence/default.test
+@@ -263,4 +263,21 @@ select * from t3;
+ drop table t1,t2,t3;
+ drop sequence s1,s2;
+ 
++--echo #
++--echo # MDEV-31808 Server crash upon altering table with NEXTVAL for default
++--echo # under exclusive lock
++--echo #
++
++create sequence s;
++create table t (a int default(nextval(s)), b int);
++alter table t force, algorithm=copy, lock=exclusive;
++insert into t (b) values (1);
++select * from t;
++create table t2 (a int default(nextval(s)), b int) engine=myisam;
++alter table t2 force, algorithm=copy, lock=exclusive;
++insert into t2 (b) values (1);
++select * from t2;
++drop table t, t2;
++drop sequence s;
++
+ --echo # End of 10.6 tests
+diff --git a/sql/sql_base.cc b/sql/sql_base.cc
+index 379337af..2e4fe5e4 100644
+--- a/sql/sql_base.cc
++++ b/sql/sql_base.cc
+@@ -4994,8 +4994,23 @@ bool open_and_lock_internal_tables(TABLE *table, bool lock_table)
+   TABLE_LIST *tmp= table->internal_tables;
+   DML_prelocking_strategy prelocking_strategy;
+ 
+-  if (open_tables(thd, thd->lex->create_info, &tmp, &counter, 0,
+-                  &prelocking_strategy))
++  /*
++    We use MYSQL_OPEN_IGNORE_FLUSH here as we may be called while the
++    statement already has tables open and locked, possibly in a state
++    where the TABLE_SHARE of one of them has been marked as flushed by
++    the statement itself (for example ALTER TABLE ... ALGORITHM=COPY,
++    LOCK=EXCLUSIVE calls wait_while_table_is_used(), which flushes the
++    table definition cache entry of the altered table before this
++    function is called for the new temporary table). Without this flag
++    open_table() would detect thd->open_tables->s->tdc->flushed and
++    request a back-off, closing and reopening all tables of the statement
++    behind the back of the caller (and the storage engines, which may
++    already have a statement transaction started), which leads to crashes.
++    Ignoring the flush is safe: the tables we open here are used only for
++    the duration of the statement and are protected by metadata locks.
++  */
++  if (open_tables(thd, thd->lex->create_info, &tmp, &counter,
++                  MYSQL_OPEN_IGNORE_FLUSH, &prelocking_strategy))
+     goto err;
+ 
+   if (lock_table)

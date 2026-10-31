@@ -1,0 +1,86 @@
+diff --git a/sql/sys_vars.cc b/sql/sys_vars.cc
+index 608a8a60..224ccec9 100644
+--- a/sql/sys_vars.cc
++++ b/sql/sys_vars.cc
+@@ -2475,17 +2475,18 @@ Sys_var_slave_parallel_mode::global_update(THD *thd, set_var *var)
+   enum_slave_parallel_mode new_value=
+     (enum_slave_parallel_mode)var->save_result.ulonglong_value;
+   LEX_CSTRING *base_name= &var->base;
++  const bool implicit= !base_name->str;
+   Master_info *mi;
+   bool res= false;
+ 
+-  if (!base_name->length)
++  if (implicit)
+     base_name= &thd->variables.default_master_connection;
+ 
+   mysql_mutex_unlock(&LOCK_global_system_variables);
+   mysql_mutex_lock(&LOCK_active_mi);
+ 
+   mi= master_info_index->
+-    get_master_info(base_name, !base_name->length ?
++    get_master_info(base_name, implicit ?
+                     Sql_condition::WARN_LEVEL_ERROR :
+                     Sql_condition::WARN_LEVEL_WARN);
+ 
+@@ -2500,7 +2501,7 @@ Sys_var_slave_parallel_mode::global_update(THD *thd, set_var *var)
+     else
+     {
+       mi->parallel_mode= new_value;
+-      if (!base_name->length)
++      if (implicit)
+       {
+         /* Use as default value for new connections */
+         opt_slave_parallel_mode= new_value;
+@@ -2523,15 +2524,16 @@ Sys_var_slave_parallel_mode::global_value_ptr(THD *thd,
+   Master_info *mi;
+   enum_slave_parallel_mode val=
+     (enum_slave_parallel_mode)opt_slave_parallel_mode;
++  const bool implicit= !base_name || !base_name->str;
+ 
+-  if (!base_name->length)
++  if (implicit)
+     base_name= &thd->variables.default_master_connection;
+ 
+   mysql_mutex_unlock(&LOCK_global_system_variables);
+   mysql_mutex_lock(&LOCK_active_mi);
+ 
+   mi= master_info_index->
+-    get_master_info(base_name, !base_name->length ?
++    get_master_info(base_name, implicit ?
+                     Sql_condition::WARN_LEVEL_ERROR :
+                     Sql_condition::WARN_LEVEL_WARN);
+   if (mi)
+@@ -5681,13 +5683,14 @@ bool Sys_var_rpl_filter::global_update(THD *thd, set_var *var)
+ {
+   bool result= true;                            // Assume error
+   LEX_CSTRING *base_name= &var->base;
++  const bool implicit= !base_name->str;
+ 
+-  if (!base_name->length)
++  if (implicit)
+     base_name= &thd->variables.default_master_connection;
+ 
+   mysql_mutex_unlock(&LOCK_global_system_variables);
+ 
+-  if (Master_info *mi= get_master_info(base_name, !var->base.length ?
++  if (Master_info *mi= get_master_info(base_name, implicit ?
+                                        Sql_condition::WARN_LEVEL_ERROR :
+                                        Sql_condition::WARN_LEVEL_WARN))
+   {
+@@ -5753,11 +5756,13 @@ Sys_var_rpl_filter::global_value_ptr(THD *thd,
+   Master_info *mi;
+   Rpl_filter *rpl_filter;
+ 
+-  if (!base_name->str)
++  const bool implicit= !base_name || !base_name->str;
++
++  if (implicit)
+     base_name= &thd->variables.default_master_connection;
+ 
+   mysql_mutex_unlock(&LOCK_global_system_variables);
+-  mi= get_master_info(base_name, !base_name->length ?
++  mi= get_master_info(base_name, implicit ?
+                       Sql_condition::WARN_LEVEL_ERROR :
+                       Sql_condition::WARN_LEVEL_WARN);
+ 

@@ -1,0 +1,74 @@
+diff --git a/public/completion/classes/progress.php b/public/completion/classes/progress.php
+index 48c8c2bf63f..de5bd8ea56f 100644
+--- a/public/completion/classes/progress.php
++++ b/public/completion/classes/progress.php
+@@ -64,6 +64,42 @@ class progress {
+             return null;
+         }
+ 
++        $cache = self::get_request_cache();
++        $cachekey = "{$course->id}_{$userid}_" . ($course->cacherev ?? 0);
++        $cached = $cache->get($cachekey);
++        if ($cached !== false) {
++            return $cached['value'];
++        }
++
++        $result = self::calculate_course_progress_percentage($completion, $userid);
++        $cache->set($cachekey, ['value' => $result]);
++        return $result;
++    }
++
++    /**
++     * Returns the per-request cache used for progress percentages.
++     *
++     * @return \cache
++     */
++    protected static function get_request_cache(): \cache {
++        return \cache::make_from_params(\cache_store::MODE_REQUEST, 'core_completion', 'progress_percentage');
++    }
++
++    /**
++     * Purges the per-request progress percentage cache.
++     */
++    public static function purge_request_cache(): void {
++        self::get_request_cache()->purge();
++    }
++
++    /**
++     * Calculates the progress percentage (uncached).
++     *
++     * @param \completion_info $completion
++     * @param int $userid
++     * @return float|int|null
++     */
++    protected static function calculate_course_progress_percentage(\completion_info $completion, int $userid) {
+         // Before we check how many modules have been completed see if the course has.
+         if ($completion->is_course_complete($userid)) {
+             return 100;
+diff --git a/public/lib/completionlib.php b/public/lib/completionlib.php
+index 34405342e66..1264f65a174 100644
+--- a/public/lib/completionlib.php
++++ b/public/lib/completionlib.php
+@@ -1270,6 +1270,9 @@ class completion_info {
+         }
+         $transaction->allow_commit();
+ 
++        // Completion state changed, so purge the per-request course progress cache.
++        \core_completion\progress::purge_request_cache();
++
+         $cmcontext = context_module::instance($data->coursemoduleid);
+ 
+         $completioncache = cache::make('core', 'completion');
+@@ -1379,6 +1382,12 @@ class completion_info {
+                 continue;
+             }
+ 
++            // Fast path: no availability rule, not separate groups and no grouping, so every enrolled user can access it.
++            if (empty($cm->availability) && $cm->groupmode != SEPARATEGROUPS && empty($cm->groupingid)) {
++                $visible[$cm->id] = 1;
++                continue;
++            }
++
+             // Step 2: Check if the user is excluded by group or grouping style restrictions.
+             $info = new \core_availability\info_module($cm);
+ 

@@ -1,0 +1,118 @@
+diff --git a/mysql-test/main/loaddata.result b/mysql-test/main/loaddata.result
+index f2cf21b3..a691756e 100644
+--- a/mysql-test/main/loaddata.result
++++ b/mysql-test/main/loaddata.result
+@@ -722,3 +722,32 @@ ST_AsText(p)	chr
+ POINT(37.646944 -75.761111)	їєі
+ drop table t1, t2;
+ # End of 10.5 tests
++#
++# MDEV-40480 LOAD DATA leaves a stale STORED generated column after a
++#            BEFORE INSERT trigger changes its base column
++#
++CREATE TABLE t1 (
++id   INT PRIMARY KEY,
++v    INT NOT NULL,
++g    INT GENERATED ALWAYS AS (v * 2) STORED,
++vg   INT GENERATED ALWAYS AS (v * 3) VIRTUAL,
++note VARCHAR(20)
++);
++CREATE TRIGGER t1_bi BEFORE INSERT ON t1 FOR EACH ROW SET NEW.v = 20;
++LOAD DATA INFILE 'MYSQLTEST_VARDIR/tmp/mdev40480.txt' INTO TABLE t1
++FIELDS TERMINATED BY '\t' LINES TERMINATED BY '\n' (id, v, note);
++SELECT id, v, g, vg, note, g = v * 2 AS invariant_holds FROM t1 ORDER BY id;
++id	v	g	vg	note	invariant_holds
++2	20	40	60	new	1
++3	20	40	60	old	1
++LOAD DATA INFILE 'MYSQLTEST_VARDIR/tmp/mdev40480.txt' INTO TABLE t1
++FIELDS TERMINATED BY '\t' LINES TERMINATED BY '\n' (@id, v, note)
++SET id = @id + 10;
++SELECT id, v, g, vg, note, g = v * 2 AS invariant_holds FROM t1 ORDER BY id;
++id	v	g	vg	note	invariant_holds
++2	20	40	60	new	1
++3	20	40	60	old	1
++12	20	40	60	new	1
++13	20	40	60	old	1
++DROP TABLE t1;
++# End of 10.11 tests
+diff --git a/mysql-test/main/loaddata.test b/mysql-test/main/loaddata.test
+index 84040be8..03c3ae0d 100644
+--- a/mysql-test/main/loaddata.test
++++ b/mysql-test/main/loaddata.test
+@@ -808,3 +808,39 @@ select ST_AsText(p), chr from t2;
+ drop table t1, t2;
+ 
+ --echo # End of 10.5 tests
++
++--echo #
++--echo # MDEV-40480 LOAD DATA leaves a stale STORED generated column after a
++--echo #            BEFORE INSERT trigger changes its base column
++--echo #
++
++CREATE TABLE t1 (
++  id   INT PRIMARY KEY,
++  v    INT NOT NULL,
++  g    INT GENERATED ALWAYS AS (v * 2) STORED,
++  vg   INT GENERATED ALWAYS AS (v * 3) VIRTUAL,
++  note VARCHAR(20)
++);
++CREATE TRIGGER t1_bi BEFORE INSERT ON t1 FOR EACH ROW SET NEW.v = 20;
++
++--write_file $MYSQLTEST_VARDIR/tmp/mdev40480.txt
++2	12	new
++3	13	old
++EOF
++
++--replace_result $MYSQLTEST_VARDIR MYSQLTEST_VARDIR
++eval LOAD DATA INFILE '$MYSQLTEST_VARDIR/tmp/mdev40480.txt' INTO TABLE t1
++  FIELDS TERMINATED BY '\t' LINES TERMINATED BY '\n' (id, v, note);
++SELECT id, v, g, vg, note, g = v * 2 AS invariant_holds FROM t1 ORDER BY id;
++
++# The same with a SET clause already worked before the fix
++--replace_result $MYSQLTEST_VARDIR MYSQLTEST_VARDIR
++eval LOAD DATA INFILE '$MYSQLTEST_VARDIR/tmp/mdev40480.txt' INTO TABLE t1
++  FIELDS TERMINATED BY '\t' LINES TERMINATED BY '\n' (@id, v, note)
++  SET id = @id + 10;
++SELECT id, v, g, vg, note, g = v * 2 AS invariant_holds FROM t1 ORDER BY id;
++
++--remove_file $MYSQLTEST_VARDIR/tmp/mdev40480.txt
++DROP TABLE t1;
++
++--echo # End of 10.11 tests
+diff --git a/sql/sql_base.cc b/sql/sql_base.cc
+index 544df995..76f38491 100644
+--- a/sql/sql_base.cc
++++ b/sql/sql_base.cc
+@@ -9371,17 +9371,25 @@ fill_record_n_invoke_before_triggers(THD *thd, TABLE *table,
+     /*
+       Re-calculate virtual fields to cater for cases when base columns are
+       updated by the triggers.
++
++      Note that the list of fields may be empty, e.g. for LOAD DATA without
++      a SET clause: the base columns have already been filled directly from
++      the input file before this function was called, and a BEFORE trigger
++      may still have modified them, so the generated columns have to be
++      re-evaluated in that case as well (MDEV-40480).
+     */
+-    if (table->vfield && fields.elements)
++    if (table->vfield)
+     {
+-      Item *fld= (Item_field*) fields.head();
+-      Item_field *item_field= fld->field_for_view_update();
+-      if (item_field)
++#ifndef DBUG_OFF
++      if (fields.elements)
+       {
+-        DBUG_ASSERT(table == item_field->field->table);
+-        result|= table->update_virtual_fields(table->file,
+-                                              VCOL_UPDATE_FOR_WRITE);
++        Item *fld= fields.head();
++        Item_field *item_field= fld->field_for_view_update();
++        DBUG_ASSERT(!item_field || table == item_field->field->table);
+       }
++#endif
++      result|= table->update_virtual_fields(table->file,
++                                            VCOL_UPDATE_FOR_WRITE);
+     }
+   }
+   return result;

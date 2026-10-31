@@ -1,0 +1,22 @@
+diff --git a/sql/sql_view.cc b/sql/sql_view.cc
+index ab2d4df9..685e7e25 100644
+--- a/sql/sql_view.cc
++++ b/sql/sql_view.cc
+@@ -1059,6 +1059,17 @@ static int mysql_register_view(THD *thd, DDL_LOG_STATE *ddl_log_state,
+     lex->create_view->algorithm= DTYPE_ALGORITHM_UNDEFINED;
+   }
+   view->algorithm= lex->create_view->algorithm;
++  /*
++    definer_user and definer_host are stored in the .frm as raw
++    newline-delimited strings, so a newline would make parsing ambiguous.
++  */
++  if (memchr(lex->definer->user.str, '\n', lex->definer->user.length) ||
++      memchr(lex->definer->host.str, '\n', lex->definer->host.length))
++  {
++    my_error(ER_WRONG_VALUE, MYF(0), "DEFINER", lex->definer->user.str);
++    error= -1;
++    goto err;
++  }
+   view->definer.user= lex->definer->user;
+   view->definer.host= lex->definer->host;
+   view->view_suid= lex->create_view->suid;

@@ -1,0 +1,46 @@
+diff --git a/sql/ha_partition.cc b/sql/ha_partition.cc
+index 411e1d30..5babbeb2 100644
+--- a/sql/ha_partition.cc
++++ b/sql/ha_partition.cc
+@@ -11137,8 +11137,15 @@ void ha_partition::release_auto_increment()
+         If the current auto_increment values is lower than the reserved
+         value, and the reserved value was reserved by this thread,
+         we can lower the reserved value.
++
++        next_insert_id must also lie inside the interval last reserved by
++        this statement. If a failed row rolled it back (see
++        handler::restore_auto_increment()) to a point before that interval,
++        the values in between were handed out to other sessions and must not
++        be returned to the shared counter (MDEV-40995).
+       */
+       if (next_insert_id < next_auto_inc_val &&
++          next_insert_id >= auto_inc_interval_for_cur_row.minimum() &&
+           auto_inc_interval_for_cur_row.maximum() >= next_auto_inc_val)
+       {
+         THD *thd= ha_thd();
+diff --git a/sql/handler.h b/sql/handler.h
+index cb408d1b..332aacae 100644
+--- a/sql/handler.h
++++ b/sql/handler.h
+@@ -4111,9 +4111,21 @@ class handler :public Sql_alloc
+       for this first row, so no id was generated since the INSERT started, so
+       we should set next_insert_id to 0; if insert_id_for_cur_row is not 0, it
+       is the generated id of the first and failed row, so we use it.
++
++      next_insert_id is a cursor into auto_inc_interval_for_cur_row and must
++      never be moved below the start of that interval. When the failed row
++      was the first one drawn from a freshly reserved interval, prev_insert_id
++      is the upper bound of the *previous* interval. If the storage engine
++      handed out values to other sessions in between (e.g. the partitioning
++      engine's shared counter), these values were never reserved for this
++      statement and must not be re-used, nor be returned to the engine by
++      release_auto_increment(). So we clamp to the start of the current
++      interval, which is the id generated for the failed row (MDEV-40995).
+     */
+     next_insert_id= (prev_insert_id > 0) ? prev_insert_id :
+       insert_id_for_cur_row;
++    if (next_insert_id < auto_inc_interval_for_cur_row.minimum())
++      next_insert_id= auto_inc_interval_for_cur_row.minimum();
+   }
+ 
+   virtual void update_create_info(HA_CREATE_INFO *create_info) {}

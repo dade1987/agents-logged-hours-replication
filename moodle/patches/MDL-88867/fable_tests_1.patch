@@ -1,0 +1,97 @@
+diff --git a/public/admin/tool/mobile/UPGRADING.md b/public/admin/tool/mobile/UPGRADING.md
+index 452d5a0f177..0ff75cc1e7a 100644
+--- a/public/admin/tool/mobile/UPGRADING.md
++++ b/public/admin/tool/mobile/UPGRADING.md
+@@ -4,6 +4,9 @@
+ 
+ ### Changed
+ 
++- A new admin setting `tool_mobile/showlogoinappheader` (Show site logo in app header) has been added under Mobile Premium features. The WS tool_mobile_get_config now returns the `tool_mobile_showlogoinappheader` setting.
++
++  For more information see [MDL-88867](https://tracker.moodle.org/browse/MDL-88867)
+ - The WS tool_mobile_get_public_config now returns whether MFA and reCAPTCHA are enabled for login/recover password.
+ 
+   For more information see [MDL-87003](https://tracker.moodle.org/browse/MDL-87003)
+diff --git a/public/admin/tool/mobile/classes/api.php b/public/admin/tool/mobile/classes/api.php
+index 6e77938c5bd..5d00f33762d 100644
+--- a/public/admin/tool/mobile/classes/api.php
++++ b/public/admin/tool/mobile/classes/api.php
+@@ -342,6 +342,7 @@ class api {
+             $settings->tool_mobile_autologinmintimebetweenreq = $mintimereq;
+             $settings->tool_mobile_autologout = get_config('tool_mobile', 'autologout');
+             $settings->tool_mobile_autologouttime = get_config('tool_mobile', 'autologouttime');
++            $settings->tool_mobile_showlogoinappheader = (int) get_config('tool_mobile', 'showlogoinappheader');
+         }
+ 
+         if (empty($section) or $section == 'calendar') {
+diff --git a/public/admin/tool/mobile/lang/en/tool_mobile.php b/public/admin/tool/mobile/lang/en/tool_mobile.php
+index ac256a847f2..1e867b95b6c 100644
+--- a/public/admin/tool/mobile/lang/en/tool_mobile.php
++++ b/public/admin/tool/mobile/lang/en/tool_mobile.php
+@@ -201,6 +201,8 @@ $string['setuplink'] = 'App download page';
+ $string['setuplink_desc'] = 'URL of page with options to download the mobile app from the App Store and Google Play. The app download page link is displayed in the page footer and in a user\'s profile. Leave blank to not display a link.';
+ $string['showingcacheddata'] = 'Last synced: {$a->since} days ago ({$a->date}).';
+ $string['showinglivedata'] = 'View live data in the <a href="{$a}" target="_blank">Moodle Apps Portal</a>.';
++$string['showlogoinappheader'] = 'Show site logo in app header';
++$string['showlogoinappheader_desc'] = 'Display the site logo in the app\'s home and dashboard header instead of the site name. Requires a site logo to be configured in Site administration > Appearance.';
+ $string['siteplugins'] = 'Site plugins';
+ $string['smartappbanners'] = 'App Banners';
+ $string['subscription'] = 'Subscription';
+diff --git a/public/admin/tool/mobile/settings.php b/public/admin/tool/mobile/settings.php
+index d405e714dfe..f84dc154d90 100644
+--- a/public/admin/tool/mobile/settings.php
++++ b/public/admin/tool/mobile/settings.php
+@@ -241,6 +241,13 @@ if ($hassiteconfig || has_capability('moodle/site:configview', context_system::i
+         PARAM_URL
+     ));
+ 
++    $temp->add(new admin_setting_configcheckbox(
++        'tool_mobile/showlogoinappheader',
++        new lang_string('showlogoinappheader', 'tool_mobile'),
++        new lang_string('showlogoinappheader_desc', 'tool_mobile'),
++        0
++    ));
++
+     $temp->add(new admin_setting_heading(
+         'tool_mobile/customisation',
+         new lang_string('customisation', 'tool_mobile'),
+diff --git a/public/admin/tool/mobile/tests/externallib_test.php b/public/admin/tool/mobile/tests/externallib_test.php
+index 2e5e913a342..30d269771fb 100644
+--- a/public/admin/tool/mobile/tests/externallib_test.php
++++ b/public/admin/tool/mobile/tests/externallib_test.php
+@@ -221,6 +221,7 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+             [ 'name' => 'tool_mobile_autologinmintimebetweenreq', 'value' => 6 * MINSECS ],
+             [ 'name' => 'tool_mobile_autologout', 'value' => get_config('tool_mobile', 'autologout') ],
+             [ 'name' => 'tool_mobile_autologouttime', 'value' => get_config('tool_mobile', 'autologouttime') ],
++            [ 'name' => 'tool_mobile_showlogoinappheader', 'value' => 0 ],
+             [ 'name' => 'calendartype', 'value' => $CFG->calendartype ],
+             [ 'name' => 'calendar_site_timeformat', 'value' => $CFG->calendar_site_timeformat ],
+             [ 'name' => 'calendar_startwday', 'value' => $CFG->calendar_startwday ],
+@@ -293,6 +294,27 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+         $this->assertEquals($expected, $result['settings']);
+     }
+ 
++    /**
++     * Test get_config returns the showlogoinappheader setting according to its value.
++     */
++    public function test_get_config_showlogoinappheader(): void {
++        $this->resetAfterTest(true);
++
++        // Disabled by default.
++        $result = external::get_config('mobileapp');
++        $result = external_api::clean_returnvalue(external::get_config_returns(), $result);
++        $settings = array_column($result['settings'], 'value', 'name');
++        $this->assertArrayHasKey('tool_mobile_showlogoinappheader', $settings);
++        $this->assertEquals(0, $settings['tool_mobile_showlogoinappheader']);
++
++        // Enable the setting.
++        set_config('showlogoinappheader', 1, 'tool_mobile');
++        $result = external::get_config('mobileapp');
++        $result = external_api::clean_returnvalue(external::get_config_returns(), $result);
++        $settings = array_column($result['settings'], 'value', 'name');
++        $this->assertEquals(1, $settings['tool_mobile_showlogoinappheader']);
++    }
++
+     /*
+      * Test get_autologin_key.
+      */

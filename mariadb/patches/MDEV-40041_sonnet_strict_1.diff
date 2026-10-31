@@ -1,0 +1,54 @@
+diff --git a/mysql-test/suite/vcol/r/vcol_trigger_lock_tables.result b/mysql-test/suite/vcol/r/vcol_trigger_lock_tables.result
+new file mode 100644
+index 00000000..2a081a35
+--- /dev/null
++++ b/mysql-test/suite/vcol/r/vcol_trigger_lock_tables.result
+@@ -0,0 +1,14 @@
++#
++# MDEV-40041 Assertion `fixed()' failed in Item_func_connection_id::val_int on INSERT w/ TRIGGER
++#
++SET sql_mode='';
++CREATE TABLE t (c INT);
++LOCK TABLE t WRITE;
++CREATE OR REPLACE TABLE t (a INT AS (CONNECTION_ID()));
++CREATE TRIGGER a BEFORE INSERT ON t FOR EACH ROW SET @a:=1;
++INSERT INTO t VALUES ('');
++Warnings:
++Warning	1906	The value specified for generated column 'a' in table 't' has been ignored
++UNLOCK TABLES;
++DROP TABLE t;
++SET sql_mode=DEFAULT;
+diff --git a/mysql-test/suite/vcol/t/vcol_trigger_lock_tables.test b/mysql-test/suite/vcol/t/vcol_trigger_lock_tables.test
+new file mode 100644
+index 00000000..fbb0daa2
+--- /dev/null
++++ b/mysql-test/suite/vcol/t/vcol_trigger_lock_tables.test
+@@ -0,0 +1,12 @@
++--echo #
++--echo # MDEV-40041 Assertion `fixed()' failed in Item_func_connection_id::val_int on INSERT w/ TRIGGER
++--echo #
++SET sql_mode='';
++CREATE TABLE t (c INT);
++LOCK TABLE t WRITE;
++CREATE OR REPLACE TABLE t (a INT AS (CONNECTION_ID()));
++CREATE TRIGGER a BEFORE INSERT ON t FOR EACH ROW SET @a:=1;
++INSERT INTO t VALUES ('');
++UNLOCK TABLES;
++DROP TABLE t;
++SET sql_mode=DEFAULT;
+diff --git a/sql/sql_base.cc b/sql/sql_base.cc
+index eabad770..23292700 100644
+--- a/sql/sql_base.cc
++++ b/sql/sql_base.cc
+@@ -876,8 +876,10 @@ int close_thread_tables(THD *thd) noexcept
+       /*
+         For simple locking we cleanup it here because we don't close thread
+         tables. For prelocking we close it when we do close thread tables.
++        Do not cleanup when closing tables of a sub-statement (e.g. a
++        trigger): the outer statement still uses the expressions.
+       */
+-      if (thd->locked_tables_mode != LTM_PRELOCKED)
++      if (thd->locked_tables_mode != LTM_PRELOCKED && !thd->in_sub_stmt)
+         table->vcol_cleanup_expr(thd);
+     }
+ 

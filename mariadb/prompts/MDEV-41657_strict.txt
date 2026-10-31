@@ -1,0 +1,39 @@
+You are a software engineer fixing an issue in MariaDB Server (C/C++). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot build MariaDB or run its test suite. Read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update mysql-test tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDEV-41657: TO_DATE no longer works as a variable
+
+A variable called to_date can no longer be used after the upgrade to 12.3
+
+As reported on [linkedIn|https://lnkd.in/p/gT_wJXkE]
+
+fix:
+
+{code:patch}
+diff --git a/sql/lex.h b/sql/lex.h
+index 709d949cd6e..7f81d051f69 100644
+--- a/sql/lex.h
++++ b/sql/lex.h
+@@ -675,7 +675,6 @@ SYMBOL symbols[] = {
+   { "TINYINT",         SYM(TINYINT)},
+   { "TINYTEXT",                SYM(TINYTEXT)},
+   { "TO",              SYM(TO_SYM)},
+-  { "TO_DATE",         SYM(TO_DATE)},
+   { "TRAILING",                SYM(TRAILING)},
+   { "TRANSACTION",     SYM(TRANSACTION_SYM)},
+   { "TRANSACTIONAL",   SYM(TRANSACTIONAL_SYM)},
+@@ -791,6 +790,7 @@ SYMBOL sql_functions[] = {
+   { "SUBSTRING",       SYM(SUBSTRING)},
+   { "SUM",             SYM(SUM_SYM)},
+   { "SYSTEM_USER",      SYM(USER_SYM)},
++  { "TO_DATE",         SYM(TO_DATE)},
+   { "TRIM",            SYM(TRIM)},
+   { "TRIM_ORACLE",     SYM(TRIM_ORACLE)},
+   { "VARIANCE",                SYM(VARIANCE_SYM)},
+{code}

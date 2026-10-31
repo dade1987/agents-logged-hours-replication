@@ -1,0 +1,20 @@
+diff --git a/sql/item_geofunc.cc b/sql/item_geofunc.cc
+index 29c1bd56..4a04554e 100644
+--- a/sql/item_geofunc.cc
++++ b/sql/item_geofunc.cc
+@@ -2137,6 +2137,15 @@ longlong Item_func_isvalid::val_int()
+   Geometry *geometry;
+ 
+   int valid;
++
++  /*
++    Reset null_value on every evaluation. Otherwise a NULL result from a
++    previous row (e.g. an unmatched row of an outer join) leaks into the
++    next non-NULL evaluation, which is then reported as NULL, while the
++    same expression materialized into a temporary table is handled
++    differently.
++  */
++  null_value= 0;
+   if ((args[0]->null_value ||
+       !(geometry= Geometry::construct(&buffer, wkb->ptr(), wkb->length()))))
+   {

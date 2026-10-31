@@ -1,0 +1,16 @@
+diff --git a/public/lib/editor/tiny/plugins/recordrtc/classes/plugininfo.php b/public/lib/editor/tiny/plugins/recordrtc/classes/plugininfo.php
+index 12c05c16a8d..77f5bc3549d 100644
+--- a/public/lib/editor/tiny/plugins/recordrtc/classes/plugininfo.php
++++ b/public/lib/editor/tiny/plugins/recordrtc/classes/plugininfo.php
+@@ -116,7 +116,10 @@ class plugininfo extends plugin implements
+         }
+ 
+         $maxrecsize = get_max_upload_file_size();
+-        if (!empty($options['maxbytes'])) {
++        // Users who can ignore file size limits are only restricted by the server (PHP) limits.
++        $ignorelimits = (isset($options['maxbytes']) && $options['maxbytes'] == USER_CAN_IGNORE_FILE_SIZE_LIMITS) ||
++            has_capability('moodle/course:ignorefilesizelimits', $context);
++        if (!$ignorelimits && !empty($options['maxbytes'])) {
+             $maxrecsize = min($maxrecsize, $options['maxbytes']);
+         }
+         $params = [

@@ -1,0 +1,67 @@
+Logging: /home/user/mdb_src/mysql-test/mariadb-test-run.pl  --vardir=/home/mtr/var/t --force --parallel=4 --retry=0 main.lotofstack
+VS config: 
+vardir: /home/mtr/var/t
+Removing old var directory...
+Creating var directory '/home/mtr/var/t'...
+Checking supported features...
+MariaDB Version 10.6.28-MariaDB-debug
+ - SSL connections supported
+ - binaries are debug compiled
+Collecting tests...
+Installing system database...
+
+==============================================================================
+
+TEST                                  WORKER RESULT   TIME (ms) or COMMENT
+--------------------------------------------------------------------------
+
+worker[02] Using MTR_BUILD_THREAD 301, with reserved ports 19030..19059
+worker[03] Using MTR_BUILD_THREAD 302, with reserved ports 19060..19089
+worker[04] Using MTR_BUILD_THREAD 303, with reserved ports 19090..19119
+worker[01] Using MTR_BUILD_THREAD 300, with reserved ports 19000..19029
+main.lotofstack                          w2 [ fail ]
+        Test ended at 2026-10-28 22:22:37
+
+CURRENT_TEST: main.lotofstack
+mysqltest: At line 140: query 'SELECT ST_GeomFromText(CONCAT(REPEAT('GEOMETRYCOLLECTION(',5000),'POINT(1 1)',REPEAT(')',5000)))' succeeded - should have failed with error ER_STACK_OVERRUN_NEED_MORE (1436)...
+
+The result from queries just before the failure was:
+< snip >
+call bug10100p(255, @var)|
+call bug10100pt(1,255)|
+call bug10100pv(1,255)|
+call bug10100pd(1,255)|
+call bug10100pc(1,255)|
+set @@max_sp_recursion_depth=0|
+deallocate prepare stmt2|
+drop function bug10100f|
+drop procedure bug10100p|
+drop procedure bug10100t|
+drop procedure bug10100pt|
+drop procedure bug10100pv|
+drop procedure bug10100pd|
+drop procedure bug10100pc|
+drop view v1|
+drop table t3|
+#
+# MDEV-40409 ST_GeomFromText stack overrun on deeply nested GeometryCollection
+#
+SELECT ST_GeomFromText(CONCAT(REPEAT('GEOMETRYCOLLECTION(',5000),'POINT(1 1)',REPEAT(')',5000)));
+
+More results from queries before failure can be found in /home/mtr/var/t/2/log/lotofstack.log
+
+ - saving '/home/mtr/var/t/2/log/main.lotofstack/' to '/home/mtr/var/t/log/main.lotofstack/'
+--------------------------------------------------------------------------
+The servers were restarted 0 times
+Spent 0.000 of 2 seconds executing testcases
+
+Completed: Failed 1/1 tests, 0.00% were successful.
+
+Failing test(s): main.lotofstack
+
+The log files in var/log may give you some hint of what went wrong.
+
+If you want to report this error, MariaDB's bug tracker is found at
+https://jira.mariadb.org
+
+mysql-test-run: *** ERROR: there were failing test cases

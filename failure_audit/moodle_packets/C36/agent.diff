@@ -1,0 +1,43 @@
+diff --git a/public/lib/classes/authentication/password.php b/public/lib/classes/authentication/password.php
+index 2cefe53755f..ffb1128a3df 100644
+--- a/public/lib/classes/authentication/password.php
++++ b/public/lib/classes/authentication/password.php
+@@ -225,6 +225,9 @@ class password {
+             $user = $DB->get_record('user', ['id' => $user->id]);
+             \core\event\user_password_updated::create_from_user($user)->trigger();
+ 
++            // Invalidate any outstanding password reset tokens.
++            $DB->delete_records('user_password_resets', ['userid' => $user->id]);
++
+             // Remove WS user tokens.
+             if (!empty($CFG->passwordchangetokendeletion)) {
+                 require_once($CFG->dirroot . '/webservice/lib.php');
+diff --git a/public/lib/classes/user.php b/public/lib/classes/user.php
+index 09c9e0b0627..2c5f27c77df 100644
+--- a/public/lib/classes/user.php
++++ b/public/lib/classes/user.php
+@@ -1943,6 +1943,11 @@ class user {
+             $updaterecord = (object) $changedattributes;
+             $updaterecord->id = $currentrecord->id;
+             $DB->update_record('user', $updaterecord);
++
++            if (array_key_exists('email', $changedattributes)) {
++                // Invalidate any password reset tokens sent to the previous email address.
++                $DB->delete_records('user_password_resets', ['userid' => $currentrecord->id]);
++            }
+         }
+ 
+         if ($updatepassword) {
+diff --git a/public/login/lib.php b/public/login/lib.php
+index 4d4820fbe17..75c555eb850 100644
+--- a/public/login/lib.php
++++ b/public/login/lib.php
+@@ -326,6 +326,8 @@ function core_login_process_password_set($token) {
+  */
+ function core_login_generate_password_reset ($user) {
+     global $DB;
++    // Remove any existing tokens for this user, so only the newest one is valid.
++    $DB->delete_records('user_password_resets', ['userid' => $user->id]);
+     $resetrecord = new stdClass();
+     $resetrecord->timerequested = time();
+     $resetrecord->userid = $user->id;

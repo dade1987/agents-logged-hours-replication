@@ -1,0 +1,65 @@
+diff --git a/mysql-test/main/func_json.result b/mysql-test/main/func_json.result
+index 2f791dc4..4ffd4c83 100644
+--- a/mysql-test/main/func_json.result
++++ b/mysql-test/main/func_json.result
+@@ -2712,6 +2712,22 @@ SELECT JSON_OVERLAPS(@json1, @json2);
+ JSON_OVERLAPS(@json1, @json2)
+ 0
+ #
++# MDEV-41067: wrong result with json_overlaps when one of the arguments
++# has an empty nested array element
++#
++SELECT JSON_OVERLAPS('[[1]]', '[[]]');
++JSON_OVERLAPS('[[1]]', '[[]]')
++0
++SELECT JSON_OVERLAPS('[[1]]', '[[],123]');
++JSON_OVERLAPS('[[1]]', '[[],123]')
++0
++SELECT JSON_OVERLAPS('[[1,2]]', '[[1]]');
++JSON_OVERLAPS('[[1,2]]', '[[1]]')
++0
++SELECT JSON_OVERLAPS('[[1]]', '[[1]]');
++JSON_OVERLAPS('[[1]]', '[[1]]')
++1
++#
+ # MDEV-30304: Json Range only affects first row of the result set
+ #
+ CREATE TABLE t1 ( j JSON );
+diff --git a/mysql-test/main/func_json.test b/mysql-test/main/func_json.test
+index c6045cb2..8cb6a183 100644
+--- a/mysql-test/main/func_json.test
++++ b/mysql-test/main/func_json.test
+@@ -1906,6 +1906,15 @@ SET @json1 = '{"kk":{"k1":"v1","k2":"v2"}}';
+ SET @json2 = '{"kk":{"k1":"v1","k2":"v2","k3":"v3"}}';
+ SELECT JSON_OVERLAPS(@json2, @json1);
+ SELECT JSON_OVERLAPS(@json1, @json2);
++--echo #
++--echo # MDEV-41067: wrong result with json_overlaps when one of the arguments
++--echo # has an empty nested array element
++--echo #
++
++SELECT JSON_OVERLAPS('[[1]]', '[[]]');
++SELECT JSON_OVERLAPS('[[1]]', '[[],123]');
++SELECT JSON_OVERLAPS('[[1,2]]', '[[1]]');
++SELECT JSON_OVERLAPS('[[1]]', '[[1]]');
+ 
+ --echo #
+ --echo # MDEV-30304: Json Range only affects first row of the result set
+diff --git a/sql/item_jsonfunc.cc b/sql/item_jsonfunc.cc
+index 615d0cb4..899ce489 100644
+--- a/sql/item_jsonfunc.cc
++++ b/sql/item_jsonfunc.cc
+@@ -4809,7 +4809,12 @@ bool json_compare_arrays_in_order(json_engine_t *js, json_engine_t *value)
+       return FALSE;
+     }
+   }
+-  res= (value->state == JST_ARRAY_END || value->state == JST_OBJ_END ?
++  /*
++    The arrays are equal only if both have been exhausted at the same time.
++    If one of them still has elements left, they differ in length.
++  */
++  res= ((value->state == JST_ARRAY_END || value->state == JST_OBJ_END) &&
++        (js->state == JST_ARRAY_END || js->state == JST_OBJ_END) ?
+         TRUE : FALSE);
+   json_skip_current_level(js, value);
+   return res;

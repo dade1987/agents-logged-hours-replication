@@ -1,0 +1,174 @@
+diff --git a/public/lib/classes/check/table.php b/public/lib/classes/check/table.php
+index 1ad28c10693..5330b692585 100644
+--- a/public/lib/classes/check/table.php
++++ b/public/lib/classes/check/table.php
+@@ -186,14 +186,9 @@ class table implements \core\output\renderable {
+                 // Detail page: call get_results() to preserve the per-sub-result breakdown.
+                 // The placeholder has one <tr>; replace its outerHTML with one row per result.
+                 $results = $check->get_results();
+-                $fails = [];
+                 $rowshtml = '';
+ 
+                 foreach ($results as $result) {
+-                    if ($result->get_status() !== result::OK) {
+-                        $fails[] = $result;
+-                    }
+-
+                     $actionlink = $result->get_action_link() ?? $check->get_action_link();
+                     $cells  = html_writer::tag('td', $output->check_result($result), ['class' => 'rightalign status']);
+                     $cells .= html_writer::tag(
+@@ -216,8 +211,9 @@ class table implements \core\output\renderable {
+                 // Replace the single placeholder row with all sub-result rows.
+                 echo $output->select_element_for_replace("#$id", $rowshtml, true);
+ 
+-                // Build and stream the details section from all failing sub-results.
+-                $details = array_filter(array_map(fn($r) => $r->get_details(), $fails));
++                // Build and stream the details section from all sub-results. Details are
++                // always shown when available, regardless of whether the check is failing.
++                $details = array_filter(array_map(fn($r) => $r->get_details(), $results));
+                 if (count($details) === 1) {
+                     $detailhtml = reset($details);
+                 } else if (count($details) > 1) {
+diff --git a/public/lib/tests/check/table_test.php b/public/lib/tests/check/table_test.php
+new file mode 100644
+index 00000000000..a299074fb97
+--- /dev/null
++++ b/public/lib/tests/check/table_test.php
+@@ -0,0 +1,137 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\check;
++
++/**
++ * Unit tests for the check results table.
++ *
++ * @package    core
++ * @category   check
++ * @copyright  2025 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ * @covers     \core\check\table
++ */
++final class table_test extends \advanced_testcase {
++    /**
++     * Build a check returning a single result of the given status with details.
++     *
++     * @param string $status
++     * @param string $details
++     * @return check
++     */
++    private function make_check(string $status, string $details): check {
++        return new class($status, $details) extends check {
++            /** @var string */
++            private string $status;
++            /** @var string */
++            private string $details;
++
++            /**
++             * Constructor.
++             *
++             * @param string $status
++             * @param string $details
++             */
++            public function __construct(string $status, string $details) {
++                $this->status = $status;
++                $this->details = $details;
++            }
++
++            /**
++             * Get the name.
++             *
++             * @return string
++             */
++            public function get_name(): string {
++                return 'Test check';
++            }
++
++            /**
++             * Get the result.
++             *
++             * @return result
++             */
++            public function get_result(): result {
++                return new result($this->status, 'Summary text', $this->details);
++            }
++        };
++    }
++
++    /**
++     * Run the detail page for a check and capture the streamed output.
++     *
++     * @param check $check
++     * @return string
++     */
++    private function run_detail_page(check $check): string {
++        global $OUTPUT;
++
++        $table = new table('security', new \moodle_url('/report/security/index.php'));
++        $table->checks = [$check];
++        $table->detail = $check;
++
++        ob_start();
++        $table->run_checks($OUTPUT);
++        return ob_get_clean();
++    }
++
++    /**
++     * Data provider for test_details_shown_for_all_statuses.
++     *
++     * @return array
++     */
++    public static function status_provider(): array {
++        return [
++            'ok' => [result::OK],
++            'info' => [result::INFO],
++            'warning' => [result::WARNING],
++            'error' => [result::ERROR],
++            'critical' => [result::CRITICAL],
++            'na' => [result::NA],
++        ];
++    }
++
++    /**
++     * Details should always be shown on the detail page, regardless of status.
++     *
++     * @dataProvider status_provider
++     * @param string $status
++     */
++    public function test_details_shown_for_all_statuses(string $status): void {
++        $this->resetAfterTest();
++        $this->setAdminUser();
++
++        $details = 'Unique details text ' . $status;
++        $output = $this->run_detail_page($this->make_check($status, $details));
++
++        $this->assertStringContainsString($details, $output);
++        $this->assertStringContainsString("#checkdetails'", $output);
++        $this->assertStringNotContainsString('#checkdetailscontainer', $output);
++    }
++
++    /**
++     * When a result has no details the details container should be removed.
++     */
++    public function test_details_removed_when_empty(): void {
++        $this->resetAfterTest();
++        $this->setAdminUser();
++
++        $output = $this->run_detail_page($this->make_check(result::OK, ''));
++
++        $this->assertStringContainsString('#checkdetailscontainer', $output);
++    }
++}

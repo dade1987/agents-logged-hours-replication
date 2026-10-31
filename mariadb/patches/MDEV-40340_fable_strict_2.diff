@@ -1,0 +1,121 @@
+diff --git a/client/mysqlimport.cc b/client/mysqlimport.cc
+index 06f44b5b..d8808dea 100644
+--- a/client/mysqlimport.cc
++++ b/client/mysqlimport.cc
+@@ -836,22 +836,40 @@ int table_load_params::load_data(MYSQL *mysql)
+ 
+ 
+ 
+-static void lock_table(MYSQL *mysql, int tablecount, char **raw_tablename)
++/*
++  Lock all tables that are going to be loaded, for write.
++
++  The table names are taken from the list of files to load, not from argv,
++  since argv has already been consumed (advanced to the terminating NULL)
++  while building that list.
++*/
++static void lock_table(MYSQL *mysql,
++                       const std::vector<table_load_params> &files_to_load)
+ {
+-  DYNAMIC_STRING query;
+-  int i;
+-  char tablename[FN_REFLEN];
++  std::string query;
+ 
+   if (verbose)
+     fprintf(stdout, "Locking tables for write\n");
+-  init_dynamic_string(&query, "LOCK TABLES ", 256, 1024);
+-  for (i=0 ; i < tablecount ; i++)
++
++  for (const auto &f : files_to_load)
+   {
+-    fn_format(tablename, raw_tablename[i], "", "", 1 | 2);
+-    dynstr_append(&query, tablename);
+-    dynstr_append(&query, " WRITE,");
++    if (f.is_view)
++      continue;
++    const char *db= current_db ? current_db : f.dbname.c_str();
++    if (!query.empty())
++      query+= ",";
++    if (db && *db)
++    {
++      query+= quote_identifier(db);
++      query+= ".";
++    }
++    query+= quote_identifier(f.tablename.c_str());
++    query+= " WRITE";
+   }
+-  if (mysql_real_query(mysql, query.str, (ulong)query.length-1))
++  if (query.empty())
++    return;
++  query= "LOCK TABLES " + query;
++  if (mysql_real_query(mysql, query.c_str(), (ulong) query.length()))
+     db_error(mysql); /* We shall continue here, if --force was given */
+ }
+ 
+@@ -1361,7 +1379,7 @@ int main(int argc, char **argv)
+   else
+   {
+     if (lock_tables)
+-      lock_table(mysql, argc, argv);
++      lock_table(mysql, files_to_load);
+     for (auto &f : files_to_load)
+     {
+       if ((error= f.load_data(mysql)))
+diff --git a/mysql-test/main/mariadb-import.result b/mysql-test/main/mariadb-import.result
+index 283d0695..24811d29 100644
+--- a/mysql-test/main/mariadb-import.result
++++ b/mysql-test/main/mariadb-import.result
+@@ -423,3 +423,24 @@ drop database `con_schöne_grüße`;
+ drop database `com1`;
+ drop database `con/bar`;
+ drop database `con@fame`;
++#
++# MDEV-40340 mariadb-import --lock-tables crashes
++#
++create table t1(a int);
++create table t2(b int);
++Connecting to localhost
++Selecting database test
++Locking tables for write
++Loading data from SERVER file: vardir/tmp/t1.txt into t1
++test.t1: Records: 2  Deleted: 0  Skipped: 0  Warnings: 0
++Loading data from SERVER file: vardir/tmp/t2.txt into t2
++test.t2: Records: 1  Deleted: 0  Skipped: 0  Warnings: 0
++Disconnecting from localhost
++select * from t1;
++a
++1
++2
++select * from t2;
++b
++3
++drop table t1, t2;
+diff --git a/mysql-test/main/mariadb-import.test b/mysql-test/main/mariadb-import.test
+index c3d96721..09380826 100644
+--- a/mysql-test/main/mariadb-import.test
++++ b/mysql-test/main/mariadb-import.test
+@@ -275,3 +275,23 @@ drop database `con_schöne_grüße`;
+ drop database `com1`;
+ drop database `con/bar`;
+ drop database `con@fame`;
++
++--echo #
++--echo # MDEV-40340 mariadb-import --lock-tables crashes
++--echo #
++create table t1(a int);
++create table t2(b int);
++--write_file $MYSQLTEST_VARDIR/tmp/t1.txt
++1
++2
++EOF
++--write_file $MYSQLTEST_VARDIR/tmp/t2.txt
++3
++EOF
++--replace_result $MYSQLTEST_VARDIR vardir
++--exec $MYSQL_IMPORT --lock-tables --verbose test $MYSQLTEST_VARDIR/tmp/t1.txt $MYSQLTEST_VARDIR/tmp/t2.txt
++select * from t1;
++select * from t2;
++--remove_file $MYSQLTEST_VARDIR/tmp/t1.txt
++--remove_file $MYSQLTEST_VARDIR/tmp/t2.txt
++drop table t1, t2;

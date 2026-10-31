@@ -1,0 +1,89 @@
+diff --git a/mysql-test/suite/vcol/r/load_data.result b/mysql-test/suite/vcol/r/load_data.result
+index 2432cdd0..a9c7eb41 100644
+--- a/mysql-test/suite/vcol/r/load_data.result
++++ b/mysql-test/suite/vcol/r/load_data.result
+@@ -18,3 +18,25 @@ a	b	1	7545402351885872315
+ a	b	2	6048842355806993119
+ a	b	4	15541743660496249717
+ drop table t1, t2;
++#
++# MDEV-40480 LOAD DATA leaves a stale STORED generated column after
++#            a BEFORE INSERT trigger changes its base column
++#
++create table t1 (id int primary key, v int not null,
++g int as (v * 2) stored, vv int as (v * 3) virtual,
++note varchar(20));
++create trigger t1_bi before insert on t1 for each row set new.v = 20;
++select 2, 12, 'new' into outfile 'mdev40480.txt';
++load data infile 'mdev40480.txt' into table t1 (id, v, note);
++select id, v, g, vv, g = v * 2 as invariant_holds from t1;
++id	v	g	vv	invariant_holds
++2	20	40	60	1
++check table t1;
++Table	Op	Msg_type	Msg_text
++test.t1	check	status	OK
++delete from t1;
++load data infile 'mdev40480.txt' into table t1 (id, @v, note) set v = @v;
++select id, v, g, vv, g = v * 2 as invariant_holds from t1;
++id	v	g	vv	invariant_holds
++2	20	40	60	1
++drop table t1;
+diff --git a/mysql-test/suite/vcol/t/load_data.test b/mysql-test/suite/vcol/t/load_data.test
+index f4b3b603..ccaaefc4 100644
+--- a/mysql-test/suite/vcol/t/load_data.test
++++ b/mysql-test/suite/vcol/t/load_data.test
+@@ -11,3 +11,22 @@ select * from t2;
+ insert into t2 (c1,c2,c3) values ("a" , "b", 4);
+ select * from t2;
+ drop table t1, t2;
++
++--echo #
++--echo # MDEV-40480 LOAD DATA leaves a stale STORED generated column after
++--echo #            a BEFORE INSERT trigger changes its base column
++--echo #
++create table t1 (id int primary key, v int not null,
++                 g int as (v * 2) stored, vv int as (v * 3) virtual,
++                 note varchar(20));
++create trigger t1_bi before insert on t1 for each row set new.v = 20;
++select 2, 12, 'new' into outfile 'mdev40480.txt';
++load data infile 'mdev40480.txt' into table t1 (id, v, note);
++select id, v, g, vv, g = v * 2 as invariant_holds from t1;
++check table t1;
++delete from t1;
++load data infile 'mdev40480.txt' into table t1 (id, @v, note) set v = @v;
++select id, v, g, vv, g = v * 2 as invariant_holds from t1;
++drop table t1;
++--let $datadir= `select @@datadir`
++--remove_file $datadir/test/mdev40480.txt
+diff --git a/sql/sql_base.cc b/sql/sql_base.cc
+index 544df995..87024eed 100644
+--- a/sql/sql_base.cc
++++ b/sql/sql_base.cc
+@@ -9372,16 +9372,18 @@ fill_record_n_invoke_before_triggers(THD *thd, TABLE *table,
+       Re-calculate virtual fields to cater for cases when base columns are
+       updated by the triggers.
+     */
+-    if (table->vfield && fields.elements)
++    if (table->vfield)
+     {
+-      Item *fld= (Item_field*) fields.head();
+-      Item_field *item_field= fld->field_for_view_update();
+-      if (item_field)
+-      {
+-        DBUG_ASSERT(table == item_field->field->table);
+-        result|= table->update_virtual_fields(table->file,
+-                                              VCOL_UPDATE_FOR_WRITE);
+-      }
++      /*
++        Do this even if the list of fields is empty: e.g. LOAD DATA without
++        a SET clause fills the record directly and passes an empty list,
++        but the BEFORE trigger still may have modified base columns.
++      */
++      DBUG_ASSERT(!fields.elements ||
++                  !fields.head()->field_for_view_update() ||
++                  table == fields.head()->field_for_view_update()->field->table);
++      result|= table->update_virtual_fields(table->file,
++                                            VCOL_UPDATE_FOR_WRITE);
+     }
+   }
+   return result;

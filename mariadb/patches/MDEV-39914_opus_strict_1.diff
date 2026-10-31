@@ -1,0 +1,60 @@
+diff --git a/mysql-test/main/spatial_utility_function_simplify.result b/mysql-test/main/spatial_utility_function_simplify.result
+index 43544702..c5586785 100644
+--- a/mysql-test/main/spatial_utility_function_simplify.result
++++ b/mysql-test/main/spatial_utility_function_simplify.result
+@@ -559,3 +559,19 @@ SELECT ST_ASTEXT(ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((0 0,0 10,10 10,10 0,0 0,0
+ ERROR 42S22: Unknown column 'a' in 'SELECT'
+ # Clean up
+ DROP TABLE gis_geometrycollection;
++#
++# MDEV-39914 Crash with ST_SIMPLIFY() inside IN list of strings
++#
++SELECT 'a' IN ('b', ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((0 0,0 10,10 10,10 0,0 0))'), 1)) AS c;
++c
++0
++SELECT 'a' IN ('b', ST_SIMPLIFY(ST_GEOMFROMTEXT('MULTILINESTRING((0 0,5 5,10 10),(0 0,0 10))'), 1)) AS c;
++c
++0
++SELECT 'a' IN ('b', ST_SIMPLIFY(ST_GEOMFROMTEXT('MULTIPOLYGON(((0 0,0 10,10 10,10 0,0 0)))'), 1)) AS c;
++c
++0
++SELECT 'a' IN ('b', ST_SIMPLIFY(ST_GEOMFROMTEXT('GEOMETRYCOLLECTION(POINT(1 1),POLYGON((0 0,0 10,10 10,10 0,0 0)))'), 1)) AS c;
++c
++0
++# End of 12.3 tests
+diff --git a/mysql-test/main/spatial_utility_function_simplify.test b/mysql-test/main/spatial_utility_function_simplify.test
+index 8ef99c7e..97811406 100644
+--- a/mysql-test/main/spatial_utility_function_simplify.test
++++ b/mysql-test/main/spatial_utility_function_simplify.test
+@@ -499,3 +499,13 @@ SELECT ST_ASTEXT(ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((0 0,0 10,10 10,10 0,0 0,0
+ 
+ --echo # Clean up
+ DROP TABLE gis_geometrycollection;
++
++--echo #
++--echo # MDEV-39914 Crash with ST_SIMPLIFY() inside IN list of strings
++--echo #
++SELECT 'a' IN ('b', ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((0 0,0 10,10 10,10 0,0 0))'), 1)) AS c;
++SELECT 'a' IN ('b', ST_SIMPLIFY(ST_GEOMFROMTEXT('MULTILINESTRING((0 0,5 5,10 10),(0 0,0 10))'), 1)) AS c;
++SELECT 'a' IN ('b', ST_SIMPLIFY(ST_GEOMFROMTEXT('MULTIPOLYGON(((0 0,0 10,10 10,10 0,0 0)))'), 1)) AS c;
++SELECT 'a' IN ('b', ST_SIMPLIFY(ST_GEOMFROMTEXT('GEOMETRYCOLLECTION(POINT(1 1),POLYGON((0 0,0 10,10 10,10 0,0 0)))'), 1)) AS c;
++
++--echo # End of 12.3 tests
+diff --git a/sql/item_geofunc.cc b/sql/item_geofunc.cc
+index 307f198c..8933f350 100644
+--- a/sql/item_geofunc.cc
++++ b/sql/item_geofunc.cc
+@@ -2321,6 +2321,13 @@ String *Item_func_simplify::val_str(String *str)
+     }
+   }
+ 
++  /*
++    The caller may pass a String with no (or a non-binary) character set,
++    e.g. the zero-initialized elements of in_string. Geometry::simplify()
++    uses String::append() which depends on the charset, so make sure the
++    result buffer is binary.
++  */
++  str->set_charset(&my_charset_bin);
+   if (geometry->simplify(str, max_distance))
+   {
+     null_value= 1;

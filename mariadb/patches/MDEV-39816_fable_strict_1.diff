@@ -1,0 +1,48 @@
+diff --git a/storage/myisam/mi_open.c b/storage/myisam/mi_open.c
+index 414e483a..8d3947e9 100644
+--- a/storage/myisam/mi_open.c
++++ b/storage/myisam/mi_open.c
+@@ -357,6 +357,18 @@ MI_INFO *mi_open(const char *name, int mode, uint open_flags)
+         keyinfo->share= share;
+         disk_pos=mi_keydef_read(disk_pos, keyinfo);
+         disk_pos_assert(disk_pos + keyinfo->keysegs * HA_KEYSEG_SIZE, end_pos);
++        /*
++          Sanity check: the key lengths can never exceed the maximum key
++          length stored in the header (the key buffers are allocated
++          according to share->base.max_key_length).
++        */
++        if (keyinfo->keylength > share->base.max_key_length ||
++            keyinfo->maxlength > share->base.max_key_length ||
++            keyinfo->minlength > keyinfo->maxlength)
++        {
++          my_errno= HA_ERR_CRASHED;
++          goto err;
++        }
+         if (keyinfo->key_alg == HA_KEY_ALG_RTREE)
+           have_rtree=1;
+         set_if_smaller(share->blocksize, keyinfo->block_length);
+@@ -371,6 +383,24 @@ MI_INFO *mi_open(const char *name, int mode, uint open_flags)
+             my_errno= HA_ERR_CRASHED;
+             goto err;
+           }
++          /*
++            Sanity check: for a normal (non-FULLTEXT) key, no key segment
++            can be longer than the key itself, and thus never longer than
++            share->base.max_key_length (which is the size of the key
++            buffers allocated in mi_open()). A corrupted index file with
++            a larger keyseg length would otherwise cause buffer overruns
++            when the key is packed/unpacked.
++            FULLTEXT keys are excluded as their segments describe the
++            indexed columns (which may be longer than a key), not the
++            key itself.
++          */
++          if (!(keyinfo->flag & HA_FULLTEXT) &&
++              (pos->length > share->base.max_key_length ||
++               pos->length > HA_MAX_KEY_BUFF))
++          {
++            my_errno= HA_ERR_CRASHED;
++            goto err;
++          }
+ 	  if (pos->type == HA_KEYTYPE_TEXT ||
+               pos->type == HA_KEYTYPE_VARTEXT1 ||
+               pos->type == HA_KEYTYPE_VARTEXT2)

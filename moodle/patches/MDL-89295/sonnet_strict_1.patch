@@ -1,0 +1,79 @@
+diff --git a/public/mod/assign/locallib.php b/public/mod/assign/locallib.php
+index b6c384ac7e3..12ad618d16c 100644
+--- a/public/mod/assign/locallib.php
++++ b/public/mod/assign/locallib.php
+@@ -3214,10 +3214,14 @@ class assign {
+ 
+         $grade->timemodified = \core\di::get(\core\clock::class)->time();
+ 
+-        if (!empty($grade->workflowstate)) {
+-            $validstates = $this->get_marking_workflow_states_for_current_user();
+-            if (!array_key_exists($grade->workflowstate, $validstates)) {
+-                return false;
++        if ($this->get_instance()->markingworkflow) {
++            // The workflow state is stored in the user flags, not in the grade record.
++            $flags = $this->get_user_flags($grade->userid, false);
++            if (!empty($flags) && !empty($flags->workflowstate)) {
++                $validstates = $this->get_marking_workflow_states_for_current_user();
++                if (!array_key_exists($flags->workflowstate, $validstates)) {
++                    return false;
++                }
+             }
+         }
+ 
+@@ -3353,7 +3357,7 @@ class assign {
+     public function update_mark(stdClass $grade, mixed $mark, ?string $workflowstate = null): bool {
+         global $DB;
+ 
+-        if ($this->grading_disabled($grade->userid)) {
++        if ($this->grading_disabled($grade->userid) || $this->marks_locked($grade->userid)) {
+             return false;
+         }
+ 
+@@ -8793,9 +8797,10 @@ class assign {
+      */
+     public function grading_disabled($userid, $checkworkflow = true, $gradinginfo = null) {
+         if ($checkworkflow && $this->get_instance()->markingworkflow) {
+-            $grade = $this->get_user_grade($userid, false);
++            // The workflow state is stored in the user flags, not in the grade record.
++            $flags = $this->get_user_flags($userid, false);
+             $validstates = $this->get_marking_workflow_states_for_current_user();
+-            if (!empty($grade) && !empty($grade->workflowstate) && !array_key_exists($grade->workflowstate, $validstates)) {
++            if (!empty($flags) && !empty($flags->workflowstate) && !array_key_exists($flags->workflowstate, $validstates)) {
+                 return true;
+             }
+         }
+@@ -8820,6 +8825,24 @@ class assign {
+         return $gradingdisabled;
+     }
+ 
++    /**
++     * Determines if individual marks are locked because the overall workflow state is
++     * "Ready for release" or "Released". This applies to all users, including managers.
++     *
++     * @param int $userid The student userid
++     * @return bool true if individual marks cannot be modified
++     */
++    public function marks_locked(int $userid): bool {
++        if (!$this->is_using_multiple_marking() || !$this->get_instance()->markingworkflow) {
++            return false;
++        }
++        $flags = $this->get_user_flags($userid, false);
++        return !empty($flags) && in_array($flags->workflowstate, [
++            ASSIGN_MARKING_WORKFLOW_STATE_READYFORRELEASE,
++            ASSIGN_MARKING_WORKFLOW_STATE_RELEASED,
++        ]);
++    }
++
+     /**
+      * Determines if grading is restricted by multiple marking requirements.
+      * When grading is restricted grades can only be updated through marking calculations.
+@@ -8927,7 +8950,7 @@ class assign {
+         }
+ 
+         // Add advanced grading.
+-        $gradingdisabled = $this->grading_disabled($userid);
++        $gradingdisabled = $this->grading_disabled($userid) || ($markerpage && $this->marks_locked($userid));
+         $gradinginstance = $this->get_grading_instance($userid, $grade, $gradingdisabled);
+ 
+         if ($markerpage) {

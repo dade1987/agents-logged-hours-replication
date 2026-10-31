@@ -1,0 +1,20 @@
+diff --git a/sql/sql_path.cc b/sql/sql_path.cc
+index 982fbffa..4746100e 100644
+--- a/sql/sql_path.cc
++++ b/sql/sql_path.cc
+@@ -283,6 +283,15 @@ bool Sql_path::from_text(const system_variables &sv, String *str)
+   while (curr < end)
+   {
+     auto len = cs->charlen(curr, end);
++    /*
++      charlen() returns a negative value (MY_CS_TOOSMALL*) for an incomplete
++      multi-byte sequence at the end of the input, and 0 (MY_CS_ILSEQ) for an
++      invalid one. Such input must not be copied byte by byte using 'len',
++      as a negative 'len' would make the copy loops run away and overflow
++      the buffer. Reject it as a bad value.
++    */
++    if (len <= 0)
++      goto err_bad_val;
+ 
+     switch (state)
+     {

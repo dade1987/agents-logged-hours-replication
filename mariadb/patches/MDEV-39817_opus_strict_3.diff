@@ -1,0 +1,142 @@
+diff --git a/mysql-test/main/func_json.result b/mysql-test/main/func_json.result
+index dd40304f..68d4b2f4 100644
+--- a/mysql-test/main/func_json.result
++++ b/mysql-test/main/func_json.result
+@@ -1805,5 +1805,38 @@ SELECT JSON_EXISTS('[[[[[Y[[[[[[[[[[[[[[[[[[Vn]]]]]]]]]]]]]],]]:]]]](', '$[0 to
+ je
+ NULL
+ #
++# MDEV-39817 JSON_ARRAYAGG() returns garbage because of off-by-one error
++#
++create temporary table t (c varchar(20) character set latin1);
++insert into t values ('ab'), ('cd'), ('ef');
++set session group_concat_max_len = 9;
++select json_arrayagg(c order by c) from t;
++json_arrayagg(c order by c)
++["ab","cd"]
++Warnings:
++Warning	1260	Row 3 was cut by JSON_ARRAYAGG()
++set session group_concat_max_len = 6;
++select json_arrayagg(c order by c) from t;
++json_arrayagg(c order by c)
++["ab"]
++Warnings:
++Warning	1260	Row 2 was cut by JSON_ARRAYAGG()
++set session group_concat_max_len = 3;
++select json_arrayagg(c order by c) from t;
++json_arrayagg(c order by c)
++["a"]
++Warnings:
++Warning	1260	Row 1 was cut by JSON_ARRAYAGG()
++truncate table t;
++insert into t values ('a"b');
++set session group_concat_max_len = 4;
++select json_arrayagg(c) from t;
++json_arrayagg(c)
++["a"]
++Warnings:
++Warning	1260	Row 1 was cut by JSON_ARRAYAGG()
++drop temporary table t;
++set session group_concat_max_len = default;
++#
+ # End of 10.6 tests
+ #
+diff --git a/mysql-test/main/func_json.test b/mysql-test/main/func_json.test
+index 842ce772..135d705c 100644
+--- a/mysql-test/main/func_json.test
++++ b/mysql-test/main/func_json.test
+@@ -1256,6 +1256,33 @@ SELECT JSON_EXISTS(CONCAT('[', REPEAT('[', 4000), 'Y', REPEAT(']', 4000), ', 1]'
+ SELECT JSON_EXISTS('[[[[[Y[[[[n[[[[[[[[[[[n[[[Vn]]]]]]]]]]]]]],]]:]]]](', '$[0 to rrrrrRR-1]') as je;
+ SELECT JSON_EXISTS('[[[[[Y[[[[[[[[[[[[[[[[[[Vn]]]]]]]]]]]]]],]]:]]]](', '$[0 to rrrrRR-1]') as je;
+ 
++--echo #
++--echo # MDEV-39817 JSON_ARRAYAGG() returns garbage because of off-by-one error
++--echo #
++
++create temporary table t (c varchar(20) character set latin1);
++insert into t values ('ab'), ('cd'), ('ef');
++#enable after fix MDEV-31554
++--disable_cursor_protocol
++#enable after MDEV-32454 fix
++--disable_view_protocol
++--disable_ps2_protocol
++set session group_concat_max_len = 9;
++select json_arrayagg(c order by c) from t;
++set session group_concat_max_len = 6;
++select json_arrayagg(c order by c) from t;
++set session group_concat_max_len = 3;
++select json_arrayagg(c order by c) from t;
++truncate table t;
++insert into t values ('a"b');
++set session group_concat_max_len = 4;
++select json_arrayagg(c) from t;
++--enable_ps2_protocol
++--enable_view_protocol
++--enable_cursor_protocol
++drop temporary table t;
++set session group_concat_max_len = default;
++
+ --echo #
+ --echo # End of 10.6 tests
+ --echo #
+diff --git a/sql/item_jsonfunc.cc b/sql/item_jsonfunc.cc
+index cf5bb9be..4e00fcd4 100644
+--- a/sql/item_jsonfunc.cc
++++ b/sql/item_jsonfunc.cc
+@@ -4101,7 +4101,55 @@ void Item_func_json_arrayagg::cut_max_length(String *result,
+     return;
+   }
+ 
+-  Item_func_group_concat::cut_max_length(result, old_length, max_length-1);
++  /*
++    The last added value is a JSON string. We cut it to max_length-1 bytes
++    and then append the closing quote.
++    old_length is the length of the result before the separator and the
++    new value were appended, so it can be equal to max_length (and thus
++    bigger than max_length-1). Also the cut must keep at least the opening
++    quote of the value, otherwise we would produce garbage (MDEV-39817).
++    In such cases drop the new value (and the separator) completely.
++  */
++  const uint cut_length= max_length - 1;
++  const char *ptr= result->ptr();
++  const char *quote= old_length < result->length() ?
++    (const char *) memchr(ptr + old_length, '"',
++                          result->length() - old_length) : NULL;
++  if (!quote || (uint) (quote - ptr) >= cut_length)
++  {
++    result->length(old_length);
++    return;
++  }
++  const size_t quote_pos= quote - ptr;
++
++  Item_func_group_concat::cut_max_length(result, old_length, cut_length);
++  if (result->length() <= quote_pos)
++  {
++    result->length(old_length);
++    return;
++  }
++
++  /*
++    Don't leave an incomplete escape sequence (like '\' or '\u00')
++    at the end of the cut value.
++  */
++  ptr= result->ptr();
++  const size_t end= result->length();
++  for (size_t i= quote_pos + 1; i < end; )
++  {
++    if (ptr[i] == '\\')
++    {
++      size_t esc_len= (i + 1 < end && ptr[i + 1] == 'u') ? 6 : 2;
++      if (i + esc_len > end)
++      {
++        result->length(i);
++        break;
++      }
++      i+= esc_len;
++    }
++    else
++      i++;
++  }
+   result->append('"');
+ }
+ 

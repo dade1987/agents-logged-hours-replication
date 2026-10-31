@@ -1,0 +1,31 @@
+diff --git a/public/lib/classes/task/manager.php b/public/lib/classes/task/manager.php
+index 26562a05777..8b28a982d6e 100644
+--- a/public/lib/classes/task/manager.php
++++ b/public/lib/classes/task/manager.php
+@@ -720,13 +720,20 @@ class manager {
+         $concurrencylimit = get_config('core', 'task_adhoc_concurrency_limit');
+         $cachedqueuesize = 1200;
+ 
+-        $uniquetasksinqueue = array_map(
+-            ['\core\task\manager', 'adhoc_task_from_record'],
+-            $DB->get_records_sql(
+-                'SELECT classname FROM {task_adhoc} WHERE nextruntime < :timestart GROUP BY classname',
+-                ['timestart' => $timestart]
+-            )
++        $uniquetasksinqueue = [];
++        $queuedclasses = $DB->get_records_sql(
++            'SELECT classname FROM {task_adhoc} WHERE nextruntime < :timestart GROUP BY classname',
++            ['timestart' => $timestart]
+         );
++        foreach ($queuedclasses as $key => $record) {
++            try {
++                $uniquetasksinqueue[$key] = self::adhoc_task_from_record($record);
++            } catch (\moodle_exception $e) {
++                // The class for this task no longer exists (e.g. the plugin was removed). Skip it so that
++                // orphaned tasks do not stop the rest of the queue from being processed.
++                debugging("Failed to load task: $record->classname", DEBUG_DEVELOPER);
++            }
++        }
+ 
+         if (!isset(self::$numtasks) || self::$numtasks !== count($uniquetasksinqueue)) {
+             self::$numtasks = count($uniquetasksinqueue);

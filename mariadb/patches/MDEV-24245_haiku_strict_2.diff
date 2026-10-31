@@ -1,0 +1,41 @@
+diff --git a/storage/archive/ha_archive.cc b/storage/archive/ha_archive.cc
+index 2d623507..83268616 100644
+--- a/storage/archive/ha_archive.cc
++++ b/storage/archive/ha_archive.cc
+@@ -1578,9 +1578,28 @@ int ha_archive::optimize(THD* thd, HA_CHECK_OPT* check_opt)
+       share->archive_write.auto_increment= 0;
+       MY_BITMAP *org_bitmap= tmp_use_all_columns(table, &table->read_set);
+ 
++      /*
++        get_row() leaves blob fields in table->record[0] pointing into
++        record_buffer. real_write_row() -> pack_row() may reallocate its
++        buffer, which would leave those blob pointers dangling. Use a
++        separate buffer for packing the rows we write, so that the
++        buffer holding the row just read is never reallocated.
++      */
++      archive_record_buffer *write_buffer=
++        create_record_buffer(table->s->reclength + ARCHIVE_ROW_HEADER_SIZE);
++      if (!write_buffer)
++      {
++        tmp_restore_column_map(&table->read_set, org_bitmap);
++        rc= HA_ERR_OUT_OF_MEM;
++        goto error;
++      }
++
+       while (!(rc= get_row(&archive, table->record[0])))
+       {
++        archive_record_buffer *read_buffer= record_buffer;
++        record_buffer= write_buffer;
+         real_write_row(table->record[0], &writer);
++        record_buffer= read_buffer;
+         /*
+           Long term it should be possible to optimize this so that
+           it is not called on each row.
+@@ -1597,6 +1616,7 @@ int ha_archive::optimize(THD* thd, HA_CHECK_OPT* check_opt)
+         }
+       }
+ 
++      destroy_record_buffer(write_buffer);
+       tmp_restore_column_map(&table->read_set, org_bitmap);
+       share->rows_recorded= (ha_rows)writer.rows;
+     }

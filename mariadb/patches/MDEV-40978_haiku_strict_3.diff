@@ -1,0 +1,38 @@
+diff --git a/sql/partition_info.cc b/sql/partition_info.cc
+index d1f85e26..e497188e 100644
+--- a/sql/partition_info.cc
++++ b/sql/partition_info.cc
+@@ -2828,6 +2828,12 @@ bool partition_info::vers_set_interval(THD* thd, Item* interval,
+   /* 1. assign INTERVAL to interval.step */
+   if (interval->fix_fields_if_needed_for_scalar(thd, &interval))
+     return true;
++  /* An unbound parameter (PREPARE ... INTERVAL ?) has no value yet. */
++  if (!interval->const_item())
++  {
++    my_error(ER_PART_WRONG_VALUE, MYF(0), table_name, "INTERVAL");
++    return true;
++  }
+   bool error= get_interval_value(thd, interval, int_type, &vers_info->interval.step) ||
+           vers_info->interval.step.neg || vers_info->interval.step.second_part ||
+         !(vers_info->interval.step.year || vers_info->interval.step.month ||
+diff --git a/sql/sql_partition_auto_interval.cc b/sql/sql_partition_auto_interval.cc
+index 2f599e64..01b1848a 100644
+--- a/sql/sql_partition_auto_interval.cc
++++ b/sql/sql_partition_auto_interval.cc
+@@ -404,6 +404,16 @@ bool partition_info::set_range_interval(THD* thd, Item* ival,
+ {
+   if (ival->fix_fields_if_needed_for_scalar(thd, &ival))
+     return true;
++  /*
++    The INTERVAL value must be known at parse time. An unbound parameter
++    (e.g. PREPARE ... INTERVAL ? DAY) has no value yet, so reject it here
++    instead of evaluating it in get_interval_value().
++  */
++  if (!ival->const_item())
++  {
++    my_error(ER_PART_WRONG_VALUE, MYF(0), table_name, "INTERVAL");
++    return true;
++  }
+   bool error= get_interval_value(thd, ival, type, &interval) ||
+     interval.neg || interval.second_part ||
+     !(interval.year || interval.month || interval.day || interval.hour ||

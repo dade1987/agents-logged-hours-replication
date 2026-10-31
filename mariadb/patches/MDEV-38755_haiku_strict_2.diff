@@ -1,0 +1,49 @@
+diff --git a/mysql-test/main/spatial_utility_function_collect.result b/mysql-test/main/spatial_utility_function_collect.result
+index cd3b3885..aea825b1 100644
+--- a/mysql-test/main/spatial_utility_function_collect.result
++++ b/mysql-test/main/spatial_utility_function_collect.result
+@@ -260,3 +260,15 @@ DROP TABLE t1;
+ #
+ SELECT 1 FROM dual WHERE group_concat(1, 1);
+ ERROR HY000: Invalid use of group function
++#
++# MDEV-38755 ST_COLLECT(1) IS NULL is false
++#
++CREATE TABLE t1 (p POINT);
++SELECT ST_COLLECT(p) IS NULL, ST_COLLECT(p) FROM t1;
++ST_COLLECT(p) IS NULL	ST_COLLECT(p)
++1	NULL
++INSERT INTO t1 VALUES (ST_GEOMFROMTEXT('POINT(1 1)'));
++SELECT ST_COLLECT(p) IS NULL, ST_ASTEXT(ST_COLLECT(p)) FROM t1;
++ST_COLLECT(p) IS NULL	ST_ASTEXT(ST_COLLECT(p))
++0	MULTIPOINT(1 1)
++DROP TABLE t1;
+diff --git a/mysql-test/main/spatial_utility_function_collect.test b/mysql-test/main/spatial_utility_function_collect.test
+index e288a153..4b680854 100644
+--- a/mysql-test/main/spatial_utility_function_collect.test
++++ b/mysql-test/main/spatial_utility_function_collect.test
+@@ -220,3 +220,12 @@ DROP TABLE t1;
+ --echo #
+ --error ER_INVALID_GROUP_FUNC_USE
+ SELECT 1 FROM dual WHERE group_concat(1, 1);
++
++--echo #
++--echo # MDEV-38755 ST_COLLECT(1) IS NULL is false
++--echo #
++CREATE TABLE t1 (p POINT);
++SELECT ST_COLLECT(p) IS NULL, ST_COLLECT(p) FROM t1;
++INSERT INTO t1 VALUES (ST_GEOMFROMTEXT('POINT(1 1)'));
++SELECT ST_COLLECT(p) IS NULL, ST_ASTEXT(ST_COLLECT(p)) FROM t1;
++DROP TABLE t1;
+diff --git a/sql/item_sum.h b/sql/item_sum.h
+index 540d0a37..39ed79e7 100644
+--- a/sql/item_sum.h
++++ b/sql/item_sum.h
+@@ -2223,6 +2223,7 @@ class Item_func_collect : public Item_sum_str
+   {
+     return true;
+   }
++  bool is_null() override { update_null_value(); return null_value; }
+ 
+   bool fix_fields_impl(THD *thd,Item **) override;
+ 

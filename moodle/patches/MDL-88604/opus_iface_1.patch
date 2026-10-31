@@ -1,0 +1,638 @@
+diff --git a/public/course/classes/route/controller/course_navigation.php b/public/course/classes/route/controller/course_navigation.php
+index 120a6c99b6e..363663aafa3 100644
+--- a/public/course/classes/route/controller/course_navigation.php
++++ b/public/course/classes/route/controller/course_navigation.php
+@@ -63,25 +63,18 @@ class course_navigation {
+         $cm = cm_info::create($cmdata);
+         $modinfo = $cm->get_modinfo();
+         $section = $this->get_section($cm);
+-        $allsectioncms = $this->get_all_section_cms($modinfo, $section);
+-        $cmindex = array_search($cm, $allsectioncms, true);
+-
+-        // Last element in the section should redirect to next section page
+-        // so student can see the next section title and description.
+-        if ($cmindex + 1 >= count($allsectioncms)) {
+-            return $this->redirect_to_next_section($response, $modinfo, $section);
++        if ($section === null) {
++            return $this->redirect_to_course($response, $modinfo->get_course()->id);
+         }
++        $allsectioncms = $this->get_all_section_cms($modinfo, $section);
+ 
+-        // Search for the next module.
+-        $cmcount = count($allsectioncms);
+-        for ($cmindex++; $cmindex < $cmcount; $cmindex++) {
+-            $nextcm = $allsectioncms[$cmindex];
+-            if ($this->is_valid_cm($nextcm)) {
+-                return $this->redirect($response, $nextcm->get_navigation_url());
+-            }
++        $nextcm = $this->get_adjacent_cm($cm, $allsectioncms, 'next');
++        if ($nextcm !== null) {
++            return $this->redirect($response, $nextcm->get_navigation_url());
+         }
+ 
+-        // If there is no next module, redirect to the next section.
++        // Last element in the section should redirect to next section page
++        // so student can see the next section title and description.
+         return $this->redirect_to_next_section($response, $modinfo, $section);
+     }
+ 
+@@ -113,27 +106,104 @@ class course_navigation {
+         $cm = cm_info::create($cmdata);
+         $modinfo = $cm->get_modinfo();
+         $section = $this->get_section($cm);
++        if ($section === null) {
++            return $this->redirect_to_course($response, $modinfo->get_course()->id);
++        }
+         $allsectioncms = $this->get_all_section_cms($modinfo, $section);
+-        $cmindex = array_search($cm, $allsectioncms, true);
+ 
+-        // First element in the section should redirect to previous section page
+-        // so student can see the previous section title and description.
+-        if ($cmindex === 0) {
+-            if ($result = $this->redirect_to_previous_section($response, $modinfo, $section)) {
+-                return $result;
+-            }
++        $prevcm = $this->get_adjacent_cm($cm, $allsectioncms, 'previous');
++        if ($prevcm !== null) {
++            return $this->redirect($response, $prevcm->get_navigation_url());
+         }
+ 
+-        // Search for the previous module.
+-        for ($cmindex--; $cmindex >= 0; $cmindex--) {
+-            $prevcm = $allsectioncms[$cmindex];
+-            if ($this->is_valid_cm($prevcm)) {
+-                return $this->redirect($response, $prevcm->get_navigation_url());
+-            }
++        // First element in the section should redirect to the section page
++        // so student can see the section title and description.
++        return $this->redirect_to_previous_section($response, $modinfo, $section);
++    }
++
++    /**
++     * Check if a course module is the first navigable element of the course.
++     *
++     * The first navigable element is the one where the "Previous" navigation would
++     * lead the user out of the course sequence (to the course main page).
++     *
++     * @param cm_info $cm The current course module.
++     * @param modinfo $modinfo The course modinfo.
++     * @param cm_info[] $allsectioncms All course modules of the cm section (see get_all_section_cms).
++     * @return bool
++     */
++    public function is_first_navigable(
++        cm_info $cm,
++        modinfo $modinfo,
++        array $allsectioncms,
++    ): bool {
++        if ($this->get_adjacent_cm($cm, $allsectioncms, 'previous') !== null) {
++            return false;
++        }
++        $section = $this->get_section($cm);
++        if ($section === null) {
++            return true;
+         }
++        // The previous element of the first module of a section is the section page itself,
++        // except for the first section of the course.
++        return $section->sectionnum == 0
++            || $this->get_adjacent_section($modinfo, $section, 'previous') === null;
++    }
+ 
+-        // If there is no previous module, redirect to the previous section.
+-        return $this->redirect_to_previous_section($response, $modinfo, $section);
++    /**
++     * Check if a course module is the last navigable element of the course.
++     *
++     * The last navigable element is the one where there is no other accessible
++     * course module or section after it.
++     *
++     * @param cm_info $cm The current course module.
++     * @param modinfo $modinfo The course modinfo.
++     * @param cm_info[] $allsectioncms All course modules of the cm section (see get_all_section_cms).
++     * @return bool
++     */
++    public function is_last_navigable(
++        cm_info $cm,
++        modinfo $modinfo,
++        array $allsectioncms,
++    ): bool {
++        if ($this->get_adjacent_cm($cm, $allsectioncms, 'next') !== null) {
++            return false;
++        }
++        $section = $this->get_section($cm);
++        if ($section === null) {
++            return true;
++        }
++        return $this->get_adjacent_section($modinfo, $section, 'next') === null;
++    }
++
++    /**
++     * Get the next or previous valid course module within a list of section course modules.
++     *
++     * @param cm_info $cm The current course module.
++     * @param cm_info[] $allsectioncms All course modules of the section.
++     * @param string $direction 'next' or 'previous'.
++     * @return cm_info|null The adjacent valid course module, or null if there is none.
++     */
++    private function get_adjacent_cm(cm_info $cm, array $allsectioncms, string $direction): ?cm_info {
++        $allsectioncms = array_values($allsectioncms);
++        $cmindex = null;
++        foreach ($allsectioncms as $index => $sectioncm) {
++            if ($sectioncm->id == $cm->id) {
++                $cmindex = $index;
++                break;
++            }
++        }
++        if ($cmindex === null) {
++            return null;
++        }
++        $step = ($direction === 'previous') ? -1 : 1;
++        $cmcount = count($allsectioncms);
++        for ($cmindex += $step; $cmindex >= 0 && $cmindex < $cmcount; $cmindex += $step) {
++            if ($this->is_valid_cm($allsectioncms[$cmindex])) {
++                return $allsectioncms[$cmindex];
++            }
++        }
++        return null;
+     }
+ 
+     /**
+@@ -156,16 +226,16 @@ class course_navigation {
+      * Get the section of a course module; if the section is delegated, get the parent section.
+      *
+      * @param cm_info $cm
+-     * @return \section_info
++     * @return section_info|null
+      */
+-    private function get_section(cm_info $cm): section_info {
++    public function get_section(cm_info $cm): ?section_info {
+         $section = $cm->get_section_info();
+-        if (!$section->is_delegated()) {
+-            return $section;
++        // Delegated sections can be nested, so we need to find the first non-delegated parent.
++        while ($section !== null && $section->is_delegated()) {
++            $delegated = $section->get_component_instance();
++            $section = $delegated ? $delegated->get_parent_section() : null;
+         }
+-
+-        // If the section is delegated, we need to get the parent section.
+-        return $section->get_component_instance()->get_parent_section();
++        return $section;
+     }
+ 
+     /**
+@@ -175,7 +245,7 @@ class course_navigation {
+      * @param section_info $section
+      * @return cm_info[]
+      */
+-    private function get_all_section_cms(modinfo $modinfo, section_info $section): array {
++    public function get_all_section_cms(modinfo $modinfo, section_info $section): array {
+         $sectioncms = [];
+         foreach ($section->get_sequence_cm_infos() as $cm) {
+             $delegatedsection = $cm->get_delegated_section_info();
+@@ -192,79 +262,107 @@ class course_navigation {
+     }
+ 
+     /**
+-     * Redirect to the next/previous section view page.
++     * Get the next or previous navigable (non delegated and accessible) section.
+      *
+-     * @param ResponseInterface $response
+      * @param modinfo $modinfo
+      * @param section_info $currentsection
+-     * @param string $direction 'next' or 'previous' to indicate the direction of the redirection.
+-     * @return ResponseInterface
++     * @param string $direction 'next' or 'previous'.
++     * @return section_info|null The adjacent section, or null if there is none.
+      */
+-    private function redirect_to_section(
+-        ResponseInterface $response,
++    public function get_adjacent_section(
+         modinfo $modinfo,
+         section_info $currentsection,
+-        string $direction = 'next',
+-    ): ?ResponseInterface {
+-        if ($direction === 'previous') {
+-            if ($currentsection->sectionnum == 0) {
+-                // Going to previous on the first section.
+-                return $this->redirect_to_course($response, $modinfo->get_course()->id);
++        string $direction,
++    ): ?section_info {
++        $step = ($direction === 'previous') ? -1 : 1;
++        $sectionnum = $currentsection->sectionnum + $step;
++        while ($sectionnum >= 0 && ($section = $modinfo->get_section_info($sectionnum)) !== null) {
++            if ($this->is_navigable_section($section)) {
++                return $section;
+             }
+-            $section = $modinfo->get_section_info($currentsection->sectionnum);
+-        } else {
+-            $section = $modinfo->get_section_info($currentsection->sectionnum + 1);
+-        }
+-        if ($section === null) {
+-            // No more sections.
+-            return $this->redirect_to_course($response, $modinfo->get_course()->id);
++            $sectionnum += $step;
+         }
++        return null;
++    }
+ 
+-        // If the section is hidden, or its restrictions are hidden (eye closed),
+-        // find the next available section.
+-        if (
+-            (!$section->uservisible && (!$section->visible || !$section->availableinfo))
+-            || $section->is_delegated()
+-        ) {
+-            return $this->redirect_to_section($response, $modinfo, $section, $direction);
++    /**
++     * Check if a section can be used as a navigation target.
++     *
++     * @param section_info $section
++     * @return bool
++     */
++    private function is_navigable_section(section_info $section): bool {
++        if ($section->is_delegated()) {
++            return false;
+         }
+-
+-        return $this->redirect(
+-            $response,
+-            course_get_url($modinfo->get_course(), $section, ['navigation' => true]),
+-        );
++        // If the section is hidden, or its restrictions are hidden (eye closed), it is not navigable.
++        if (!$section->uservisible && (!$section->visible || !$section->availableinfo)) {
++            return false;
++        }
++        return true;
+     }
+ 
+     /**
+      * Redirect to the next view page.
+      *
++     * When there is no next section, the user is redirected to the course page.
++     *
+      * @param ResponseInterface $response
+      * @param modinfo $modinfo
+      * @param section_info $currentsection
+-     * @return ResponseInterface|null
++     * @return ResponseInterface
+      */
+     private function redirect_to_next_section(
+         ResponseInterface $response,
+         modinfo $modinfo,
+         section_info $currentsection,
+     ): ResponseInterface {
+-        return $this->redirect_to_section($response, $modinfo, $currentsection, 'next');
++        $section = $this->get_adjacent_section($modinfo, $currentsection, 'next');
++        if ($section === null) {
++            return $this->redirect_to_course($response, $modinfo->get_course()->id);
++        }
++        return $this->redirect_to_section_page($response, $modinfo, $section);
+     }
+ 
+     /**
+      * Redirect to the previous view page.
+      *
++     * When going back from the first element of a section, the user is redirected to the
++     * section page, except for the first section where the user is redirected to the course page.
++     *
+      * @param ResponseInterface $response
+      * @param modinfo $modinfo
+      * @param section_info $currentsection
+-     * @return ResponseInterface|null
++     * @return ResponseInterface
+      */
+     private function redirect_to_previous_section(
+         ResponseInterface $response,
+         modinfo $modinfo,
+         section_info $currentsection,
+     ): ResponseInterface {
+-        return $this->redirect_to_section($response, $modinfo, $currentsection, 'previous');
++        if ($currentsection->sectionnum == 0 || !$this->is_navigable_section($currentsection)) {
++            return $this->redirect_to_course($response, $modinfo->get_course()->id);
++        }
++        return $this->redirect_to_section_page($response, $modinfo, $currentsection);
++    }
++
++    /**
++     * Redirect to a section page.
++     *
++     * @param ResponseInterface $response
++     * @param modinfo $modinfo
++     * @param section_info $section
++     * @return ResponseInterface
++     */
++    private function redirect_to_section_page(
++        ResponseInterface $response,
++        modinfo $modinfo,
++        section_info $section,
++    ): ResponseInterface {
++        return $this->redirect(
++            $response,
++            course_get_url($modinfo->get_course(), $section, ['navigation' => true]),
++        );
+     }
+ 
+     /**
+diff --git a/public/course/format/classes/output/local/linearnavigation/footer_content.php b/public/course/format/classes/output/local/linearnavigation/footer_content.php
+index f90a7ff41c5..8998addd58d 100644
+--- a/public/course/format/classes/output/local/linearnavigation/footer_content.php
++++ b/public/course/format/classes/output/local/linearnavigation/footer_content.php
+@@ -20,6 +20,7 @@ use core\output\named_templatable;
+ use core\output\renderable;
+ use core\output\renderer_base;
+ use core\router\util;
++use core\url;
+ use core_course\route\controller\course_navigation;
+ use cm_info;
+ 
+@@ -47,21 +48,37 @@ class footer_content implements named_templatable, renderable {
+ 
+     #[\Override]
+     public function export_for_template(renderer_base $output) {
+-        // Get previous and next URLs for the current course module.
+-        $previousurl = util::get_path_for_callable(
+-            [course_navigation::class, 'cm_previous_element'],
+-            ['cm' => $this->cminfo->id],
+-        );
+-        $nexturl = util::get_path_for_callable(
+-            [course_navigation::class, 'cm_next_element'],
+-            ['cm' => $this->cminfo->id],
+-        );
++        $navigation = new course_navigation();
++        $modinfo = $this->cminfo->get_modinfo();
++        $section = $navigation->get_section($this->cminfo);
++        $allsectioncms = $section ? $navigation->get_all_section_cms($modinfo, $section) : [];
+ 
+-        return [
+-            'previousurl' => $previousurl->out(false),
+-            'nexturl' => $nexturl->out(false),
++        $data = [
++            'previousurl' => null,
++            'nexturl' => null,
++            'courseurl' => null,
+             'completion' => $this->export_completion($output),
+         ];
++
++        // The first activity of the course does not have a previous link.
++        if (!$navigation->is_first_navigable($this->cminfo, $modinfo, $allsectioncms)) {
++            $data['previousurl'] = util::get_path_for_callable(
++                [course_navigation::class, 'cm_previous_element'],
++                ['cm' => $this->cminfo->id],
++            )->out(false);
++        }
++
++        // The last activity of the course links back to the course page instead of the next element.
++        if ($navigation->is_last_navigable($this->cminfo, $modinfo, $allsectioncms)) {
++            $data['courseurl'] = (new url('/course/view.php', ['id' => $this->cminfo->course]))->out(false);
++        } else {
++            $data['nexturl'] = util::get_path_for_callable(
++                [course_navigation::class, 'cm_next_element'],
++                ['cm' => $this->cminfo->id],
++            )->out(false);
++        }
++
++        return $data;
+     }
+ 
+     /**
+diff --git a/public/course/format/templates/local/linearnavigation/footer_content.mustache b/public/course/format/templates/local/linearnavigation/footer_content.mustache
+index a916bc770f4..986290322d2 100644
+--- a/public/course/format/templates/local/linearnavigation/footer_content.mustache
++++ b/public/course/format/templates/local/linearnavigation/footer_content.mustache
+@@ -23,6 +23,7 @@
+     {
+         "previousurl": "http://moodle.com/course/cms/42/previous",
+         "nexturl": "http://moodle.com/course/cms/42/next",
++        "courseurl": null,
+         "completion": "<span class=\"completion-status text-success\"><i class=\"fa fa-check\"></i> <span>Done</span></span>"
+     }
+ }}
+@@ -50,5 +51,10 @@
+             <span class="dir-ltr-hide" aria-hidden="true">{{#pix}} e/backward, core {{/pix}}</span>
+         </a>
+         {{/nexturl}}
++        {{#courseurl}}
++        <a href="{{.}}" class="course-linear-navigation-link text-decoration-none d-inline-flex align-items-center gap-1 ms-auto" data-action="gotocourse">
++            <span>{{#str}} gotocourse, core_courseformat {{/str}}</span>
++        </a>
++        {{/courseurl}}
+     </div>
+ </div>
+diff --git a/public/course/format/tests/behat/course_linear_navigation.feature b/public/course/format/tests/behat/course_linear_navigation.feature
+index bfbe871033d..a00aa742e16 100644
+--- a/public/course/format/tests/behat/course_linear_navigation.feature
++++ b/public/course/format/tests/behat/course_linear_navigation.feature
+@@ -53,8 +53,9 @@ Feature: Display the course linear navigation
+     When I am on the "Page1" "page activity" page logged in as "s1"
+     And I click on "Next" "link" in the "sticky-footer" "region"
+     Then I should see "Page2" in the "page-header" "region"
+-    # The last activity in the course should redirect to the course page.
+-    And I click on "Next" "link" in the "sticky-footer" "region"
++    # The last activity in the course should display a link to the course page instead of Next.
++    And I should not see "Next" in the "sticky-footer" "region"
++    And I click on "Go to course" "link" in the "sticky-footer" "region"
+     And I should see "Course1" in the "page-header" "region"
+ 
+     Examples:
+@@ -77,6 +78,8 @@ Feature: Display the course linear navigation
+     When I am on the "Page2" "page activity" page logged in as "s1"
+     And I click on "Previous" "link" in the "sticky-footer" "region"
+     Then I should see "Page1" in the "page-header" "region"
++    # The first activity of the course does not display the Previous link.
++    And I should not see "Previous" in the "sticky-footer" "region"
+ 
+     Examples:
+       | format |
+@@ -135,3 +138,21 @@ Feature: Display the course linear navigation
+     When I am on the "Page1" "page activity" page logged in as "s1"
+     Then I should see "Done" in the "sticky-footer" "region"
+     And I should see "Done" in the "page-header" "region"
++
++  @javascript
++  Scenario: The Go to course link is displayed earlier when the following activities are not available
++    Given the following "courses" exist:
++      | fullname | shortname | format | enablelinearnav | numsections |
++      | Course1  | C1        | topics | 1               | 0           |
++    And the following "course enrolments" exist:
++      | user | course | role    |
++      | s1   | C1     | student |
++    And the following "activities" exist:
++      | activity | name  | course | visible |
++      | page     | Page1 | C1     | 1       |
++      | page     | Page2 | C1     | 1       |
++      | page     | Page3 | C1     | 0       |
++    When I am on the "Page2" "page activity" page logged in as "s1"
++    Then I should see "Previous" in the "sticky-footer" "region"
++    And I should see "Go to course" in the "sticky-footer" "region"
++    And I should not see "Next" in the "sticky-footer" "region"
+diff --git a/public/course/tests/route/controller/course_navigation_test.php b/public/course/tests/route/controller/course_navigation_test.php
+index ef8c766332c..ce3f8252f13 100644
+--- a/public/course/tests/route/controller/course_navigation_test.php
++++ b/public/course/tests/route/controller/course_navigation_test.php
+@@ -1636,6 +1636,155 @@ final class course_navigation_test extends route_testcase {
+         );
+     }
+ 
++    /**
++     * Test the first and last navigable elements detection.
++     *
++     * @param array $cmsdef
++     * @param array $expectedfirst Names of the modules expected to be the first navigable.
++     * @param array $expectedlast Names of the modules expected to be the last navigable.
++     * @param int $numsections
++     * @param array $sectionsdef
++     */
++    #[DataProvider('first_last_navigable_provider')]
++    public function test_is_first_last_navigable(
++        array $cmsdef,
++        array $expectedfirst,
++        array $expectedlast,
++        int $numsections = 2,
++        array $sectionsdef = [],
++    ): void {
++        $this->resetAfterTest();
++        $this->setAdminUser();
++
++        $generator = $this->getDataGenerator();
++        $course = $generator->create_course(['numsections' => $numsections]);
++        foreach ($sectionsdef as $section) {
++            $sectioninfo = get_fast_modinfo($course)->get_section_info($section['section']);
++            formatactions::section($course)->update($sectioninfo, ['visible' => !$section['hidden']]);
++        }
++        $user = $generator->create_and_enrol($course, 'student');
++        foreach ($cmsdef as $cmdef) {
++            $this->create_module_or_subsection(
++                courseid: $course->id,
++                key: $cmdef['name'],
++                type: $cmdef['type'] ?? 'assign',
++                options: $cmdef['options'] ?? [],
++            );
++        }
++
++        $this->setUser($user);
++        $modinfo = modinfo::instance($course->id);
++        $navigation = new course_navigation();
++        foreach ($modinfo->get_cms() as $cm) {
++            if ($cm->modname === 'subsection' || !$cm->uservisible || empty($cm->get_navigation_url())) {
++                continue;
++            }
++            $section = $navigation->get_section($cm);
++            $this->assertNotNull($section);
++            $this->assertFalse($section->is_delegated());
++            $allsectioncms = $navigation->get_all_section_cms($modinfo, $section);
++            $this->assertEquals(
++                in_array($cm->name, $expectedfirst),
++                $navigation->is_first_navigable($cm, $modinfo, $allsectioncms),
++                "Unexpected first navigable value for {$cm->name}",
++            );
++            $this->assertEquals(
++                in_array($cm->name, $expectedlast),
++                $navigation->is_last_navigable($cm, $modinfo, $allsectioncms),
++                "Unexpected last navigable value for {$cm->name}",
++            );
++        }
++    }
++
++    /**
++     * Data provider for test_is_first_last_navigable.
++     *
++     * @return \Generator
++     */
++    public static function first_last_navigable_provider(): \Generator {
++        yield 'Single section' => [
++            'cmsdef' => [
++                ['name' => 'cm1'],
++                ['name' => 'cm2'],
++                ['name' => 'cm3'],
++            ],
++            'expectedfirst' => ['cm1'],
++            'expectedlast' => ['cm3'],
++            'numsections' => 0,
++        ];
++        yield 'Next sections available' => [
++            'cmsdef' => [
++                ['name' => 'cm1'],
++                ['name' => 'cm2', 'options' => ['section' => 1]],
++            ],
++            'expectedfirst' => ['cm1'],
++            'expectedlast' => [],
++            'numsections' => 2,
++        ];
++        yield 'Last sections hidden' => [
++            'cmsdef' => [
++                ['name' => 'cm1', 'options' => ['section' => 1]],
++                ['name' => 'cm2', 'options' => ['section' => 1]],
++                ['name' => 'cm3', 'options' => ['section' => 2]],
++            ],
++            'expectedfirst' => [],
++            'expectedlast' => ['cm2'],
++            'numsections' => 2,
++            'sectionsdef' => [
++                ['section' => 2, 'hidden' => true],
++            ],
++        ];
++        yield 'Hidden modules at the boundaries' => [
++            'cmsdef' => [
++                ['name' => 'cm1', 'options' => ['visible' => false]],
++                ['name' => 'label1', 'type' => 'label'],
++                ['name' => 'cm2'],
++                ['name' => 'cm3'],
++                ['name' => 'cm4', 'options' => ['visible' => false]],
++            ],
++            'expectedfirst' => ['cm2'],
++            'expectedlast' => ['cm3'],
++            'numsections' => 0,
++        ];
++        yield 'Subsections' => [
++            'cmsdef' => [
++                ['name' => 'subsection1', 'type' => 'subsection', 'options' => ['section' => 0]],
++                ['name' => 'cm1', 'options' => ['section' => 'subsection1']],
++                ['name' => 'cm2', 'options' => ['section' => 0]],
++                ['name' => 'subsection2', 'type' => 'subsection', 'options' => ['section' => 0]],
++                ['name' => 'cm3', 'options' => ['section' => 'subsection2']],
++            ],
++            'expectedfirst' => ['cm1'],
++            'expectedlast' => ['cm3'],
++            'numsections' => 0,
++        ];
++    }
++
++    /**
++     * Test get_adjacent_section.
++     */
++    public function test_get_adjacent_section(): void {
++        $this->resetAfterTest();
++        $this->setAdminUser();
++
++        $generator = $this->getDataGenerator();
++        $course = $generator->create_course(['numsections' => 3]);
++        $sectioninfo = get_fast_modinfo($course)->get_section_info(2);
++        formatactions::section($course)->update($sectioninfo, ['visible' => false]);
++        $user = $generator->create_and_enrol($course, 'student');
++
++        $this->setUser($user);
++        $modinfo = modinfo::instance($course->id);
++        $navigation = new course_navigation();
++
++        $this->assertNull($navigation->get_adjacent_section($modinfo, $modinfo->get_section_info(0), 'previous'));
++        $this->assertEquals(1, $navigation->get_adjacent_section($modinfo, $modinfo->get_section_info(0), 'next')->sectionnum);
++        // Section 2 is hidden for students.
++        $this->assertEquals(3, $navigation->get_adjacent_section($modinfo, $modinfo->get_section_info(1), 'next')->sectionnum);
++        $this->assertEquals(1, $navigation->get_adjacent_section($modinfo, $modinfo->get_section_info(3), 'previous')->sectionnum);
++        $this->assertNull($navigation->get_adjacent_section($modinfo, $modinfo->get_section_info(3), 'next'));
++    }
++
+     /**
+      * Helper function to assert that the redirection URL matches the expected element.
+      *
+diff --git a/public/lang/en/courseformat.php b/public/lang/en/courseformat.php
+index 7ea1bd1efb3..64a807b7a0a 100644
+--- a/public/lang/en/courseformat.php
++++ b/public/lang/en/courseformat.php
+@@ -70,6 +70,7 @@ $string['cmsmove_title'] = 'Move selected activities';
+ $string['cmsmove_info'] = 'Move {$a} activities after';
+ $string['courseindex'] = 'Course index';
+ $string['courseindexoptions'] = 'Course index options';
++$string['gotocourse'] = 'Go to course';
+ $string['linearnavigationsettings'] = 'Enable linear navigation';
+ $string['linearnavigationsettings_help'] = 'Display \'Previous\' and \'Next\' buttons on activity pages to help learners move sequentially through the course.';
+ $string['nobulkaction'] = 'No bulk actions available';

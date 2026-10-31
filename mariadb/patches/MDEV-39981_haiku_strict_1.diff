@@ -1,0 +1,70 @@
+diff --git a/mysql-test/main/gis-json.result b/mysql-test/main/gis-json.result
+index e636291b..976c356f 100644
+--- a/mysql-test/main/gis-json.result
++++ b/mysql-test/main/gis-json.result
+@@ -212,4 +212,13 @@ SET @doc := CONCAT(
+ SELECT ST_AsText(ST_GeomFromGeoJSON(@doc)) AS expr;
+ expr
+ GEOMETRYCOLLECTION(POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2),POINT(1 2))
+-# End of 10.6 tests
++# MDEV-39981: the order of keys must not matter
++expr
++GEOMETRYCOLLECTION EMPTY
++expr
++GEOMETRYCOLLECTION EMPTY
++expr
++GEOMETRYCOLLECTION(POINT(1 2))
++expr
++POINT(1 2)
++# End of 10.6 tests
+\ No newline at end of file
+diff --git a/mysql-test/main/gis-json.test b/mysql-test/main/gis-json.test
+index 33f00ee4..aaae8042 100644
+--- a/mysql-test/main/gis-json.test
++++ b/mysql-test/main/gis-json.test
+@@ -147,4 +147,10 @@ SET @doc := CONCAT(
+ 
+ SELECT ST_AsText(ST_GeomFromGeoJSON(@doc)) AS expr;
+ 
++--echo # MDEV-39981: the order of keys must not matter
++SELECT ST_ASTEXT(ST_GEOMFROMGEOJSON('{"type":"GeometryCollection","geometries":[]}')) AS expr;
++SELECT ST_ASTEXT(ST_GEOMFROMGEOJSON('{"geometries":[],"type":"GeometryCollection"}')) AS expr;
++SELECT ST_ASTEXT(ST_GEOMFROMGEOJSON('{"geometries":[{"type":"Point","coordinates":[1,2]}],"type":"GeometryCollection"}')) AS expr;
++SELECT ST_ASTEXT(ST_GEOMFROMGEOJSON('{"geometry":{"type":"Point","coordinates":[1,2]},"type":"Feature"}')) AS expr;
++
+ --echo # End of 10.6 tests
+diff --git a/sql/spatial.cc b/sql/spatial.cc
+index ee808a00..47ddbacd 100644
+--- a/sql/spatial.cc
++++ b/sql/spatial.cc
+@@ -628,6 +628,12 @@ Geometry *Geometry::create_from_json(Geometry_buffer *buffer,
+         arg= T_GEOMETRIES;
+         argje= *je;
+         je_arg= &argje;
++        /*
++          Skip the array in the main engine, so that the scan continues
++          with the next key (e.g. "type") regardless of the key order.
++        */
++        if (json_skip_level(je))
++          goto err_return;
+       }
+       else
+         break; /* geometries needs to be an array */
+@@ -656,6 +662,8 @@ Geometry *Geometry::create_from_json(Geometry_buffer *buffer,
+         arg= T_FEATURE;
+         argje= *je;
+         je_arg= &argje;
++        if (json_skip_level(je))
++          goto err_return;
+       }
+       else
+         break; /* feature collections needs to be an array */
+@@ -677,6 +685,8 @@ Geometry *Geometry::create_from_json(Geometry_buffer *buffer,
+         arg= T_GEOMETRY;
+         argje= *je;
+         je_arg= &argje;
++        if (json_skip_level(je))
++          goto err_return;
+       }
+       else
+         break; /* geometry needs to be an object */

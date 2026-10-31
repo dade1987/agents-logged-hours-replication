@@ -1,0 +1,80 @@
+diff --git a/mysql-test/main/set_authorization.result b/mysql-test/main/set_authorization.result
+index 71194c22..22b4fc62 100644
+--- a/mysql-test/main/set_authorization.result
++++ b/mysql-test/main/set_authorization.result
+@@ -148,4 +148,22 @@ set session authorization root@localhost;
+ -- Tracker : SESSION_TRACK_SCHEMA
+ -- 
+ 
++#
++# MDEV-40336 SET AUTHORIZATION un-expired passwords
++#
++create user u1@localhost;
++alter user u1@localhost password expire;
++connect con1,localhost,u1;
++select 1;
++ERROR HY000: You must SET PASSWORD before executing this statement
++set session authorization u1@localhost;
++select 2;
++ERROR HY000: You must SET PASSWORD before executing this statement
++set password=password('');
++select 3;
++3
++3
++disconnect con1;
++connection default;
++drop user u1@localhost;
+ # End of 12.0 tests
+diff --git a/mysql-test/main/set_authorization.test b/mysql-test/main/set_authorization.test
+index d13ee4aa..247de6e6 100644
+--- a/mysql-test/main/set_authorization.test
++++ b/mysql-test/main/set_authorization.test
+@@ -143,4 +143,21 @@ enable_session_track_info;
+ set session authorization root@localhost;
+ disable_session_track_info;
+ 
++--echo #
++--echo # MDEV-40336 SET AUTHORIZATION un-expired passwords
++--echo #
++create user u1@localhost;
++alter user u1@localhost password expire;
++connect con1,localhost,u1;
++--error ER_MUST_CHANGE_PASSWORD
++select 1;
++set session authorization u1@localhost;
++--error ER_MUST_CHANGE_PASSWORD
++select 2;
++set password=password('');
++select 3;
++disconnect con1;
++connection default;
++drop user u1@localhost;
++
+ --echo # End of 12.0 tests
+diff --git a/sql/sql_acl.cc b/sql/sql_acl.cc
+index de8a27c9..1601ddcd 100644
+--- a/sql/sql_acl.cc
++++ b/sql/sql_acl.cc
+@@ -339,6 +339,7 @@ ulong role_global_merges= 0, role_db_merges= 0, role_table_merges= 0,
+ 
+ #ifndef NO_EMBEDDED_ACCESS_CHECKS
+ static bool ignore_max_password_errors(const ACL_USER *acl_user);
++static bool check_password_lifetime(THD *thd, const ACL_USER &acl_user);
+ static void update_hostname(acl_host_and_ip *host, const char *hostname);
+ static bool show_proxy_grants (THD *, const char *, const char *,
+                                char *, size_t);
+@@ -12888,6 +12889,14 @@ int acl_setauthorization(THD *thd, const LEX_USER *user)
+     return 1;
+   }
+ 
++  /*
++    Security_context::init() has reset password_expired, so recompute it
++    for the new user. Otherwise a user with an expired password could
++    bypass ER_MUST_CHANGE_PASSWORD with SET SESSION AUTHORIZATION to itself.
++  */
++  sctx->password_expired= acl_user->password_expired ||
++                          check_password_lifetime(thd, *acl_user);
++
+   mysql_audit_notify_connection_change_user(thd, &save_security_ctx);
+   save_security_ctx.destroy();
+   return 0;

@@ -1,0 +1,55 @@
+diff --git a/public/lib/csvlib.class.php b/public/lib/csvlib.class.php
+index 15f972cd350..dae95eb0e34 100644
+--- a/public/lib/csvlib.class.php
++++ b/public/lib/csvlib.class.php
+@@ -175,9 +175,12 @@ class csv_import_reader {
+         $filename = $CFG->tempdir.'/csvimport/'.$this->_type.'/'.$USER->id.'/'.$this->_iid;
+         $filepointer = fopen($filename, "w");
+         // The information has been stored in csv format, as serialized data has issues
+-        // with special characters and line returns.
+-        $storedata = csv_export_writer::print_array($columns, ',', '"', true);
+-        fwrite($filepointer, $storedata);
++        // with special characters and line returns. The data is written directly (rather than via
++        // csv_export_writer) so that values are stored as-is, without spreadsheet formula escaping,
++        // which is only relevant for files being downloaded and opened in spreadsheet applications.
++        foreach ($columns as $rowdata) {
++            fputcsv($filepointer, $rowdata, ',', '"', '\\');
++        }
+ 
+         fclose($fp);
+         unlink($tempfile);
+diff --git a/public/lib/tests/csvclass_test.php b/public/lib/tests/csvclass_test.php
+index fa45977d193..c6542ca068a 100644
+--- a/public/lib/tests/csvclass_test.php
++++ b/public/lib/tests/csvclass_test.php
+@@ -150,4 +150,30 @@ final class csvclass_test extends \advanced_testcase {
+         // Five lines including the headings should be imported.
+         $this->assertEquals($contentcount, 5);
+     }
++
++    /**
++     * Test that importing CSV content does not escape values that look like spreadsheet formulas.
++     */
++    public function test_load_csv_content_does_not_escape_formulas(): void {
++        $content = "lastname;firstname;username;email;password\n" .
++            "Testy;Testx;test25@example.com;test25@example.com;@ChangeMe!\n" .
++            "-Minus;+Plus;=equals;user@example.com;-\n";
++
++        $iid = csv_import_reader::get_new_iid('lib');
++        $csvimport = new csv_import_reader($iid, 'lib');
++        $this->assertSame(3, $csvimport->load_csv_content($content, 'utf-8', 'semicolon'));
++        $csvimport->init();
++        $dataset = [$csvimport->get_columns()];
++        while ($record = $csvimport->next()) {
++            $dataset[] = $record;
++        }
++        $csvimport->cleanup();
++        $csvimport->close();
++
++        $this->assertSame([
++            ['lastname', 'firstname', 'username', 'email', 'password'],
++            ['Testy', 'Testx', 'test25@example.com', 'test25@example.com', '@ChangeMe!'],
++            ['-Minus', '+Plus', '=equals', 'user@example.com', '-'],
++        ], $dataset);
++    }
+ }

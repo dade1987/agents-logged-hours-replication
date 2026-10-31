@@ -1,0 +1,172 @@
+diff --git a/mysql-test/main/gis.result b/mysql-test/main/gis.result
+index e3bdcd01..97dd5a35 100644
+--- a/mysql-test/main/gis.result
++++ b/mysql-test/main/gis.result
+@@ -5619,4 +5619,16 @@ NULL
+ select astext(concat(x'00000000', repeat(x'010700000001000000', 200), x'010100000000000000000000000000000000000000')) as oops;
+ oops
+ GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT(0 0)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
++#
++# MDEV-40409 ST_GeomFromText stack overrun on deeply nested GeometryCollection
++#
++SELECT ST_GeomFromText(CONCAT(REPEAT('GEOMETRYCOLLECTION(',5000),'POINT(1 1)',REPEAT(')',5000))) IS NULL as is_null;
++is_null
++1
++SELECT ST_GeomFromText(CONCAT(REPEAT('GEOMETRYCOLLECTION(',2),'POINT(1 1)',REPEAT(')',2))) IS NULL as is_null;
++is_null
++1
++SELECT ST_AsText(ST_GeomFromText('GEOMETRYCOLLECTION(POINT(1 1), LINESTRING(0 0, 1 1))'));
++ST_AsText(ST_GeomFromText('GEOMETRYCOLLECTION(POINT(1 1), LINESTRING(0 0, 1 1))'))
++GEOMETRYCOLLECTION(POINT(1 1),LINESTRING(0 0,1 1))
+ # End of 10.6 tests
+diff --git a/mysql-test/main/gis.test b/mysql-test/main/gis.test
+index c010ef8c..b2edd887 100644
+--- a/mysql-test/main/gis.test
++++ b/mysql-test/main/gis.test
+@@ -3587,4 +3587,11 @@ select  glength(x'0000000001050000000100000001020000');
+ --echo #
+ select astext(concat(x'00000000', repeat(x'010700000001000000', 200), x'010100000000000000000000000000000000000000')) as oops;
+ 
++--echo #
++--echo # MDEV-40409 ST_GeomFromText stack overrun on deeply nested GeometryCollection
++--echo #
++SELECT ST_GeomFromText(CONCAT(REPEAT('GEOMETRYCOLLECTION(',5000),'POINT(1 1)',REPEAT(')',5000))) IS NULL as is_null;
++SELECT ST_GeomFromText(CONCAT(REPEAT('GEOMETRYCOLLECTION(',2),'POINT(1 1)',REPEAT(')',2))) IS NULL as is_null;
++SELECT ST_AsText(ST_GeomFromText('GEOMETRYCOLLECTION(POINT(1 1), LINESTRING(0 0, 1 1))'));
++
+ --echo # End of 10.6 tests
+diff --git a/sql/spatial.cc b/sql/spatial.cc
+index d1ed5bb8..25492ba5 100644
+--- a/sql/spatial.cc
++++ b/sql/spatial.cc
+@@ -20,6 +20,8 @@
+ #include "spatial.h"
+ #include "gstream.h"                            // Gis_read_stream
+ #include "sql_string.h"                         // String
++#include "sql_class.h"                          // THD, current_thd
++#include "sql_parse.h"                          // check_stack_overrun
+ 
+ /* This is from item_func.h. Didn't want to #include the whole file. */
+ double my_double_round(double value, longlong dec, bool dec_unsigned,
+@@ -3302,6 +3304,9 @@ bool Gis_geometry_collection::init_from_wkt(Gis_read_stream *trs, String *wkb)
+   Geometry *g;
+   char next_sym;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, NULL))
++    return 1;
++
+   if (wkb->reserve(4, 512))
+     return 1;
+   wkb->length(wkb->length()+4);			// Reserve space for points
+@@ -3320,6 +3325,21 @@ bool Gis_geometry_collection::init_from_wkt(Gis_read_stream *trs, String *wkb)
+     {
+       for (;;)
+       {
++        /*
++          Nested GEOMETRYCOLLECTION is not allowed in WKT. Reject it before
++          descending into create_from_wkt(), so that deeply nested input
++          (MDEV-40409) can not cause unbounded recursion.
++        */
++        if (trs->lookup_next_word(&next_word))
++          return 1;
++        if (next_word.length == 18 &&
++            my_charset_latin1.strnncoll("geometrycollection", 18,
++                                        next_word.str, 18) == 0)
++        {
++          trs->set_error_msg("Unexpected GEOMETRYCOLLECTION");
++          return 1;
++        }
++
+         if (!(g= create_from_wkt(&buffer, trs, wkb)))
+           return 1;
+ 
+@@ -3398,6 +3418,9 @@ uint Gis_geometry_collection::init_from_wkb(const char *wkb, uint len,
+   uint32 n_geom;
+   const char *wkb_orig= wkb;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, NULL))
++    return 0;
++
+   if (len < 4)
+     return 0;
+   n_geom= wkb_get_uint(wkb, bo);
+@@ -3441,6 +3464,9 @@ bool Gis_geometry_collection::init_from_json(json_engine_t *je, bool er_on_3D,
+   Geometry_buffer buffer;
+   Geometry *g;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, NULL))
++    return TRUE;
++
+   if (json_read_value(je))
+     return TRUE;
+ 
+@@ -3483,6 +3509,9 @@ bool Gis_geometry_collection::get_data_as_wkt(String *txt,
+   Geometry *geom;
+   const char *data= m_data;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, NULL))
++    return 1;
++
+   if (no_data(data, 4))
+     return 1;
+   n_objects= uint4korr(data);
+@@ -3527,6 +3556,9 @@ bool Gis_geometry_collection::get_data_as_json(String *txt, uint max_dec_digits,
+   Geometry *geom;
+   const char *data= m_data;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, NULL))
++    return 1;
++
+   if (no_data(data, 4) || txt->reserve(1, 512))
+     return 1;
+   n_objects= uint4korr(data);
+@@ -3566,6 +3598,9 @@ bool Gis_geometry_collection::get_mbr(MBR *mbr, const char **end) const
+   Geometry_buffer buffer;
+   Geometry *geom;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, NULL))
++    return 1;
++
+   if (no_data(data, 4))
+     return 1;
+   n_objects= uint4korr(data);
+@@ -3602,6 +3637,9 @@ int Gis_geometry_collection::area(double *ar,  const char **end) const
+   Geometry *geom;
+   double result;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, NULL))
++    return 1;
++
+   if (no_data(data, 4))
+     return 1;
+   n_objects= uint4korr(data);
+@@ -3642,6 +3680,9 @@ int Gis_geometry_collection::geom_length(double *len, const char **end) const
+   Geometry *geom;
+   double result;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, NULL))
++    return 1;
++
+   if (no_data(data, 4))
+     return 1;
+   n_objects= uint4korr(data);
+@@ -3743,6 +3784,9 @@ bool Gis_geometry_collection::dimension(uint32 *res_dim, const char **end) const
+   Geometry_buffer buffer;
+   Geometry *geom;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, NULL))
++    return 1;
++
+   if (no_data(data, 4))
+     return 1;
+   n_objects= uint4korr(data);
+@@ -3783,6 +3827,9 @@ int Gis_geometry_collection::store_shapes(Gcalc_shape_transporter *trn) const
+   Geometry_buffer buffer;
+   Geometry *geom;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, NULL))
++    return 1;
++
+   if (no_data(data, 4))
+     return 1;
+   n_objects= uint4korr(data);

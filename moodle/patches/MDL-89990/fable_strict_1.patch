@@ -1,0 +1,242 @@
+diff --git a/public/lib/UPGRADING.md b/public/lib/UPGRADING.md
+index 43b7fb1534d..20f63ddb96a 100644
+--- a/public/lib/UPGRADING.md
++++ b/public/lib/UPGRADING.md
+@@ -4,6 +4,9 @@
+ 
+ ### Added
+ 
++- Changes to OAuth 2 issuers (creation, update, enabling, disabling and deletion of `\core\oauth2\issuer` records) are now added to the config log (`add_to_config_log()`) with the plugin name `core_oauth2`, so they can be reviewed in the "Config changes" report. The client secret is masked in the log.
++
++  For more information see [MDL-89990](https://tracker.moodle.org/browse/MDL-89990)
+ - Boost now has a dark colour mode, which a site turns on with the experimental theme_boost | enablecolourmodes setting, so a plugin's styles.css can no longer assume the page is light. Styles work in both modes if they take their colours from the Bootstrap custom properties (--bs-body-bg, --bs-body-color, --bs-secondary-bg, --bs-tertiary-bg, --bs-border-color, --bs-emphasis-color, --bs-link-color) or the design system tokens (--mds-bg-surface-*, --mds-text-*, --mds-border-*), all of which change with the mode. The equivalent utility classes (bg-body, bg-body-secondary, bg-body-tertiary, text-body, text-body-secondary, text-bg-*, border) do the same, and are safer than bg-white or text-dark. Where a colour genuinely has to differ between the modes, scope it with the [data-bs-theme="dark"] attribute selector, which is the Bootstrap standard rather than anything Boost-specific.
+   Two things to watch for. A literal colour is a problem when it is only half of a pair: a fixed light background behind text that follows the mode, or fixed dark text on a surface that follows the mode, will lose its contrast. Where a colour carries meaning and has to stay, such as a status tint, fix the other half of the pair alongside it rather than letting it follow the mode. And an SVG rendered through an <img> tag paints with the fill baked into the file, so icons should go through the icon API in order to inherit currentColor.
+ 
+diff --git a/public/lib/classes/oauth2/issuer.php b/public/lib/classes/oauth2/issuer.php
+index c355595799b..879152ce330 100644
+--- a/public/lib/classes/oauth2/issuer.php
++++ b/public/lib/classes/oauth2/issuer.php
+@@ -47,6 +47,18 @@ class issuer extends persistent {
+ 
+     const TABLE = 'oauth2_issuer';
+ 
++    /** @var string The plugin name used when adding issuer changes to the config log. */
++    const CONFIG_LOG_PLUGIN = 'core_oauth2';
++
++    /** @var string The value written to the config log in place of sensitive values (eg: the client secret). */
++    const CONFIG_LOG_MASKED_VALUE = '********';
++
++    /** @var string[] Properties whose values must never be written to the config log in clear text. */
++    const CONFIG_LOG_MASKED_PROPERTIES = ['clientsecret'];
++
++    /** @var \stdClass|null Snapshot of the stored record taken before an update, used for config logging. */
++    private ?\stdClass $recordbeforeupdate = null;
++
+     /**
+      * Return the definition of the properties of this model.
+      *
+@@ -286,4 +298,116 @@ class issuer extends persistent {
+     public function get_system_email(): ?string {
+         return $this->get('systememail') ? $this->get('systememail') : null;
+     }
++
++    /**
++     * Hook to execute after the issuer has been created.
++     *
++     * Adds the new issuer configuration to the config log.
++     *
++     * @return void
++     */
++    protected function after_create() {
++        $id = $this->get('id');
++        self::add_to_config_log("issuer{$id}_created", '', $this->get('name'));
++        foreach ($this->get_config_log_values($this->to_record()) as $property => $value) {
++            if ($value === '' || $value === null) {
++                // Nothing worth logging for empty values on creation.
++                continue;
++            }
++            self::add_to_config_log("issuer{$id}_{$property}", '', $value);
++        }
++    }
++
++    /**
++     * Hook to execute before the issuer is updated.
++     *
++     * Takes a snapshot of the stored record so the changes can be added to the config log.
++     *
++     * @return void
++     */
++    protected function before_update() {
++        global $DB;
++
++        $this->recordbeforeupdate = $DB->get_record(static::TABLE, ['id' => $this->get('id')]) ?: null;
++    }
++
++    /**
++     * Hook to execute after the issuer has been updated.
++     *
++     * Adds every changed property to the config log.
++     *
++     * @param bool $result Whether or not the update was successful.
++     * @return void
++     */
++    protected function after_update($result) {
++        $oldrecord = $this->recordbeforeupdate;
++        $this->recordbeforeupdate = null;
++
++        if (!$result || !$oldrecord) {
++            return;
++        }
++
++        $id = $this->get('id');
++        $oldvalues = $this->get_config_log_values($oldrecord);
++        $newvalues = $this->get_config_log_values($this->to_record());
++        foreach ($newvalues as $property => $newvalue) {
++            $oldvalue = $oldvalues[$property] ?? '';
++            if ((string) $oldvalue === (string) $newvalue) {
++                continue;
++            }
++            self::add_to_config_log("issuer{$id}_{$property}", $oldvalue, $newvalue);
++        }
++    }
++
++    /**
++     * Hook to execute after the issuer has been deleted.
++     *
++     * Adds the deletion of the issuer to the config log.
++     *
++     * @param bool $result Whether or not the delete was successful.
++     * @return void
++     */
++    protected function after_delete($result) {
++        if (!$result) {
++            return;
++        }
++
++        $id = $this->get('id');
++        self::add_to_config_log("issuer{$id}_deleted", $this->get('name'), '');
++    }
++
++    /**
++     * Get the list of property values of a record that should be written to the config log.
++     *
++     * Internal persistent fields are skipped and sensitive values are masked.
++     *
++     * @param \stdClass $record The issuer record.
++     * @return array The values indexed by property name.
++     */
++    private function get_config_log_values(\stdClass $record): array {
++        $values = [];
++        foreach (array_keys(static::define_properties()) as $property) {
++            $value = $record->{$property} ?? null;
++            if (in_array($property, self::CONFIG_LOG_MASKED_PROPERTIES, true)) {
++                $value = ($value === '' || $value === null) ? '' : self::CONFIG_LOG_MASKED_VALUE;
++            }
++            $values[$property] = $value;
++        }
++        return $values;
++    }
++
++    /**
++     * Add an issuer change to the config log.
++     *
++     * @param string $name The name of the configuration change.
++     * @param mixed $oldvalue The previous value.
++     * @param mixed $value The new value.
++     * @return void
++     */
++    private static function add_to_config_log(string $name, $oldvalue, $value): void {
++        global $CFG;
++        require_once($CFG->libdir . '/datalib.php');
++
++        add_to_config_log($name, (string) $oldvalue, (string) $value, self::CONFIG_LOG_PLUGIN);
++    }
+ }
+diff --git a/public/lib/tests/oauth2_test.php b/public/lib/tests/oauth2_test.php
+index be2f9d736b3..b2e4d0034bb 100644
+--- a/public/lib/tests/oauth2_test.php
++++ b/public/lib/tests/oauth2_test.php
+@@ -69,6 +69,83 @@ final class oauth2_test extends \advanced_testcase {
+         $this->assertEquals($issuers[2]->get('name'), 'Nextcloud');
+     }
+ 
++    /**
++     * Tests that the crud operations on oauth2 issuers are added to the config log.
++     *
++     * @covers \core\oauth2\issuer
++     * @covers \core\oauth2\api
++     */
++    public function test_issuer_changes_are_added_to_config_log(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $this->setAdminUser();
++
++        $plugin = issuer::CONFIG_LOG_PLUGIN;
++        $this->assertEquals(0, $DB->count_records('config_log', ['plugin' => $plugin]));
++
++        // Creating an issuer logs the creation and its configuration, masking the client secret.
++        $issuer = api::create_issuer((object) [
++            'name' => 'My service',
++            'clientid' => 'myclientid',
++            'clientsecret' => 'mysupersecret',
++            'enabled' => 1,
++            'showonloginpage' => issuer::SERVICEONLY,
++        ]);
++        $id = $issuer->get('id');
++
++        $logs = $DB->get_records('config_log', ['plugin' => $plugin], '', 'name, oldvalue, value');
++        $this->assertArrayHasKey("issuer{$id}_created", $logs);
++        $this->assertEquals('My service', $logs["issuer{$id}_created"]->value);
++        $this->assertEquals('My service', $logs["issuer{$id}_name"]->value);
++        $this->assertEquals('myclientid', $logs["issuer{$id}_clientid"]->value);
++        $this->assertEquals(issuer::CONFIG_LOG_MASKED_VALUE, $logs["issuer{$id}_clientsecret"]->value);
++        $this->assertArrayNotHasKey("issuer{$id}_baseurl", $logs);
++        $this->assertStringNotContainsString('mysupersecret', json_encode(array_values($logs)));
++        $DB->delete_records('config_log', ['plugin' => $plugin]);
++
++        // Updating an issuer only logs the changed properties.
++        api::update_issuer((object) [
++            'id' => $id,
++            'name' => 'My renamed service',
++            'clientid' => 'myclientid',
++            'clientsecret' => 'mynewsecret',
++            'enabled' => 1,
++            'showonloginpage' => issuer::SERVICEONLY,
++        ]);
++
++        $logs = $DB->get_records('config_log', ['plugin' => $plugin], '', 'name, oldvalue, value');
++        $this->assertCount(2, $logs);
++        $this->assertEquals('My service', $logs["issuer{$id}_name"]->oldvalue);
++        $this->assertEquals('My renamed service', $logs["issuer{$id}_name"]->value);
++        $this->assertEquals(issuer::CONFIG_LOG_MASKED_VALUE, $logs["issuer{$id}_clientsecret"]->oldvalue);
++        $this->assertEquals(issuer::CONFIG_LOG_MASKED_VALUE, $logs["issuer{$id}_clientsecret"]->value);
++        $DB->delete_records('config_log', ['plugin' => $plugin]);
++
++        // Disabling and enabling an issuer is logged, but a no-op update is not.
++        api::disable_issuer($id);
++        api::disable_issuer($id);
++        api::enable_issuer($id);
++
++        $logs = array_values($DB->get_records('config_log', ['plugin' => $plugin], 'id ASC', 'id, name, oldvalue, value'));
++        $this->assertCount(2, $logs);
++        $this->assertEquals("issuer{$id}_enabled", $logs[0]->name);
++        $this->assertEquals('1', $logs[0]->oldvalue);
++        $this->assertEquals('0', $logs[0]->value);
++        $this->assertEquals("issuer{$id}_enabled", $logs[1]->name);
++        $this->assertEquals('0', $logs[1]->oldvalue);
++        $this->assertEquals('1', $logs[1]->value);
++        $DB->delete_records('config_log', ['plugin' => $plugin]);
++
++        // Deleting an issuer is logged.
++        api::delete_issuer($id);
++
++        $logs = $DB->get_records('config_log', ['plugin' => $plugin], '', 'name, oldvalue, value');
++        $this->assertCount(1, $logs);
++        $this->assertEquals('My renamed service', $logs["issuer{$id}_deleted"]->oldvalue);
++        $this->assertEquals('', $logs["issuer{$id}_deleted"]->value);
++    }
++
+     /**
+      * Tests the crud operations on oauth2 issuers.
+      */

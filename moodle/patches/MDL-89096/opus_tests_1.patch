@@ -1,0 +1,66 @@
+diff --git a/public/lib/classes/plugininfo/orphaned.php b/public/lib/classes/plugininfo/orphaned.php
+index 2c496ae9320..71c0eb296c3 100644
+--- a/public/lib/classes/plugininfo/orphaned.php
++++ b/public/lib/classes/plugininfo/orphaned.php
+@@ -76,6 +76,7 @@ class orphaned extends base {
+             $plugin->type        = $type;
+             $plugin->typerootdir = $typerootdir;
+             $plugin->name        = $name;
++            $plugin->component   = $plugin->type . '_' . $plugin->name;
+             $plugin->rootdir     = null;
+             $plugin->displayname = $name;
+             $plugin->versiondb   = $version;
+diff --git a/public/lib/tests/plugin_manager_test.php b/public/lib/tests/plugin_manager_test.php
+index cdd59b5f1a4..0f43019a0f5 100644
+--- a/public/lib/tests/plugin_manager_test.php
++++ b/public/lib/tests/plugin_manager_test.php
+@@ -1090,4 +1090,49 @@ final class plugin_manager_test extends \advanced_testcase {
+         );
+         $this->assertDebuggingCalled();
+     }
++
++    /**
++     * Test that orphaned subplugins (subplugins whose parent plugin is missing from disk) can be uninstalled.
++     *
++     * @covers \core\plugininfo\orphaned
++     * @covers \core_plugin_manager::can_uninstall_plugin
++     * @covers \core_plugin_manager::uninstall_plugin
++     */
++    public function test_orphaned_subplugin_uninstall(): void {
++        global $CFG, $DB;
++        require_once($CFG->libdir . '/adminlib.php');
++        $this->resetAfterTest();
++
++        // Fake an installed subplugin whose plugin type is no longer known (the parent plugin was removed).
++        set_config('version', 2025010100, 'xxorphantype_alpha');
++        $DB->insert_record('external_functions', [
++            'name' => 'xxorphantype_alpha_get_things',
++            'classname' => 'xxorphantype_alpha\\external\\get_things',
++            'methodname' => 'execute',
++            'component' => 'xxorphantype_alpha',
++            'capabilities' => '',
++        ]);
++        core_plugin_manager::reset_caches();
++
++        $pluginman = core_plugin_manager::instance();
++        $plugins = $pluginman->get_plugins();
++        $this->assertArrayHasKey('xxorphantype', $plugins);
++        $this->assertArrayHasKey('alpha', $plugins['xxorphantype']);
++
++        $info = $plugins['xxorphantype']['alpha'];
++        $this->assertInstanceOf(\core\plugininfo\orphaned::class, $info);
++        $this->assertSame('xxorphantype_alpha', $info->component);
++        $this->assertSame(core_plugin_manager::PLUGIN_STATUS_MISSING, $info->get_status());
++        $this->assertTrue($pluginman->can_uninstall_plugin($info->component));
++
++        $progress = new \null_progress_trace();
++        ob_start();
++        $this->assertTrue($pluginman->uninstall_plugin($info->component, $progress));
++        ob_end_clean();
++
++        $this->assertFalse(get_config('xxorphantype_alpha', 'version'));
++        $this->assertFalse($DB->record_exists('external_functions', ['component' => 'xxorphantype_alpha']));
++        core_plugin_manager::reset_caches();
++        $this->assertNull(core_plugin_manager::instance()->get_plugin_info('xxorphantype_alpha'));
++    }
+ }

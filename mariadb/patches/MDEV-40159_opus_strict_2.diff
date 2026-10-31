@@ -1,0 +1,51 @@
+diff --git a/mysql-test/main/symlink.result b/mysql-test/main/symlink.result
+index 67d067be..b15063d6 100644
+--- a/mysql-test/main/symlink.result
++++ b/mysql-test/main/symlink.result
+@@ -249,3 +249,10 @@ t1	CREATE TABLE `t1` (
+   `c3` varchar(100) DEFAULT NULL
+ ) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci DELAY_KEY_WRITE=1 DATA DIRECTORY='MYSQL_TMP_DIR/' INDEX DIRECTORY='MYSQL_TMP_DIR/'
+ drop table t1;
++create table t1 (a int) engine=MyISAM data directory="MYSQL_TMP_DIR/o'hara" index directory="MYSQL_TMP_DIR/o'hara";
++show create table t1;
++Table	Create Table
++t1	CREATE TABLE `t1` (
++  `a` int(11) DEFAULT NULL
++) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci DATA DIRECTORY='MYSQL_TMP_DIR/o\'hara/' INDEX DIRECTORY='MYSQL_TMP_DIR/o\'hara/'
++drop table t1;
+diff --git a/mysql-test/main/symlink.test b/mysql-test/main/symlink.test
+index d5f52e9a..f2f018bb 100644
+--- a/mysql-test/main/symlink.test
++++ b/mysql-test/main/symlink.test
+@@ -346,3 +346,18 @@ drop table t1;
+ #
+ # End of 10.1 tests
+ #
++
++#
++# MDEV-40159 single quote in DATA DIRECTORY breaks SHOW CREATE TABLE
++#
++--mkdir $MYSQL_TMP_DIR/o'hara
++--replace_result $MYSQL_TMP_DIR MYSQL_TMP_DIR
++eval create table t1 (a int) engine=MyISAM data directory="$MYSQL_TMP_DIR/o'hara" index directory="$MYSQL_TMP_DIR/o'hara";
++--replace_result $MYSQL_TMP_DIR MYSQL_TMP_DIR
++show create table t1;
++drop table t1;
++--rmdir $MYSQL_TMP_DIR/o'hara
++
++#
++# End of 10.11 tests
++#
+diff --git a/sql/sql_show.cc b/sql/sql_show.cc
+index cbfa699e..14c2750d 100644
+--- a/sql/sql_show.cc
++++ b/sql/sql_show.cc
+@@ -1684,7 +1684,7 @@ static void append_directory(THD *thd, String *packet, LEX_CSTRING *dir_type,
+     }
+     filename= winfilename;
+ #endif
+-    packet->append(filename, length);
++    packet->append_for_single_quote(filename, length);
+     packet->append('\'');
+   }
+ }

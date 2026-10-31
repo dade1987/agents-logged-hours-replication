@@ -1,0 +1,139 @@
+diff --git a/public/question/type/multichoice/renderer.php b/public/question/type/multichoice/renderer.php
+index cccaf774db8..c02a28f1c83 100644
+--- a/public/question/type/multichoice/renderer.php
++++ b/public/question/type/multichoice/renderer.php
+@@ -143,11 +143,20 @@ abstract class qtype_multichoice_renderer_base extends qtype_with_combined_feedb
+             $classes[] = $class;
+         }
+ 
++        // Give the question text and the legend ids, so that the group of inputs can be labelled by both.
++        // This way screen readers announce the actual question text (and not just the generic
++        // "Question 1 Answer" prompt) when focus moves to the radio buttons/checkboxes.
++        $qtextid = $qa->get_outer_question_div_unique_id() . '-qtext';
++        $legendid = $qa->get_outer_question_div_unique_id() . '-legend';
++
+         $result = '';
+         $result .= html_writer::tag('div', $question->format_questiontext($qa),
+-                array('class' => 'qtext'));
++                array('class' => 'qtext', 'id' => $qtextid));
+ 
+-        $result .= html_writer::start_tag('fieldset', array('class' => 'ablock no-overflow visual-scroll-x'));
++        $result .= html_writer::start_tag('fieldset', [
++            'class' => 'ablock no-overflow visual-scroll-x',
++            'aria-labelledby' => $qtextid . ' ' . $legendid,
++        ]);
+         if ($question->showstandardinstruction == 1) {
+             $legendclass = '';
+             $questionnumber = $options->add_question_identifier_to_label($this->prompt(), true, true);
+@@ -156,6 +165,7 @@ abstract class qtype_multichoice_renderer_base extends qtype_with_combined_feedb
+             $legendclass = 'visually-hidden';
+         }
+         $legendattrs = [
++            'id' => $legendid,
+             'class' => 'prompt h6 fw-normal ' . $legendclass,
+         ];
+         $result .= html_writer::tag('legend', $questionnumber, $legendattrs);
+diff --git a/public/question/type/multichoice/tests/walkthrough_test.php b/public/question/type/multichoice/tests/walkthrough_test.php
+index c09e39dd3e3..b8fd8f3af20 100644
+--- a/public/question/type/multichoice/tests/walkthrough_test.php
++++ b/public/question/type/multichoice/tests/walkthrough_test.php
+@@ -302,10 +302,36 @@ final class walkthrough_test extends \qbehaviour_walkthrough_test_base {
+         $this->render();
+ 
+         // Check for 'Show standard instruction'.
++        $legendid = $this->quba->get_question_attempt($this->slot)->get_outer_question_div_unique_id() . '-legend';
+         $standardinstruction = \html_writer::tag('legend', get_string('answer'), [
++            'id' => $legendid,
+             'class' => 'prompt h6 fw-normal visually-hidden',
+         ]);
+         $this->assertStringContainsString($standardinstruction, $this->currentoutput);
+     }
+ 
++    /**
++     * Test that the group of choices is labelled by the question text, so that screen readers announce it.
++     *
++     * @covers \qtype_multichoice_renderer_base::formulation_and_controls
++     */
++    public function test_choices_group_is_labelled_by_question_text(): void {
++        $mc = \test_question_maker::make_a_multichoice_single_question();
++        $mc->showstandardinstruction = false;
++
++        $this->start_attempt_at_question($mc, 'deferredfeedback', 3);
++        $this->render();
++
++        $qa = $this->quba->get_question_attempt($this->slot);
++        $qtextid = $qa->get_outer_question_div_unique_id() . '-qtext';
++        $legendid = $qa->get_outer_question_div_unique_id() . '-legend';
++
++        // The question text has an id.
++        $this->assertStringContainsString('class="qtext" id="' . $qtextid . '"', $this->currentoutput);
++        // The legend has an id.
++        $this->assertStringContainsString('<legend id="' . $legendid . '"', $this->currentoutput);
++        // The fieldset is labelled by the question text first, and then the legend.
++        $this->assertStringContainsString('aria-labelledby="' . $qtextid . ' ' . $legendid . '"', $this->currentoutput);
++    }
++
+ }
+diff --git a/public/question/type/truefalse/renderer.php b/public/question/type/truefalse/renderer.php
+index 3b760ab1f4b..cdf5f3e0276 100644
+--- a/public/question/type/truefalse/renderer.php
++++ b/public/question/type/truefalse/renderer.php
+@@ -96,11 +96,20 @@ class qtype_truefalse_renderer extends qtype_renderer {
+                 html_writer::tag('label', get_string('false', 'qtype_truefalse'),
+                 array('for' => $falseattributes['id'], 'class' => 'ms-1'));
+ 
++        // Give the question text and the legend ids, so that the group of radio buttons can be labelled by both.
++        // This way screen readers announce the actual question text (and not just the generic
++        // "Question 1 Answer" prompt) when focus moves to the radio buttons.
++        $qtextid = $qa->get_outer_question_div_unique_id() . '-qtext';
++        $legendid = $qa->get_outer_question_div_unique_id() . '-legend';
++
+         $result = '';
+         $result .= html_writer::tag('div', $question->format_questiontext($qa),
+-                array('class' => 'qtext'));
++                array('class' => 'qtext', 'id' => $qtextid));
+ 
+-        $result .= html_writer::start_tag('fieldset', array('class' => 'ablock'));
++        $result .= html_writer::start_tag('fieldset', [
++            'class' => 'ablock',
++            'aria-labelledby' => $qtextid . ' ' . $legendid,
++        ]);
+         if (!empty($question->showstandardinstruction)) {
+             $legendclass = '';
+             $questionnumber = $options->add_question_identifier_to_label(get_string('selectone', 'qtype_truefalse'), true, true);
+@@ -108,8 +117,10 @@ class qtype_truefalse_renderer extends qtype_renderer {
+             $legendclass = 'visually-hidden';
+             $questionnumber = $options->add_question_identifier_to_label(get_string('answer'), true, true);
+         }
+-        $result .= html_writer::tag('legend', $questionnumber,
+-            array('class' => 'prompt h6 fw-normal ' . $legendclass));
++        $result .= html_writer::tag('legend', $questionnumber, [
++            'id' => $legendid,
++            'class' => 'prompt h6 fw-normal ' . $legendclass,
++        ]);
+ 
+         $result .= html_writer::start_tag('div', array('class' => 'answer'));
+         $result .= html_writer::tag('div', $radiotrue . ' ' . $truefeedbackimg,
+diff --git a/public/question/type/truefalse/tests/walkthrough_test.php b/public/question/type/truefalse/tests/walkthrough_test.php
+index 22a7e6ff586..006668872ba 100644
+--- a/public/question/type/truefalse/tests/walkthrough_test.php
++++ b/public/question/type/truefalse/tests/walkthrough_test.php
+@@ -156,10 +156,18 @@ final class walkthrough_test extends \qbehaviour_walkthrough_test_base {
+         $this->render();
+ 
+         // Check for 'Show standard instruction'.
++        $qa = $this->quba->get_question_attempt($this->slot);
++        $qtextid = $qa->get_outer_question_div_unique_id() . '-qtext';
++        $legendid = $qa->get_outer_question_div_unique_id() . '-legend';
+         $standardinstruction = \html_writer::tag('legend', get_string('answer'), [
++            'id' => $legendid,
+             'class' => 'prompt h6 fw-normal visually-hidden',
+         ]);
+         $this->assertStringContainsString($standardinstruction, $this->currentoutput);
++
++        // The group of radio buttons is labelled by the question text, so screen readers announce it.
++        $this->assertStringContainsString('class="qtext" id="' . $qtextid . '"', $this->currentoutput);
++        $this->assertStringContainsString('aria-labelledby="' . $qtextid . ' ' . $legendid . '"', $this->currentoutput);
+     }
+ 
+     /**

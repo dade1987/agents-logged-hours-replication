@@ -1,0 +1,29 @@
+diff --git a/storage/heap/hp_rnext.c b/storage/heap/hp_rnext.c
+index a07d8fae..69249427 100644
+--- a/storage/heap/hp_rnext.c
++++ b/storage/heap/hp_rnext.c
+@@ -77,10 +77,11 @@ int heap_rnext(HP_INFO *info, uchar *record)
+     else
+     {
+       /*
+-        We enter this branch only for DELETE queries after heap_rkey(). E.g.
+-        DELETE FROM t1 WHERE a=10. As last key position is not available
+-        (last key is removed by heap_delete()), we must restart search as it
+-        is done in heap_rkey().
++        We enter this branch only for DELETE queries after heap_rkey() or
++        heap_rnext(). E.g. DELETE FROM t1 WHERE a=10. As last key position is
++        not available (last key is removed by heap_delete()), we must restart
++        search from the last found key (info->lastkey, which heap_rnext()
++        updates after every successful read), not from the original one.
+       */
+       custom_arg.keyseg = keyinfo->seg;
+       custom_arg.key_length = info->lastkey_len;
+@@ -94,6 +95,8 @@ int heap_rnext(HP_INFO *info, uchar *record)
+     {
+       memcpy(&pos, pos + keyinfo->get_key_length(keyinfo, pos), sizeof(uchar*));
+       info->current_ptr = pos;
++      /* Remember the found key, to restart the search from it if needed */
++      info->lastkey_len= hp_rb_make_key(keyinfo, info->lastkey, pos, 0);
+     }
+     else
+     {

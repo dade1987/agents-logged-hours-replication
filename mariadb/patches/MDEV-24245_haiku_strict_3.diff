@@ -1,0 +1,56 @@
+diff --git a/storage/archive/ha_archive.cc b/storage/archive/ha_archive.cc
+index 2d623507..b1bb0056 100644
+--- a/storage/archive/ha_archive.cc
++++ b/storage/archive/ha_archive.cc
+@@ -1306,6 +1306,51 @@ int ha_archive::unpack_row(azio_stream *file_to_read, uchar *record)
+   }
+   if (ptr != end)
+     DBUG_RETURN(HA_ERR_WRONG_IN_RECORD);
++
++  /*
++    Blob fields now point into record_buffer. That buffer is also the
++    destination of pack_row(), and fix_rec_buff() may reallocate it, so the
++    blob data could be overwritten (the source and destination of the packing
++    overlap) or left dangling when the row is written out again, e.g. by
++    optimize(). Copy the blob data into a separate buffer.
++  */
++  if (table->s->blob_fields)
++  {
++    my_ptrdiff_t const rec_offset= record - table->record[0];
++    size_t total_blob_length= 0;
++    uint *blob_idx, *blob_end;
++
++    for (blob_idx= table->s->blob_field,
++         blob_end= blob_idx + table->s->blob_fields;
++         blob_idx != blob_end; blob_idx++)
++    {
++      Field_blob *blob= (Field_blob*) table->field[*blob_idx];
++      if (!blob->is_null_in_record(record))
++        total_blob_length+= blob->get_length(record +
++                                             blob->offset(table->record[0]));
++    }
++
++    if (buffer.alloc(total_blob_length))
++      DBUG_RETURN(HA_ERR_OUT_OF_MEM);
++    uchar *blob_ptr= (uchar*) buffer.ptr();
++
++    for (blob_idx= table->s->blob_field,
++         blob_end= blob_idx + table->s->blob_fields;
++         blob_idx != blob_end; blob_idx++)
++    {
++      Field_blob *blob= (Field_blob*) table->field[*blob_idx];
++      if (blob->is_null_in_record(record))
++        continue;
++      uchar *field_ptr= record + blob->offset(table->record[0]);
++      uint32 length= blob->get_length(field_ptr);
++      if (length)
++      {
++        memcpy(blob_ptr, blob->get_ptr(field_ptr), length);
++        blob->set_ptr_offset(rec_offset, length, blob_ptr);
++        blob_ptr+= length;
++      }
++    }
++  }
+   DBUG_RETURN(0);
+ }
+ 

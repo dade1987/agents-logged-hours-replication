@@ -1,0 +1,84 @@
+diff --git a/mysql-test/main/opt_tvc.result b/mysql-test/main/opt_tvc.result
+index 819d42b5..54ab3ad9 100644
+--- a/mysql-test/main/opt_tvc.result
++++ b/mysql-test/main/opt_tvc.result
+@@ -791,4 +791,32 @@ select * from t1 where a in (1, 2) and b = 2 order by a, b;
+ a	b	c
+ 1	2	NULL
+ drop table t1;
++#
++# MDEV-31225 Signal 11 after select ..WHERE ROW(a,(a,a)) IN
++#            ((1,(1,1)),(2,(2,null))) with in_predicate_conversion_threshold=1
++#
++set @@in_predicate_conversion_threshold=1;
++create table t1 (a int);
++insert into t1 values (1),(2),(3);
++select 1 from t1 where row(a,(a,a)) in ((1,(1,1)),(2,(2,null)));
++1
++1
++select 1 from t1 where row(a,(a,a)) in ((1,(1,1)),(2,(2,2)));
++1
++1
++1
++select a from t1 where row(a,(a,a)) not in ((1,(1,1)),(2,(2,2)));
++a
++3
++select a, row(a,(a,a)) in ((1,(1,1)),(2,(2,null))) from t1;
++a	row(a,(a,a)) in ((1,(1,1)),(2,(2,null)))
++1	1
++2	NULL
++3	0
++select a from t1 where row((a,a),a) in (((1,1),1),((2,2),2));
++a
++1
++2
++drop table t1;
++set @@in_predicate_conversion_threshold=default;
+ # End of 11.4 tests
+diff --git a/mysql-test/main/opt_tvc.test b/mysql-test/main/opt_tvc.test
+index 7d39c6a8..b495b1de 100644
+--- a/mysql-test/main/opt_tvc.test
++++ b/mysql-test/main/opt_tvc.test
+@@ -488,4 +488,21 @@ select * from t1 where a in (1, 2) and b = 2 order by a, b;
+ 
+ drop table t1;
+ 
++
++--echo #
++--echo # MDEV-31225 Signal 11 after select ..WHERE ROW(a,(a,a)) IN
++--echo #            ((1,(1,1)),(2,(2,null))) with in_predicate_conversion_threshold=1
++--echo #
++
++set @@in_predicate_conversion_threshold=1;
++create table t1 (a int);
++insert into t1 values (1),(2),(3);
++select 1 from t1 where row(a,(a,a)) in ((1,(1,1)),(2,(2,null)));
++select 1 from t1 where row(a,(a,a)) in ((1,(1,1)),(2,(2,2)));
++select a from t1 where row(a,(a,a)) not in ((1,(1,1)),(2,(2,2)));
++select a, row(a,(a,a)) in ((1,(1,1)),(2,(2,null))) from t1;
++select a from t1 where row((a,a),a) in (((1,1),1),((2,2),2));
++drop table t1;
++set @@in_predicate_conversion_threshold=default;
++
+ --echo # End of 11.4 tests
+diff --git a/sql/sql_tvc.cc b/sql/sql_tvc.cc
+index 46835972..4b6bea0c 100644
+--- a/sql/sql_tvc.cc
++++ b/sql/sql_tvc.cc
+@@ -894,6 +894,16 @@ static bool cmp_row_types(Item* item1, Item* item2)
+   {
+     Item *inner= item1->element_index(i);
+     Item *outer= item2->element_index(i);
++    /*
++      Nested rows, e.g. ROW(a,(a,a)) IN ((1,(1,1)),...), cannot be
++      materialized: the row type handler does not support
++      subquery_type_allows_materialization() and a column of a derived
++      table cannot be of a row type. Treat them as a type mismatch so that
++      the IN predicate is not converted into an IN subquery.
++    */
++    if (inner->type() == Item::ROW_ITEM || outer->type() == Item::ROW_ITEM ||
++        inner->cols() != 1 || outer->cols() != 1)
++      return true;
+     if (!inner->type_handler()->subquery_type_allows_materialization(inner,
+                                                                      outer,
+                                                                      true))

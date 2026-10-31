@@ -1,0 +1,39 @@
+diff --git a/plugin/server_audit/server_audit.c b/plugin/server_audit/server_audit.c
+index 5d37186a..62b128c9 100644
+--- a/plugin/server_audit/server_audit.c
++++ b/plugin/server_audit/server_audit.c
+@@ -839,6 +839,15 @@ static struct connection_info *get_loc_info(MYSQL_THD thd)
+   return (struct connection_info *) THDVAR(thd, loc_info);
+   */
+   struct connection_info *ci= (struct connection_info *) THDVAR(thd, loc_info);
++  /*
++    The THDVAR can be NULL. That happens when the connection synchronized
++    its session variables while the plugin was uninstalled (so the global
++    value of the variable was already freed and set to NULL), and then
++    the plugin was installed again. The thread keeps the NULL value
++    as the variable's bookmark is already known to it.
++  */
++  if (!ci)
++    return NULL;
+   if ((size_t) ci->user_length > sizeof(ci->user))
+   {
+     ci->user_length= 0;
+@@ -2073,6 +2082,9 @@ void auditing(MYSQL_THD thd, unsigned int event_class, const void *ev)
+     cn= get_loc_info(thd);
+   }
+ 
++  if (!cn)
++    return;
++
+   update_connection_info(thd, cn, event_class, ev, &after_action);
+ 
+   if (!logging)
+@@ -2631,7 +2643,7 @@ static void log_current_query(MYSQL_THD thd)
+   if (!thd)
+     return;
+   cn= get_loc_info(thd);
+-  if (!ci_needs_setup(cn) && cn->query_length)
++  if (cn && !ci_needs_setup(cn) && cn->query_length)
+   {
+     cn->log_always= 1;
+     log_statement_ex(cn, cn->query_time, thd_get_thread_id(thd),

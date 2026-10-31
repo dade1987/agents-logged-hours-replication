@@ -1,0 +1,77 @@
+diff --git a/public/blocks/recentlyaccesseditems/classes/helper.php b/public/blocks/recentlyaccesseditems/classes/helper.php
+index 61e215ca261..c92102276fb 100644
+--- a/public/blocks/recentlyaccesseditems/classes/helper.php
++++ b/public/blocks/recentlyaccesseditems/classes/helper.php
+@@ -74,12 +74,21 @@ class helper {
+                 continue;
+             }
+             foreach ($items as $key => $item) {
++                // Exclude items whose course module no longer exists (stale rows).
++                if (empty($modinfo->cms[$item->cmid])) {
++                    if (!$DB->record_exists('course_modules', ['id' => $item->cmid])) {
++                        // Clean up the orphaned record(s) for this course module.
++                        $DB->delete_records('block_recentlyaccesseditems', ['cmid' => $item->cmid]);
++                    }
++                    continue;
++                }
++                $cm = $modinfo->cms[$item->cmid];
+                 // Exclude not visible items.
+-                if (!$modinfo->cms[$item->cmid]->uservisible) {
++                if (!$cm->uservisible) {
+                     continue;
+                 }
+-                $item->modname = $modinfo->cms[$item->cmid]->modname;
+-                $item->name = $modinfo->cms[$item->cmid]->name;
++                $item->modname = $cm->modname;
++                $item->name = $cm->name;
+                 $item->coursename = get_course_display_name_for_list($modinfo->get_course());
+                 $recentitems[$key] = $item;
+             }
+diff --git a/public/blocks/recentlyaccesseditems/tests/helper_test.php b/public/blocks/recentlyaccesseditems/tests/helper_test.php
+index 8021fe07118..c4f54e02a1d 100644
+--- a/public/blocks/recentlyaccesseditems/tests/helper_test.php
++++ b/public/blocks/recentlyaccesseditems/tests/helper_test.php
+@@ -57,4 +57,43 @@ final class helper_test extends \advanced_testcase {
+         $recent2 = helper::get_recent_items();
+         self::assertCount(1, $recent2);
+     }
++
++    /**
++     * Tests that the get recent items method ignores and removes records referencing missing course modules.
++     */
++    public function test_get_recent_items_missing_course_module(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $course = self::getDataGenerator()->create_course();
++        $user = self::getDataGenerator()->create_and_enrol($course, 'student');
++
++        $forum = self::getDataGenerator()->create_module('forum', ['course' => $course]);
++        $glossary = self::getDataGenerator()->create_module('glossary', ['course' => $course]);
++        self::setUser($user);
++
++        $event1params = ['context' => \context_module::instance($forum->cmid), 'objectid' => $forum->id];
++        \mod_forum\event\course_module_viewed::create($event1params)->trigger();
++        $event2params = ['context' => \context_module::instance($glossary->cmid), 'objectid' => $glossary->id];
++        \mod_glossary\event\course_module_viewed::create($event2params)->trigger();
++        self::assertCount(2, helper::get_recent_items());
++
++        // Insert an orphaned row referencing a non-existent course module.
++        $missingcmid = (int) $DB->get_field_sql('SELECT MAX(id) FROM {course_modules}') + 100;
++        $DB->insert_record('block_recentlyaccesseditems', (object) [
++            'courseid' => $course->id,
++            'cmid' => $missingcmid,
++            'userid' => $user->id,
++            'timeaccess' => time() + 10,
++        ]);
++
++        $recent = helper::get_recent_items();
++        self::assertCount(2, $recent);
++        self::assertEquals([$glossary->cmid, $forum->cmid], array_values(array_column($recent, 'cmid')));
++
++        // The stale row should have been removed, valid rows kept.
++        self::assertFalse($DB->record_exists('block_recentlyaccesseditems', ['cmid' => $missingcmid]));
++        self::assertTrue($DB->record_exists('block_recentlyaccesseditems', ['cmid' => $glossary->cmid]));
++        self::assertTrue($DB->record_exists('block_recentlyaccesseditems', ['cmid' => $forum->cmid]));
++    }
+ }

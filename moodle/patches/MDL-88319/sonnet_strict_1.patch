@@ -1,0 +1,167 @@
+diff --git a/public/lib/classes/hook/output/before_help_icon_rendered.php b/public/lib/classes/hook/output/before_help_icon_rendered.php
+new file mode 100644
+index 00000000000..996fb96050f
+--- /dev/null
++++ b/public/lib/classes/hook/output/before_help_icon_rendered.php
+@@ -0,0 +1,126 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\hook\output;
++
++use renderer_base;
++use stdClass;
++
++/**
++ * Hook dispatched before a help icon is rendered.
++ *
++ * Allows plugins to modify the template context, add HTML before or after
++ * the help icon, or replace the help icon completely.
++ *
++ * @package    core
++ * @copyright  2025 Moodle
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++#[\core\attribute\tags('output')]
++#[\core\attribute\label('Allows plugins to extend, augment or replace the help icon output.')]
++final class before_help_icon_rendered {
++    /** @var string HTML to add before the icon */
++    private string $before = '';
++
++    /** @var string HTML to add after the icon */
++    private string $after = '';
++
++    /** @var string|null Full replacement HTML */
++    private ?string $replacement = null;
++
++    /**
++     * Constructor.
++     *
++     * @param renderer_base $renderer The renderer
++     * @param stdClass $context The mutable template context for core/help_icon
++     * @param string $identifier The help string identifier
++     * @param string $component The help string component
++     */
++    public function __construct(
++        /** @var renderer_base The renderer */
++        public readonly renderer_base $renderer,
++        /** @var stdClass The mutable template context */
++        public readonly stdClass $context,
++        /** @var string The help string identifier */
++        public readonly string $identifier = '',
++        /** @var string The help string component */
++        public readonly string $component = '',
++    ) {
++    }
++
++    /**
++     * Add HTML immediately before the help icon.
++     *
++     * @param string $html
++     */
++    public function add_before_icon(string $html): void {
++        $this->before .= $html;
++    }
++
++    /**
++     * Add HTML immediately after the help icon.
++     *
++     * @param string $html
++     */
++    public function add_after_icon(string $html): void {
++        $this->after .= $html;
++    }
++
++    /**
++     * Replace the help icon completely, skipping the default template.
++     *
++     * @param string $html
++     */
++    public function set_replacement(string $html): void {
++        $this->replacement = $html;
++    }
++
++    /**
++     * Whether a replacement has been set.
++     *
++     * @return bool
++     */
++    public function has_replacement(): bool {
++        return $this->replacement !== null;
++    }
++
++    /**
++     * Get the replacement HTML.
++     *
++     * @return string|null
++     */
++    public function get_replacement(): ?string {
++        return $this->replacement;
++    }
++
++    /**
++     * Get HTML to place before the icon.
++     *
++     * @return string
++     */
++    public function get_before_icon(): string {
++        return $this->before;
++    }
++
++    /**
++     * Get HTML to place after the icon.
++     *
++     * @return string
++     */
++    public function get_after_icon(): string {
++        return $this->after;
++    }
++}
+diff --git a/public/lib/classes/output/core_renderer.php b/public/lib/classes/output/core_renderer.php
+index 96247633e67..94f8454726f 100644
+--- a/public/lib/classes/output/core_renderer.php
++++ b/public/lib/classes/output/core_renderer.php
+@@ -35,6 +35,7 @@ use core\exception\coding_exception;
+ use core\hook\manager as hook_manager;
+ use core\hook\output\after_standard_main_region_html_generation;
+ use core\hook\output\before_footer_html_generation;
++use core\hook\output\before_help_icon_rendered;
+ use core\hook\output\before_html_attributes;
+ use core\hook\output\before_http_headers;
+ use core\hook\output\before_standard_footer_html_generation;
+@@ -2255,7 +2256,21 @@ class core_renderer extends renderer_base {
+      */
+     protected function render_help_icon(help_icon $helpicon) {
+         $context = $helpicon->export_for_template($this);
+-        return $this->render_from_template('core/help_icon', $context);
++        $hook = new before_help_icon_rendered(
++            $this,
++            $context,
++            (string) $helpicon->identifier,
++            (string) $helpicon->component,
++        );
++        di::get(hook_manager::class)->dispatch($hook);
++
++        if ($hook->has_replacement()) {
++            return $hook->get_replacement();
++        }
++
++        return $hook->get_before_icon()
++            . $this->render_from_template('core/help_icon', $context)
++            . $hook->get_after_icon();
+     }
+ 
+     /**

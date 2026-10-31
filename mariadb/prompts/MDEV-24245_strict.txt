@@ -1,0 +1,40 @@
+You are a software engineer fixing an issue in MariaDB Server (C/C++). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot build MariaDB or run its test suite. Read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update mysql-test tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDEV-24245: REPAIR on ARCHIVE Database destroys TEXT Data
+
+After Repairing a Tabel due to power loss I detected all Text fields seem to be corrupted.
+
+For reproduction I minified everything:
+
+
+{code:sql}
+CREATE TABLE `TEST` ( 
+	`text` TEXT NULL DEFAULT NULL
+)
+COLLATE='utf8_general_ci'
+ENGINE=ARCHIVE
+;
+
+INSERT INTO `TEST` (`text`) VALUES ('Testtext');
+
+REPAIR TABLE `TEST`;
+{code}
+
+Reading the Row before the REPAIR is fine.
+When I try to read the Inserted row after the repair there is corrupted data.
+This is also the case with OPTIMIZE
+ !image-2020-11-18-21-43-03-414.png|thumbnail! 
+
+I can reproduce this on all my Debian 10 Machines.
+
+Is it possible to reproduce this error for someone else.
+
+Best regards
+

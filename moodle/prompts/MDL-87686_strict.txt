@@ -1,0 +1,27 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot run Moodle's test suite. You may run `php -l <file>` and read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-87686: Orphaned ad-hoc tasks from removed plugins can block further task execution
+
+Not dissimilar to this very old item, but there still remains a problem.
+
+[https://moodle.atlassian.net/browse/MDL-46529|https://moodle.atlassian.net/browse/MDL-46529|smart-link] 
+
+When a plugin has been removed (or not added back after an upgrade) any orphaned tasks for the missing plugin will cause the task worker to fail with an exception and block further task execution.
+
+Specifically, this relates to the array_map call in lines 716-722 of classes/task/manager.php not handling the exception for missing classes.
+
+I can see the function is marked as deprecated (by MDL-67648) but it is still the main processor of adhoc tasks from cron. It could be that cron needs to be updated to use whatever replaces this function, but it is not clear to me what that replacement should be.
+
+To replicate:
+
+* Stop the task worker/cron
+* Create an adhoc task for a plugin
+* Remove the plugin (including files)
+* Restart the task worker/cron

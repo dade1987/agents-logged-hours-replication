@@ -1,0 +1,57 @@
+diff --git a/public/lib/csvlib.class.php b/public/lib/csvlib.class.php
+index 15f972cd350..c14ab665842 100644
+--- a/public/lib/csvlib.class.php
++++ b/public/lib/csvlib.class.php
+@@ -176,7 +176,7 @@ class csv_import_reader {
+         $filepointer = fopen($filename, "w");
+         // The information has been stored in csv format, as serialized data has issues
+         // with special characters and line returns.
+-        $storedata = csv_export_writer::print_array($columns, ',', '"', true);
++        $storedata = csv_export_writer::print_array($columns, ',', '"', true, false);
+         fwrite($filepointer, $storedata);
+ 
+         fclose($fp);
+@@ -398,6 +398,10 @@ class csv_export_writer {
+      * @var resource $fp  File pointer for the csv file.
+      */
+     protected $fp;
++    /**
++     * @var bool $escapeformulas If true, values that look like spreadsheet formulas are escaped.
++     */
++    protected $escapeformulas = true;
+ 
+     /**
+      * Constructor for the csv export reader
+@@ -449,8 +453,10 @@ class csv_export_writer {
+             }
+         }
+         $delimiter = csv_import_reader::get_delimiter($this->delimiter);
+-        foreach ($row as $key => $value) {
+-            $row[$key] = \core\dataformat::escape_spreadsheet_formula($value);
++        if ($this->escapeformulas) {
++            foreach ($row as $key => $value) {
++                $row[$key] = \core\dataformat::escape_spreadsheet_formula($value);
++            }
+         }
+         fputcsv($this->fp, $row, $delimiter, $this->csvenclosure, '\\');
+     }
+@@ -551,10 +557,18 @@ class csv_export_writer {
+      * @param string $delimiter  The name of the delimiter. Supported types(comma, tab, semicolon, colon, cfg)
+      * @param string $enclosure  How speical fields are enclosed.
+      * @param bool $return       If true will return a string with the csv data.
++     * @param bool $escapeformulas If false, values starting with formula characters are not escaped (e.g. internal storage).
+      * @return ?string           csv data.
+      */
+-    public static function print_array(array &$records, $delimiter = 'comma', $enclosure = '"', $return = false) {
++    public static function print_array(
++        array &$records,
++        $delimiter = 'comma',
++        $enclosure = '"',
++        $return = false,
++        bool $escapeformulas = true,
++    ) {
+         $csvdata = new csv_export_writer($delimiter, $enclosure);
++        $csvdata->escapeformulas = $escapeformulas;
+         foreach ($records as $row) {
+             $csvdata->add_data($row);
+         }

@@ -1,0 +1,41 @@
+You are a software engineer fixing an issue in MariaDB Server (C/C++). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot build MariaDB or run its test suite. Read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update mysql-test tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDEV-39194: SUM(b'1100') and SUM(DISTINCT b'1100') return different numeric results for the same BIT literal (e.g. 12 vs 9)
+
+h2. Summary
+
+{{SUM(b'1100')}} and {{SUM(DISTINCT b'1100')}} return different numeric results for the same BIT literal (e.g. 12 vs 9). DISTINCT should only remove duplicates, not change the values fed into the aggregate. 
+
+h2. Impact
+
+* Any query using {{SUM(DISTINCT ...)}} on BIT values or BIT literals that goes through the DISTINCT temp-table path may disagree with {{SUM(...)}} without DISTINCT.
+
+h2. Steps to reproduce
+
+
+{code:sql}
+SELECT SUM(b'1100'), SUM(DISTINCT b'1100');
+{code}
+
+
+h2. Actual result
+
+* {{SUM(b'1100')}} = 12
+* {{SUM(DISTINCT b'1100')}} = 9
+* The two expressions are not equal.
+
+h2. Expected result
+
+* {{SUM(b'1100')}} and {{SUM(DISTINCT b'1100')}} must match (both 12)
+
+
+
+
+

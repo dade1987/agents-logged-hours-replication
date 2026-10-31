@@ -1,0 +1,29 @@
+diff --git a/sql/sql_acl.cc b/sql/sql_acl.cc
+index de8a27c9..54bd43e0 100644
+--- a/sql/sql_acl.cc
++++ b/sql/sql_acl.cc
+@@ -12818,6 +12818,8 @@ bool Sql_cmd_grant_table::execute(THD *thd)
+ }
+ 
+ 
++static bool check_password_lifetime(THD *thd, const ACL_USER &acl_user);
++
+ int acl_setauthorization(THD *thd, const LEX_USER *user)
+ {
+   if (!initialized)
+@@ -12888,6 +12890,15 @@ int acl_setauthorization(THD *thd, const LEX_USER *user)
+     return 1;
+   }
+ 
++  /*
++    sctx->init() cleared password_expired. The session now runs as the
++    target user, so it must inherit that user's password expiration state
++    (MDEV-40336), otherwise an expired password could be "un-expired" by
++    switching the session to the same user.
++  */
++  sctx->password_expired= acl_user->password_expired ||
++                          check_password_lifetime(thd, *acl_user);
++
+   mysql_audit_notify_connection_change_user(thd, &save_security_ctx);
+   save_security_ctx.destroy();
+   return 0;

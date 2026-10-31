@@ -1,0 +1,23 @@
+diff --git a/storage/innobase/fts/fts0que.cc b/storage/innobase/fts/fts0que.cc
+index b8f22076..a5b95cfa 100644
+--- a/storage/innobase/fts/fts0que.cc
++++ b/storage/innobase/fts/fts0que.cc
+@@ -2720,6 +2720,7 @@ fts_query_phrase_search(
+ 	mem_heap_t*		heap = mem_heap_create(sizeof(fts_string_t));
+ 	ib_alloc_t*		heap_alloc;
+ 	ulint			num_token;
++	const ulint		saved_flags = query->flags;
+ 
+ 	heap_alloc = ib_heap_allocator_create(heap);
+ 
+@@ -2893,6 +2894,10 @@ fts_query_phrase_search(
+ 	/* Don't need it anymore. */
+ 	query->matched = NULL;
+ 
++	/* Restore the search type, so that later terms (e.g. wildcard)
++	are not treated as part of the phrase. */
++	query->flags = saved_flags;
++
+ 	return(query->error);
+ }
+ 

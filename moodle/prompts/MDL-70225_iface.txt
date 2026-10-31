@@ -1,0 +1,46 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot run Moodle's test suite. You may run `php -l <file>` and read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-70225: Enhance Simple Global Search to match start of words instead of relying on exact terms
+
+The current implementation of Simple Search is a little too simple. We should look at partial word matching to yield results that are more inline with common search behaviour.
+
+h3. *Current limited search example*
+
+# Set up [Simple Search|https://docs.moodle.org/502/en/Global_search] engine for Global Search
+# Create course with name _Course CU99999_
+# Create course with name _Course CU99999V20_
+# Perform course search using CU99999
+# Notice that only one course is found (we would expect two results)
+
+h3. *Performance considerations*
+
+* It may be too expensive to search for any and all substrings (e.g. searching for ‘our’ would match ‘course’). 
+* Simple search matches against all courses and modules within a course, so we have to be careful we don’t affect performance too negatively.
+* Search is performed against indexed content {{php search/cli/indexer.php}}
+
+h3. *Documentation*
+
+The [current documentation for Simple Search|https://docs.moodle.org/502/en/Global_search] will need some updating when this improvement lands.
+
+h3. *Expected search results*
+
+# Courses
+## Cats 101
+## Dogs 101
+
+* Searching for ‘*101*’ returns ‘*Cats 101*’ and ‘*Dogs 101*’
+* Searching for ‘*Cats Dogs*’ returns nothing (should match with AND)
+* Searching for ‘*Cat 10*’ returns ‘*Cats 101*’
+* Searching for ‘*Dog*’ will return ‘*Dogs 101*’
+* Searching for ‘*ogs*’ returns nothing (unless we can determine this won’t affect performance too negatively)
+
+
+The developers' tests for this issue use these new or changed classes, functions or web services (names and signatures only; you must implement them):
+(nessuna interfaccia nuova usata dai test)

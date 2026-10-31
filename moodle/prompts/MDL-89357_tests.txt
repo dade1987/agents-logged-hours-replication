@@ -1,0 +1,36 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You CAN run Moodle's existing PHPUnit tests: `cd {WS} && vendor/bin/phpunit <path/to/some_test.php>` (the test environment is already initialised). You may also run `php -l <file>` and read code with grep/find/cat. Use absolute paths starting with {WS} in every command.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-89357: Use late static binding in AI actions base class
+
+Issue creation assisted by Github Copilot.
+
+h2. What
+
+Replace all `self::` references in `core_ai\aiactions\base` with `static::` so that child classes can properly override static methods (particularly the new `get_features()` and `get_privacy_class()` methods).
+
+h2. Why
+
+PHP's `self::` keyword refers to the class where the method is defined, preventing child classes from overriding static methods in the base class. Without it, calls to `base::get_features()` would always use the base implementation, ignoring child overrides.
+
+h2. What to implement
+
+* Audit all `self::` usages in `core_ai\aiactions\base`.
+
+* Replace `self::` with `static::` for any static method call that child classes are expected to override.
+
+* Ensure no behavioural regressions in existing action classes (`summarise_text`, `explain_text`, `generate_text`, `generate_image`).
+
+* Add or update unit tests verifying that child class static method overrides are correctly invoked when called from base class context.
+
+h2. Acceptance criteria
+
+* All static method calls in `core_ai\aiactions\base` that are designed for override use `static::` instead of `self::`.
+
+* Existing AI action tests continue to pass.

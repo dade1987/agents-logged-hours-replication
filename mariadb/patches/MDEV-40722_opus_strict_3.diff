@@ -1,0 +1,142 @@
+diff --git a/mysql-test/suite/compat/oracle/r/sp-package-security.result b/mysql-test/suite/compat/oracle/r/sp-package-security.result
+index c08b78cb..3b0aa33e 100644
+--- a/mysql-test/suite/compat/oracle/r/sp-package-security.result
++++ b/mysql-test/suite/compat/oracle/r/sp-package-security.result
+@@ -320,3 +320,28 @@ SESSION_USER()	CURRENT_USER()	msg
+ root@localhost	root@localhost	p1.p1
+ DROP PACKAGE p1;
+ DROP USER xxx@localhost;
++#
++# MDEV-40722 DROP PACKAGE leaves PACKAGE BODY grant in mysql.procs_priv
++#
++CREATE PACKAGE pkg1 AS
++FUNCTION f RETURN VARCHAR2(64);
++END
++$$
++CREATE PACKAGE BODY pkg1 AS
++FUNCTION f RETURN VARCHAR2(64) AS
++BEGIN
++RETURN 'benign';
++END;
++END
++$$
++CREATE USER reader@localhost;
++GRANT EXECUTE ON PACKAGE test.pkg1 TO reader@localhost;
++GRANT EXECUTE ON PACKAGE BODY test.pkg1 TO reader@localhost;
++SELECT host,db,user,routine_name,routine_type,proc_priv FROM mysql.procs_priv ORDER BY routine_type;
++host	db	user	routine_name	routine_type	proc_priv
++localhost	test	reader	pkg1	PACKAGE	Execute
++localhost	test	reader	pkg1	PACKAGE BODY	Execute
++DROP PACKAGE pkg1;
++SELECT host,db,user,routine_name,routine_type,proc_priv FROM mysql.procs_priv ORDER BY routine_type;
++host	db	user	routine_name	routine_type	proc_priv
++DROP USER reader@localhost;
+diff --git a/mysql-test/suite/compat/oracle/t/sp-package-security.test b/mysql-test/suite/compat/oracle/t/sp-package-security.test
+index 583f70af..fc80e59f 100644
+--- a/mysql-test/suite/compat/oracle/t/sp-package-security.test
++++ b/mysql-test/suite/compat/oracle/t/sp-package-security.test
+@@ -330,3 +330,29 @@ DELIMITER ;$$
+ CALL p1.p1;
+ DROP PACKAGE p1;
+ DROP USER xxx@localhost;
++
++
++--echo #
++--echo # MDEV-40722 DROP PACKAGE leaves PACKAGE BODY grant in mysql.procs_priv
++--echo #
++
++DELIMITER $$;
++CREATE PACKAGE pkg1 AS
++  FUNCTION f RETURN VARCHAR2(64);
++END
++$$
++CREATE PACKAGE BODY pkg1 AS
++  FUNCTION f RETURN VARCHAR2(64) AS
++  BEGIN
++    RETURN 'benign';
++  END;
++END
++$$
++DELIMITER ;$$
++CREATE USER reader@localhost;
++GRANT EXECUTE ON PACKAGE test.pkg1 TO reader@localhost;
++GRANT EXECUTE ON PACKAGE BODY test.pkg1 TO reader@localhost;
++SELECT host,db,user,routine_name,routine_type,proc_priv FROM mysql.procs_priv ORDER BY routine_type;
++DROP PACKAGE pkg1;
++SELECT host,db,user,routine_name,routine_type,proc_priv FROM mysql.procs_priv ORDER BY routine_type;
++DROP USER reader@localhost;
+diff --git a/sql/sql_acl.cc b/sql/sql_acl.cc
+index 3dc5f391..899b3d53 100644
+--- a/sql/sql_acl.cc
++++ b/sql/sql_acl.cc
+@@ -11783,7 +11783,6 @@ bool sp_revoke_privileges(THD *thd, const char *sp_db, const char *sp_name,
+ {
+   uint counter, revoked;
+   int result;
+-  HASH *hash= sph->get_priv_hash();
+   Silence_routine_definer_errors error_handler;
+   DBUG_ENTER("sp_revoke_privileges");
+ 
+@@ -11803,31 +11802,41 @@ bool sp_revoke_privileges(THD *thd, const char *sp_db, const char *sp_name,
+   mysql_mutex_lock(&acl_cache->lock);
+ 
+   /* Remove procedure access */
+-  do
++  for (const Sp_handler *cur_sph= sph; cur_sph; )
+   {
+-    for (counter= 0, revoked= 0 ; counter < hash->records ; )
++    HASH *hash= cur_sph->get_priv_hash();
++    do
+     {
+-      GRANT_NAME *grant_proc= (GRANT_NAME*) my_hash_element(hash, counter);
+-      if (!my_strcasecmp(&my_charset_utf8mb3_bin, grant_proc->db, sp_db) &&
+-	  !my_strcasecmp(system_charset_info, grant_proc->tname, sp_name))
++      for (counter= 0, revoked= 0 ; counter < hash->records ; )
+       {
+-        LEX_USER lex_user;
+-	lex_user.user.str= grant_proc->user;
+-	lex_user.user.length= strlen(grant_proc->user);
+-        lex_user.host.str= safe_str(grant_proc->host.hostname);
+-        lex_user.host.length= strlen(lex_user.host.str);
+-        if (replace_routine_table(thd, grant_proc,
+-                                  tables.procs_priv_table().table(), lex_user,
+-                                  grant_proc->db, grant_proc->tname,
+-                                  sph, ALL_KNOWN_ACL, 1) == 0)
+-	{
+-	  revoked= 1;
+-	  continue;
+-	}
++        GRANT_NAME *grant_proc= (GRANT_NAME*) my_hash_element(hash, counter);
++        if (!my_strcasecmp(&my_charset_utf8mb3_bin, grant_proc->db, sp_db) &&
++            !my_strcasecmp(system_charset_info, grant_proc->tname, sp_name))
++        {
++          LEX_USER lex_user;
++          lex_user.user.str= grant_proc->user;
++          lex_user.user.length= strlen(grant_proc->user);
++          lex_user.host.str= safe_str(grant_proc->host.hostname);
++          lex_user.host.length= strlen(lex_user.host.str);
++          if (replace_routine_table(thd, grant_proc,
++                                    tables.procs_priv_table().table(), lex_user,
++                                    grant_proc->db, grant_proc->tname,
++                                    cur_sph, ALL_KNOWN_ACL, 1) == 0)
++          {
++            revoked= 1;
++            continue;
++          }
++        }
++        counter++;
+       }
+-      counter++;
+-    }
+-  } while (revoked);
++    } while (revoked);
++    /*
++      DROP PACKAGE also drops the corresponding PACKAGE BODY,
++      so privileges on the PACKAGE BODY must be revoked as well.
++    */
++    cur_sph= (cur_sph == &sp_handler_package_spec) ?
++             &sp_handler_package_body : NULL;
++  }
+ 
+   mysql_mutex_unlock(&acl_cache->lock);
+   mysql_rwlock_unlock(&LOCK_grant);

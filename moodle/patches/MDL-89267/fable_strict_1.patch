@@ -1,0 +1,195 @@
+diff --git a/public/backup/moodle2/backup_stepslib.php b/public/backup/moodle2/backup_stepslib.php
+index aec50f520e9..c535883c1d9 100644
+--- a/public/backup/moodle2/backup_stepslib.php
++++ b/public/backup/moodle2/backup_stepslib.php
+@@ -2757,7 +2757,12 @@ class backup_questions_structure_step extends backup_structure_step {
+             ],
+         );
+ 
+-        $questionverion->set_source_table('question_versions', ['questionbankentryid' => backup::VAR_PARENTID]);
++        // Order the versions, so they are restored in a predictable order.
++        $questionverion->set_source_sql('
++                SELECT *
++                  FROM {question_versions}
++                 WHERE questionbankentryid = ?
++              ORDER BY version', [backup::VAR_PARENTID]);
+ 
+         $question->set_source_sql('
+                 SELECT q.*
+diff --git a/public/backup/moodle2/restore_stepslib.php b/public/backup/moodle2/restore_stepslib.php
+index 981e26797fb..1504bb56ce2 100644
+--- a/public/backup/moodle2/restore_stepslib.php
++++ b/public/backup/moodle2/restore_stepslib.php
+@@ -5203,6 +5203,15 @@ class restore_create_categories_and_questions extends restore_structure_step {
+         // We can only determine the right way to process this once we get to
+         // process_question and have more information, so for now just store.
+         $this->latestqbe = (object) $data;
++
++        // If any version of this question bank entry was matched to an existing question during the prechecks
++        // (see restore_dbops::prechek_precheck_qbanks_by_level()), all the versions must be restored into that
++        // existing entry. Decide this now, so the destination entry does not depend on the order in which the
++        // versions are processed (missing versions must not create a new entry when a surviving one exists).
++        if ($newqbeid = $this->get_mappingid('question_bank_entry', $this->latestqbe->id)) {
++            $this->latestqbe->oldid = $this->latestqbe->id;
++            $this->latestqbe->newid = $newqbeid;
++        }
+     }
+ 
+     /**
+diff --git a/public/backup/util/dbops/restore_dbops.class.php b/public/backup/util/dbops/restore_dbops.class.php
+index 9ce3130484f..b1b0cfe2990 100644
+--- a/public/backup/util/dbops/restore_dbops.class.php
++++ b/public/backup/util/dbops/restore_dbops.class.php
+@@ -713,7 +713,7 @@ abstract class restore_dbops {
+ 
+                     // Collect all the questions for this category into memory so we only talk to the DB once.
+                     $recordset = $DB->get_recordset_sql(
+-                        "SELECT q.*
++                        "SELECT q.*, qv.questionbankentryid AS matchqbeid
+                            FROM {question} q
+                            JOIN {question_versions} qv ON qv.questionid = q.id
+                            JOIN {question_bank_entries} qbe ON qbe.id = qv.questionbankentryid
+@@ -724,7 +724,11 @@ abstract class restore_dbops {
+ 
+                     // Compute a hash of question and answer fields to differentiate between identical stamp-version questions.
+                     $questioncache = [];
++                    // Remember the question bank entry each existing question belongs to.
++                    $questionentries = [];
+                     foreach ($recordset as $question) {
++                        $questionentries[$question->id] = $question->matchqbeid;
++                        unset($question->matchqbeid);
+                         $question->export_process = true; // Include all question options required for export.
+                         get_question_options($question);
+                         unset($question->export_process);
+@@ -781,6 +785,17 @@ abstract class restore_dbops {
+                             // 4c) Match, mark q to be mapped.
+                         } else {
+                             self::set_backup_ids_record($restoreid, 'question', $question->id, $matchqid);
++                            // Also mark the question bank entry to be mapped, so that all versions of this question
++                            // (including any that no longer exist on the site) are restored into the same entry,
++                            // regardless of the order in which they are processed.
++                            if (!empty($question->questionbankentryid) && !empty($questionentries[$matchqid])) {
++                                self::set_backup_ids_record(
++                                    $restoreid,
++                                    'question_bank_entry',
++                                    $question->questionbankentryid,
++                                    $questionentries[$matchqid],
++                                );
++                            }
+                         }
+                     }
+                 }
+diff --git a/public/backup/util/helper/restore_questions_parser_processor.class.php b/public/backup/util/helper/restore_questions_parser_processor.class.php
+index 6e634c1bda4..19cc80faea1 100644
+--- a/public/backup/util/helper/restore_questions_parser_processor.class.php
++++ b/public/backup/util/helper/restore_questions_parser_processor.class.php
+@@ -38,6 +38,9 @@ class restore_questions_parser_processor extends grouped_parser_processor {
+     /** @var string XML path in the questions.xml backup file to question categories. */
+     protected const CATEGORY_PATH = '/question_categories/question_category';
+ 
++    /** @var string XML path in the questions.xml to question bank entry elements within question_category (Moodle 4.0+). */
++    protected const QBE_SUBPATH = '/question_bank_entries/question_bank_entry';
++
+     /** @var string XML path in the questions.xml to question elements within question_category (Moodle 4.0+). */
+     protected const QUESTION_SUBPATH =
+         '/question_bank_entries/question_bank_entry/question_version/question_versions/questions/question';
+@@ -54,13 +57,18 @@ class restore_questions_parser_processor extends grouped_parser_processor {
+     /** @var int during the restore, this tracks the last category we saw. Any questions we see will be in here. */
+     protected int $lastcatid;
+ 
++    /** @var int during the restore, this tracks the last question bank entry we saw. Any questions we see will be in here. */
++    protected int $lastqbeid;
++
+     public function __construct($restoreid) {
+         global $CFG;
+         $this->restoreid = $restoreid;
+         $this->lastcatid = 0;
++        $this->lastqbeid = 0;
+         parent::__construct();
+         // Set the paths we are interested on
+         $this->add_path(self::CATEGORY_PATH);
++        $this->add_path(self::CATEGORY_PATH . self::QBE_SUBPATH);
+         $this->add_path(self::CATEGORY_PATH . self::QUESTION_SUBPATH, true);
+         $this->add_path(self::CATEGORY_PATH . self::LEGACY_QUESTION_SUBPATH, true);
+ 
+@@ -103,6 +111,12 @@ class restore_questions_parser_processor extends grouped_parser_processor {
+             $itemid   = $info->id;
+             $parentitemid = $info->contextid;
+             $this->lastcatid = $itemid;
++            $this->lastqbeid = 0;
++
++        // Question bank entry, just remember it so questions can be linked to it.
++        } else if ($data['path'] == self::CATEGORY_PATH . self::QBE_SUBPATH) {
++            $this->lastqbeid = (int) $data['tags']['id'];
++            return;
+ 
+         // Prepare question record
+         } else if ($data['path'] == self::CATEGORY_PATH . self::QUESTION_SUBPATH ||
+@@ -120,6 +134,11 @@ class restore_questions_parser_processor extends grouped_parser_processor {
+             }
+             // Store a hash of question fields for comparison with existing questions.
+             $info->questionhash = $this->generate_question_identity_hash($questiondata);
++            // Store the question bank entry this question belongs to (Moodle 4.0+ backups only), so that all versions of
++            // a question can be restored into the same question bank entry.
++            if ($data['path'] == self::CATEGORY_PATH . self::QUESTION_SUBPATH) {
++                $info->questionbankentryid = $this->lastqbeid;
++            }
+ 
+         // Not question_category nor question, impossible. Throw exception.
+         } else {
+diff --git a/public/question/tests/backup_test.php b/public/question/tests/backup_test.php
+index add46dc0651..c1359e3b0d5 100644
+--- a/public/question/tests/backup_test.php
++++ b/public/question/tests/backup_test.php
+@@ -1100,6 +1100,51 @@ final class backup_test extends \advanced_testcase {
+         $this->assertEquals(7, $DB->get_field('question_bank_entries', 'nextversion', ['id' => $questionv1->questionbankentryid]));
+     }
+ 
++    /**
++     * Restore a backup where the first version of a question was deleted, but a later version still exists.
++     *
++     * The deleted version must be restored into the question bank entry of the surviving version, regardless of the
++     * order in which the versions are processed during the restore (MDL-89267).
++     */
++    public function test_restore_deleted_version_into_existing_entry(): void {
++        global $DB;
++        self::setAdminUser();
++        $this->resetAfterTest();
++        $questiongenerator = self::getDataGenerator()->get_plugin_generator('core_question');
++        $testdata = $this->add_course_quiz_and_qbank();
++        $questionv1 = $testdata->qbankquestion;
++        // The quiz already uses the "always latest" version of this question.
++        $questionv2 = $questiongenerator->update_question($questionv1, null, ['name' => 'Version 2']);
++
++        $qbe = get_question_bank_entry($questionv1->id);
++        $entrycount = $DB->count_records('question_bank_entries', ['questioncategoryid' => $qbe->questioncategoryid]);
++
++        $backupid = $this->backup_course_module($testdata->quiz->cmid);
++
++        // Delete version 1, leaving version 2 in the original question bank entry.
++        question_delete_question($questionv1->id);
++        $this->assertFalse($DB->record_exists('question', ['id' => $questionv1->id]));
++        $this->assertCount(1, $DB->get_records('question_versions', ['questionbankentryid' => $qbe->id]));
++
++        $this->restore_to_course($backupid, $testdata->course->id);
++
++        // No new question bank entry has been created, both versions are in the original entry.
++        $this->assertEquals(
++            $entrycount,
++            $DB->count_records('question_bank_entries', ['questioncategoryid' => $qbe->questioncategoryid]),
++        );
++        $versions = $DB->get_records(
++            'question_versions',
++            ['questionbankentryid' => $qbe->id],
++            fields: 'version, questionid, status',
++        );
++        $this->assertCount(2, $versions);
++        $this->assertEquals($questionv1->name, $DB->get_field('question', 'name', ['id' => $versions[1]->questionid]));
++        $this->assertEquals(question_version_status::QUESTION_STATUS_READY, $versions[1]->status);
++        $this->assertEquals($questionv2->id, $versions[2]->questionid);
++        $this->assertEquals(question_version_status::QUESTION_STATUS_READY, $versions[2]->status);
++    }
++
+     /**
+      * Restoring a question bank entry retains the original nextquestion value.
+      *

@@ -1,0 +1,94 @@
+diff --git a/public/grade/classes/penalty_container.php b/public/grade/classes/penalty_container.php
+index c545cd2c37e..ea8b5bfd487 100644
+--- a/public/grade/classes/penalty_container.php
++++ b/public/grade/classes/penalty_container.php
+@@ -104,10 +104,14 @@ final class penalty_container {
+     /**
+      * Get the grade before penalties are applied.
+      *
++     * This is the raw grade of the user, i.e. the grade as reported by the activity module before any
++     * gradebook adjustments (multiplicator, offset, ...) are applied. The penalised grade is written back as the
++     * raw grade, so the gradebook will apply the multiplicator and offset exactly once when computing the final grade.
++     *
+      * @return float The grade before penalties are applied
+      */
+     public function get_grade_before_penalties(): float {
+-        return $this->gradegrade->finalgrade;
++        return (float) ($this->gradegrade->rawgrade ?? 0);
+     }
+ 
+     /**
+diff --git a/public/grade/tests/penalty_manager_test.php b/public/grade/tests/penalty_manager_test.php
+index 6e11988a069..ff742be20b3 100644
+--- a/public/grade/tests/penalty_manager_test.php
++++ b/public/grade/tests/penalty_manager_test.php
+@@ -17,6 +17,7 @@
+ namespace core_grades;
+ 
+ use advanced_testcase;
++use grade_grade;
+ use grade_item;
+ 
+ /**
+@@ -103,4 +104,61 @@ final class penalty_manager_test extends advanced_testcase {
+         // No penalty by default.
+         $this->assertEquals(90, $container->get_grade_after_penalties());
+     }
++
++    /**
++     * Test that the multiplicator and offset of the grade item are applied only once when the penalty is applied.
++     *
++     * @covers \core_grades\penalty_manager::apply_grade_penalty_to_user
++     */
++    public function test_apply_grade_penalty_to_user_with_multfactor_and_plusfactor(): void {
++        $this->resetAfterTest();
++        $this->setAdminUser();
++        // Create user, course and assignment.
++        $user = $this->getDataGenerator()->create_user();
++        $course = $this->getDataGenerator()->create_course();
++        $assign = $this->getDataGenerator()->create_module('assign', ['course' => $course->id]);
++        penalty_manager::enable_module('assign');
++
++        // Get grade item and set multiplicator and offset.
++        $gradeitemparams = [
++            'courseid' => $course->id,
++            'itemtype' => 'mod',
++            'itemmodule' => 'assign',
++            'iteminstance' => $assign->id,
++            'itemnumber' => 0,
++        ];
++        $gradeitem = grade_item::fetch($gradeitemparams);
++        $gradeitem->multfactor = 0.5;
++        $gradeitem->plusfactor = 2;
++        $gradeitem->update();
++
++        grade_update(
++            'mod/assign',
++            $course->id,
++            'mod',
++            'assign',
++            $assign->id,
++            0,
++            ['userid' => $user->id, 'rawgrade' => 50],
++        );
++
++        // The final grade is 50 x 0.5 + 2 = 27.
++        $gradegrade = grade_grade::fetch(['itemid' => $gradeitem->id, 'userid' => $user->id]);
++        $this->assertEquals(50, $gradegrade->rawgrade);
++        $this->assertEquals(27, $gradegrade->finalgrade);
++
++        $submissiondate = time();
++        $duedate = time();
++        $container = penalty_manager::apply_grade_penalty_to_user($user->id, $gradeitem, $submissiondate, $duedate);
++
++        // No penalty by default, the grade before and after penalties is the raw grade.
++        $this->assertEquals(50, $container->get_grade_before_penalties());
++        $this->assertEquals(50, $container->get_grade_after_penalties());
++
++        // The multiplicator and offset must be applied only once.
++        $gradegrade = grade_grade::fetch(['itemid' => $gradeitem->id, 'userid' => $user->id]);
++        $this->assertEquals(50, $gradegrade->rawgrade);
++        $this->assertEquals(27, $gradegrade->finalgrade);
++        $this->assertEquals(0, $gradegrade->deductedmark);
++    }
+ }

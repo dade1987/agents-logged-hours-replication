@@ -1,0 +1,211 @@
+diff --git a/public/lib/classes/check/manager.php b/public/lib/classes/check/manager.php
+index 417907106b4..d383da38ddb 100644
+--- a/public/lib/classes/check/manager.php
++++ b/public/lib/classes/check/manager.php
+@@ -132,6 +132,7 @@ class manager {
+             new security\crawlers(),
+             new security\passwordpolicy(),
+             new security\emailchangeconfirmation(),
++            new security\securitymessages(),
+             new security\webcron(),
+             new http\cookiesecure(),
+             new access\riskadmin(),
+diff --git a/public/lib/classes/check/security/securitymessages.php b/public/lib/classes/check/security/securitymessages.php
+new file mode 100644
+index 00000000000..0ef5b32cbd4
+--- /dev/null
++++ b/public/lib/classes/check/security/securitymessages.php
+@@ -0,0 +1,86 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\check\security;
++
++use core\check\check;
++use core\check\result;
++
++/**
++ * Verifies that security related notifications (new login notifications) are forced on for users.
++ *
++ * @package    core
++ * @category   check
++ * @copyright  2025 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class securitymessages extends check {
++
++    /**
++     * Get the short check name
++     *
++     * @return string
++     */
++    public function get_name(): string {
++        return get_string('check_securitymessages_name', 'report_security');
++    }
++
++    /**
++     * A link to a place to action this
++     *
++     * @return \action_link|null
++     */
++    public function get_action_link(): ?\action_link {
++        return new \action_link(
++            new \moodle_url('/admin/message.php'),
++            get_string('managemessageoutputs', 'message'));
++    }
++
++    /**
++     * Return result
++     *
++     * @return result
++     */
++    public function get_result(): result {
++        global $CFG;
++        require_once($CFG->dirroot . '/message/lib.php');
++
++        $details = get_string('check_securitymessages_details', 'report_security');
++        $preferences = get_message_output_default_preferences();
++        $base = 'moodle_newlogin';
++
++        if (!empty($preferences->{$base . '_disable'})) {
++            return new result(result::WARNING, get_string('check_securitymessages_disabled', 'report_security'), $details);
++        }
++
++        $enabledpref = $preferences->{'message_provider_' . $base . '_enabled'} ?? '';
++        $enabled = array_filter(explode(',', $enabledpref));
++
++        $forced = false;
++        foreach (get_message_processors(true) as $processor) {
++            $locked = !empty($preferences->{$processor->name . '_provider_' . $base . '_locked'});
++            if ($locked && in_array($processor->name, $enabled)) {
++                $forced = true;
++                break;
++            }
++        }
++
++        if ($forced) {
++            return new result(result::OK, get_string('check_securitymessages_ok', 'report_security'), $details);
++        }
++        return new result(result::WARNING, get_string('check_securitymessages_warning', 'report_security'), $details);
++    }
++}
+diff --git a/public/lib/db/messages.php b/public/lib/db/messages.php
+index bf803ce1d1c..0e5f207cd0c 100644
+--- a/public/lib/db/messages.php
++++ b/public/lib/db/messages.php
+@@ -38,7 +38,7 @@ $messageproviders = array (
+     'newlogin' => array (
+         'defaults' => [
+             'popup' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
+-            'email' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
++            'email' => MESSAGE_FORCED,
+             'airnotifier' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
+         ],
+     ),
+diff --git a/public/lib/tests/check/security/securitymessages_test.php b/public/lib/tests/check/security/securitymessages_test.php
+new file mode 100644
+index 00000000000..b7b14e6f15c
+--- /dev/null
++++ b/public/lib/tests/check/security/securitymessages_test.php
+@@ -0,0 +1,72 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\check\security;
++
++use core\check\result;
++
++/**
++ * Unit tests for the securitymessages check.
++ *
++ * @package    core
++ * @category   check
++ * @copyright  2025 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ * @covers     \core\check\security\securitymessages
++ */
++final class securitymessages_test extends \advanced_testcase {
++
++    /**
++     * Default install forces new login notifications on.
++     */
++    public function test_default(): void {
++        $this->resetAfterTest();
++        $check = new securitymessages();
++        $this->assertEquals(result::OK, $check->get_result()->get_status());
++    }
++
++    /**
++     * Not locked for any processor results in a warning.
++     */
++    public function test_not_forced(): void {
++        $this->resetAfterTest();
++        foreach (get_message_processors() as $processor) {
++            set_config($processor->name . '_provider_moodle_newlogin_locked', 0, 'message');
++        }
++        $check = new securitymessages();
++        $this->assertEquals(result::WARNING, $check->get_result()->get_status());
++    }
++
++    /**
++     * Locked but not enabled results in a warning.
++     */
++    public function test_locked_not_enabled(): void {
++        $this->resetAfterTest();
++        set_config('message_provider_moodle_newlogin_enabled', '', 'message');
++        $check = new securitymessages();
++        $this->assertEquals(result::WARNING, $check->get_result()->get_status());
++    }
++
++    /**
++     * Disabled provider results in a warning.
++     */
++    public function test_disabled(): void {
++        $this->resetAfterTest();
++        set_config('moodle_newlogin_disable', 1, 'message');
++        $check = new securitymessages();
++        $this->assertEquals(result::WARNING, $check->get_result()->get_status());
++    }
++}
+diff --git a/public/report/security/lang/en/report_security.php b/public/report/security/lang/en/report_security.php
+index dbfc33d7607..d3c3262e8a6 100644
+--- a/public/report/security/lang/en/report_security.php
++++ b/public/report/security/lang/en/report_security.php
+@@ -125,6 +125,11 @@ $string['check_riskxss_details'] = '<p>RISK_XSS denotes all dangerous capabiliti
+ <p>Please verify the following list of users and make sure that you trust them completely on this server:</p><p>{$a}</p>';
+ $string['check_riskxss_name'] = 'XSS trusted users';
+ $string['check_riskxss_warning'] = 'RISK_XSS - found {$a} users that have to be trusted.';
++$string['check_securitymessages_details'] = '<p>It is recommended that the \'New login notifications\' notification is enabled and locked (forced) for at least one notification output, such as email. This ensures that users are made aware of logins to their account from a new device, which may indicate unauthorised access.</p>';
++$string['check_securitymessages_disabled'] = 'New login notifications are disabled.';
++$string['check_securitymessages_name'] = 'New login notifications';
++$string['check_securitymessages_ok'] = 'New login notifications are forced on.';
++$string['check_securitymessages_warning'] = 'New login notifications are not forced on, so users may disable them.';
+ $string['check_unsecuredataroot_details'] = '<p>The dataroot directory must not be accessible via web. The best way to make sure the directory is not accessible is to use a directory outside the public web directory.</p>
+ <p>If you move the directory, you need to update the <code>$CFG->dataroot</code> setting in <code>config.php</code> accordingly.</p>';
+ $string['check_unsecuredataroot_error'] = 'Your dataroot directory <code>{$a}</code> is in the wrong location and is exposed to the web!';

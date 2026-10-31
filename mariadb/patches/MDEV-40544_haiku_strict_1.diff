@@ -1,0 +1,28 @@
+diff --git a/sql/log_event.cc b/sql/log_event.cc
+index 5039c21c..2fbdca1d 100644
+--- a/sql/log_event.cc
++++ b/sql/log_event.cc
+@@ -1113,8 +1113,14 @@ Log_event* Log_event::read_log_event(const uchar *buf, uint event_len,
+     *error= "Event crc check failed! Most likely there is event corruption.";
+     if (force_opt)
+     {
++      /*
++        --force-read: output the event as an Unknown_log_event, not as an
++        error. Clear *error so callers do not treat the substitute event
++        as a failed read (and leak it).
++      */
+       event_len-= BINLOG_CHECKSUM_LEN;
+       ev= new Unknown_log_event(buf, fdle);
++      *error= 0;
+       goto exit;
+     }
+     else
+@@ -1359,6 +1365,8 @@ Log_event* Log_event::read_log_event(const uchar *buf, uint event_len,
+       DBUG_RETURN(0);
+     }
+     ev= new Unknown_log_event(buf, fdle);
++    /* --force-read: the Unknown_log_event is not an error, see above */
++    *error= 0;
+ #else
+     if (!*error)
+       *error= "Found invalid event in binary log";

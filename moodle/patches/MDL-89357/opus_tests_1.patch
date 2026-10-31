@@ -1,0 +1,116 @@
+diff --git a/public/ai/classes/aiactions/base.php b/public/ai/classes/aiactions/base.php
+index 3a764df9ac1..72bfaf91fbd 100644
+--- a/public/ai/classes/aiactions/base.php
++++ b/public/ai/classes/aiactions/base.php
+@@ -68,7 +68,7 @@ abstract class base {
+      * @return string
+      */
+     public static function get_name(): string {
+-        $stringid = 'action_' . self::get_basename();
++        $stringid = 'action_' . static::get_basename();
+         return get_string($stringid, 'core_ai');
+     }
+ 
+@@ -80,7 +80,7 @@ abstract class base {
+      * @return string
+      */
+     public static function get_description(): string {
+-        $stringid = 'action_' . self::get_basename() . '_desc';
++        $stringid = 'action_' . static::get_basename() . '_desc';
+         return get_string($stringid, 'core_ai');
+     }
+ 
+@@ -90,7 +90,7 @@ abstract class base {
+      * @return string The system instruction for the action.
+      */
+     public static function get_system_instruction(): string {
+-        $stringid = 'action_' . self::get_basename() . '_instruction';
++        $stringid = 'action_' . static::get_basename() . '_instruction';
+ 
+         // If the string doesn't exist, return an empty string.
+         if (!get_string_manager()->string_exists($stringid, 'core_ai')) {
+@@ -126,6 +126,6 @@ abstract class base {
+      * @return string The class name of the response object.
+      */
+     public static function get_response_classname(): string {
+-        return responses::class . '\\response_' . self::get_basename();
++        return responses::class . '\\response_' . static::get_basename();
+     }
+ }
+diff --git a/public/ai/tests/aiactions/base_test.php b/public/ai/tests/aiactions/base_test.php
+index f9894e3493e..b029f217331 100644
+--- a/public/ai/tests/aiactions/base_test.php
++++ b/public/ai/tests/aiactions/base_test.php
+@@ -102,4 +102,72 @@ final class base_test extends \advanced_testcase {
+         }
+     }
+ 
++    /**
++     * Test that static methods overridden in child classes are used by the base class methods (late static binding).
++     */
++    public function test_late_static_binding(): void {
++        $action = new class(1) extends \core_ai\aiactions\base {
++            /**
++             * Override the basename to an existing action.
++             * @return string
++             */
++            public static function get_basename(): string {
++                return 'summarise_text';
++            }
++
++            /**
++             * Store the response.
++             * @param response_base $response
++             * @return int
++             */
++            public function store(response_base $response): int {
++                return 0;
++            }
++        };
++        $classname = get_class($action);
++
++        $this->assertEquals('summarise_text', $classname::get_basename());
++        $this->assertEquals(get_string('action_summarise_text', 'core_ai'), $classname::get_name());
++        $this->assertEquals(get_string('action_summarise_text_desc', 'core_ai'), $classname::get_description());
++        $this->assertEquals(
++            get_string('action_summarise_text_instruction', 'core_ai'),
++            $classname::get_system_instruction(),
++        );
++        $this->assertEquals(
++            responses\response_summarise_text::class,
++            $classname::get_response_classname(),
++        );
++    }
++
++    /**
++     * Test the static methods for each of the core action classes.
++     *
++     * @param string $classname The action class name.
++     * @param string $basename The expected basename.
++     */
++    #[\PHPUnit\Framework\Attributes\DataProvider('action_class_provider')]
++    public function test_action_static_methods(string $classname, string $basename): void {
++        $this->assertEquals($basename, $classname::get_basename());
++        $this->assertEquals(get_string("action_{$basename}", 'core_ai'), $classname::get_name());
++        $this->assertEquals(get_string("action_{$basename}_desc", 'core_ai'), $classname::get_description());
++        $this->assertEquals(
++            responses::class . '\\response_' . $basename,
++            $classname::get_response_classname(),
++        );
++        $this->assertTrue(class_exists($classname::get_response_classname()));
++    }
++
++    /**
++     * Data provider for test_action_static_methods.
++     *
++     * @return array
++     */
++    public static function action_class_provider(): array {
++        return [
++            'generate_text' => [generate_text::class, 'generate_text'],
++            'generate_image' => [generate_image::class, 'generate_image'],
++            'summarise_text' => [summarise_text::class, 'summarise_text'],
++            'explain_text' => [explain_text::class, 'explain_text'],
++        ];
++    }
+ }

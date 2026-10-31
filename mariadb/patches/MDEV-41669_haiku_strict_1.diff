@@ -1,0 +1,53 @@
+diff --git a/mysql-test/suite/innodb/t/import_bugs.test b/mysql-test/suite/innodb/t/import_bugs.test
+index 1b7edcf8..63d54463 100644
+--- a/mysql-test/suite/innodb/t/import_bugs.test
++++ b/mysql-test/suite/innodb/t/import_bugs.test
+@@ -53,6 +53,10 @@ CREATE TABLE t1(
+ 
+ CREATE TABLE t2 LIKE t1;
+ 
++--connect mvcc,localhost,root
++START TRANSACTION WITH CONSISTENT SNAPSHOT;
++--connection default
++
+ ALTER TABLE t2 DISCARD TABLESPACE;
+ 
+ INSERT INTO t1() VALUES();
+@@ -80,6 +84,14 @@ INSERT INTO t2() VALUES();
+ INSERT INTO t2() VALUES();
+ 
+ SELECT * FROM t2 ORDER BY id;
++
++--connection mvcc
++--disable_warnings
++--error ER_TABLE_DEF_CHANGED
++SELECT * FROM t2;
++--enable_warnings
++--disconnect mvcc
++--connection default
+ DROP TABLE t2;
+ 
+ --echo #
+diff --git a/storage/innobase/row/row0import.cc b/storage/innobase/row/row0import.cc
+index c589b8f2..7bc07bcc 100644
+--- a/storage/innobase/row/row0import.cc
++++ b/storage/innobase/row/row0import.cc
+@@ -4998,6 +4998,18 @@ row_import_for_mysql(
+ 		goto import_error;
+ 	}
+ 
++	/* The imported pages did not originate from any undo log
++	that is visible to the read views that were created before
++	this transaction. Mark the indexes as created by this
++	transaction, so that row_merge_is_index_usable() makes them
++	unusable for such read views, instead of letting them see
++	the imported contents. */
++	for (dict_index_t* idx = dict_table_get_first_index(table);
++	     idx != NULL;
++	     idx = dict_table_get_next_index(idx)) {
++		idx->trx_id = trx->id;
++	}
++
+ 	err = row_import_update_discarded_flag(trx, table->id, false);
+ 
+ 	if (err != DB_SUCCESS) {

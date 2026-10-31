@@ -1,0 +1,88 @@
+diff --git a/mysql-test/main/long_unique_debug.result b/mysql-test/main/long_unique_debug.result
+index 01df77fc..0fd1f5a3 100644
+--- a/mysql-test/main/long_unique_debug.result
++++ b/mysql-test/main/long_unique_debug.result
+@@ -551,3 +551,22 @@ table->field[2]->null_pos wrt to record 0 = 0
+ table->field[2]->null_bit_pos = 8
+ SET debug_dbug="";
+ drop table t1;
++#
++# MDEV-41617 Index corruption on UPDATE of table with long unique
++#            hash collision and indexed virtual blob
++#
++create table t1 (id int primary key, a text, v text as (concat('v-', a)) virtual,
++unique (a), key (v(10))) engine=innodb;
++set debug_dbug= 'd,same_long_unique_hash';
++insert t1 (id, a) values (1, 'a1'), (2, 'b1');
++update t1 set a= 'a2' where id = 1;
++check table t1 extended;
++Table	Op	Msg_type	Msg_text
++test.t1	check	status	OK
++select * from t1 force index (v) order by v;
++id	a	v
++1	a2	v-a2
++2	b1	v-b1
++set debug_dbug= default;
++drop table t1;
++# End of 10.11 tests
+diff --git a/mysql-test/main/long_unique_debug.test b/mysql-test/main/long_unique_debug.test
+index 560f6499..9a42a700 100644
+--- a/mysql-test/main/long_unique_debug.test
++++ b/mysql-test/main/long_unique_debug.test
+@@ -1,4 +1,5 @@
+ --source include/have_debug.inc
++--source include/have_innodb.inc
+ 
+ #
+ # MDEV-371 Unique indexes for blobs
+@@ -93,3 +94,19 @@ SET debug_dbug="d,print_long_unique_internal_state";
+ create table t1(a int ,b int , c int,  unique(a, b, c) using hash) engine=memory;
+ SET debug_dbug="";
+ drop table t1;
++
++--echo #
++--echo # MDEV-41617 Index corruption on UPDATE of table with long unique
++--echo #            hash collision and indexed virtual blob
++--echo #
++create table t1 (id int primary key, a text, v text as (concat('v-', a)) virtual,
++                 unique (a), key (v(10))) engine=innodb;
++set debug_dbug= 'd,same_long_unique_hash';
++insert t1 (id, a) values (1, 'a1'), (2, 'b1');
++update t1 set a= 'a2' where id = 1;
++check table t1 extended;
++select * from t1 force index (v) order by v;
++set debug_dbug= default;
++drop table t1;
++
++--echo # End of 10.11 tests
+diff --git a/sql/handler.cc b/sql/handler.cc
+index d7485096..7730e03e 100644
+--- a/sql/handler.cc
++++ b/sql/handler.cc
+@@ -7535,15 +7535,19 @@ int handler::check_duplicate_long_entry_key(const uchar *new_rec, uint key_no)
+   if (result)
+     goto end;
+ 
+-  // restore pointers after swap_values in TABLE::update_virtual_fields()
+-  for (Field **vf= table->vfield; *vf; vf++)
+-  {
+-    if (!(*vf)->stored_in_db() && (*vf)->flags & BLOB_FLAG &&
+-        bitmap_is_set(table->read_set, (*vf)->field_index))
+-      ((Field_blob*)*vf)->swap_value_and_read_value();
+-  }
+   do
+   {
++    /*
++      restore pointers after swap_values in TABLE::update_virtual_fields().
++      It is done after every read (ha_index_read_map() and each
++      ha_index_next_same()), as each of them swaps the values again.
++    */
++    for (Field **vf= table->vfield; *vf; vf++)
++    {
++      if (!(*vf)->stored_in_db() && (*vf)->flags & BLOB_FLAG &&
++          bitmap_is_set(table->read_set, (*vf)->field_index))
++        ((Field_blob*)*vf)->swap_value_and_read_value();
++    }
+     if (!long_unique_fields_differ(key_info, lookup_buffer))
+     {
+       lookup_handler->position(table->record[0]);

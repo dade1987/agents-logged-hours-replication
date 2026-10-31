@@ -1,0 +1,131 @@
+diff --git a/public/mod/quiz/amd/build/searchwidget/user.min.js b/public/mod/quiz/amd/build/searchwidget/user.min.js
+index 8e7ddee74a1710aa6dce3fef3fbfe96be4047dc6..6cddcc46b66b7eb8f57a727f0edb3c73c452281c 100644
+GIT binary patch
+delta 59
+zcmew&GDBoS&BS)Cjoa3-P2Rw6sgjnNnv-H{7Y(NM@)C1Xbs)@?%;JKa#7dCJW?qhT
+FCIHUC7MK74
+
+delta 152
+zcmbOs@<n7q4VR8ma(+>&esM|B#A<C;op>N)<Fa*Z-a0@=W?s5uQBh*0ZDM(1W{HLY
+zSXM7RwImoUSFEW~q?cMzQk0mMnVOSQte2ZuprMhST4`&iQ4OT5fVfsuQ*&}KyOjz^
+cTqiRxCAC7+)-D>vL9!qkED^hTBYQd%0K2<4iU0rr
+
+diff --git a/public/mod/quiz/amd/build/searchwidget/user.min.js.map b/public/mod/quiz/amd/build/searchwidget/user.min.js.map
+index 2a5d9ba6fe4b5a1fa87969566673b36b7d900a56..d970d78cfcbd9a0f05efaaed5855b13d79fb56df 100644
+GIT binary patch
+delta 256
+zcmY*UI|{-;5Csv*Eqt8`n0Nv80=9MvvY0V0Y<9!UMq(v+1q&@bf?#j!Jv@m?OygAZ
+z9y9NA9$tr!TmSj$zk8QKFghhz?g^=u!l)yx%1NM@z$DHbD1{Ioh-1+yjn@|4OePQq
+zzgHgHQoPGiu-j=v*l9AUAnfp_#ha?CB4p(27t-7u7sR#QG_S2xO>!e<{|ppD>ugMw
+t7EjhkFv@17$_V0F+bp@n!6It)Bh2OqSM8oOCC0xTNms0)p7-E0_yRn7SU>;(
+
+delta 208
+zcmbO(-z2|b28&W=Zb5!gi9&UHYDsWOQD$CxajimHQGTw1dUAeIs(x`v(dH>Er<o@I
+zW#dXKN-ZwUDN)EzQ$VPW$y0!W<ovwi5(S_JpdpS$MTwOPwhD>miJ2uxsx^xAQY%V|
+z64NqMb5e@+auW+QG_q4GH5F{_6f~-VtXfUY$$sn>lN~v{K@vI&nRzLx6%hGoumF+;
+O(O}8g&09Ghu>k<ook~mq
+
+diff --git a/public/mod/quiz/amd/src/searchwidget/user.js b/public/mod/quiz/amd/src/searchwidget/user.js
+index 563c4f05ba5..2fe4df71b59 100644
+--- a/public/mod/quiz/amd/src/searchwidget/user.js
++++ b/public/mod/quiz/amd/src/searchwidget/user.js
+@@ -23,7 +23,6 @@
+ import UserSearch from 'core_user/comboboxsearch/user';
+ import Url from 'core/url';
+ import * as Repository from 'mod_quiz/searchwidget/repository';
+-import {getStrings} from 'core/str';
+ 
+ export default class QuizUserSearch extends UserSearch {
+ 
+@@ -49,12 +48,11 @@ export default class QuizUserSearch extends UserSearch {
+         // Await the user fetch request
+         const r = await Repository.userFetch(params);
+ 
+-        // Await the result of getStrings
+-        const stringArray = await getStrings(r.extrafields.map((key) => ({key})));
+-
+-        // Map the extrafields to profilestringmap
++        // Map the extrafields to profilestringmap. The display names are resolved server-side,
++        // so that custom profile fields (profile_field_xxx) get their proper name rather than
++        // a (non-existent) language string.
+         this.profilestringmap = new Map(
+-            r.extrafields.map((key, index) => ([key, stringArray[index]]))
++            r.extrafields.map((field) => ([field.name, field.displayname]))
+         );
+ 
+         // Return r.users as the final result
+diff --git a/public/mod/quiz/classes/external/get_users_in_report.php b/public/mod/quiz/classes/external/get_users_in_report.php
+index 74bf72596af..62f49e06bb1 100644
+--- a/public/mod/quiz/classes/external/get_users_in_report.php
++++ b/public/mod/quiz/classes/external/get_users_in_report.php
+@@ -150,8 +150,14 @@ class get_users_in_report extends external_api {
+         // We don't want the filter to strip out the picture field and other name fields,
+         // since we already have the full name field.
+         $allowfields = array_merge(['fullname'], $userfieldsapi->get_required_fields([\core_user\fields::PURPOSE_IDENTITY]));
++        // Resolve the display name of each field server-side. This correctly handles custom profile
++        // fields (profile_field_xxx), which do not have a language string of their own.
++        $extrafields = array_map(static fn(string $field): array => [
++            'name' => $field,
++            'displayname' => \core_user\fields::get_display_name($field),
++        ], $allowfields);
+         return [
+-            'extrafields' => $allowfields,
++            'extrafields' => $extrafields,
+             'users' => $users,
+             'warnings' => $warnings,
+         ];
+@@ -170,7 +176,10 @@ class get_users_in_report extends external_api {
+         }
+ 
+         return new external_single_structure([
+-            'extrafields' => new external_multiple_structure(new external_value(PARAM_RAW, 'List of extra fields')),
++            'extrafields' => new external_multiple_structure(new external_single_structure([
++                'name' => new external_value(PARAM_RAW, 'The field name, e.g. email or profile_field_xxx'),
++                'displayname' => new external_value(PARAM_RAW, 'The display name of the field'),
++            ]), 'List of extra fields that can be searched'),
+             'users' => new external_multiple_structure(core_user_external::user_description($additionalfields)),
+             'warnings' => new external_warnings(),
+         ]);
+diff --git a/public/mod/quiz/tests/external/get_users_in_report_test.php b/public/mod/quiz/tests/external/get_users_in_report_test.php
+index 0977c63c29b..0b58d64e923 100644
+--- a/public/mod/quiz/tests/external/get_users_in_report_test.php
++++ b/public/mod/quiz/tests/external/get_users_in_report_test.php
+@@ -101,4 +101,38 @@ final class get_users_in_report_test extends \advanced_testcase {
+         )['users'];
+         $this->assertCount(1, $users);
+     }
++
++    /**
++     * Test that the extra fields returned by the service include resolved display names,
++     * including for custom profile fields which do not have a language string.
++     */
++    public function test_get_users_in_report_extrafields(): void {
++        $this->resetAfterTest();
++
++        $dg = $this->getDataGenerator();
++        $this->setAdminUser();
++
++        // Create a custom profile field and make it an identity field.
++        $dg->create_custom_profile_field(['datatype' => 'text', 'shortname' => 'fruit', 'name' => 'Favourite fruit']);
++        set_config('showuseridentity', 'email,profile_field_fruit');
++
++        $course = $dg->create_course();
++        $quiz = $dg->get_plugin_generator('mod_quiz')->create_instance(['course' => $course->id]);
++
++        $result = get_users_in_report::execute(
++            $quiz->cmid,
++            'overview',
++            '{"attempts":"enrolled_with","onlygraded":"","search":"","onlyregraded":""}'
++        );
++        $result = \core_external\external_api::clean_returnvalue(get_users_in_report::execute_returns(), $result);
++
++        // No debugging about a missing 'profile_field_fruit' language string should have been emitted.
++        $this->assertDebuggingNotCalled();
++
++        $this->assertSame([
++            ['name' => 'fullname', 'displayname' => get_string('fullname')],
++            ['name' => 'email', 'displayname' => get_string('email')],
++            ['name' => 'profile_field_fruit', 'displayname' => 'Favourite fruit'],
++        ], $result['extrafields']);
++    }
+ }

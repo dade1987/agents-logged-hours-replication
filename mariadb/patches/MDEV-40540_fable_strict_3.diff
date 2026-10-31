@@ -1,0 +1,143 @@
+diff --git a/mysql-test/main/gis.result b/mysql-test/main/gis.result
+index e3bdcd01..a5eea18b 100644
+--- a/mysql-test/main/gis.result
++++ b/mysql-test/main/gis.result
+@@ -5619,4 +5619,13 @@ NULL
+ select astext(concat(x'00000000', repeat(x'010700000001000000', 200), x'010100000000000000000000000000000000000000')) as oops;
+ oops
+ GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT(0 0)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
++#
++# MDEV-40540 ST_GeomFromWKB stack overrun on deeply nested GeometryCollection
++#
++set @a=concat(0x0107000000, repeat(0x010000000107000000, 120000), 0x00000000);
++SELECT ST_GeomFromWKB(@a);
++ERROR HY000: Thread stack overrun:  'used bytes' used of a 'available' byte stack, and 'X' bytes needed. Consider increasing the thread_stack system variable.
++SELECT ST_AsText(concat(0x00000000, @a));
++ERROR HY000: Thread stack overrun:  'used bytes' used of a 'available' byte stack, and 'X' bytes needed. Consider increasing the thread_stack system variable.
++set @a=NULL;
+ # End of 10.6 tests
+diff --git a/mysql-test/main/gis.test b/mysql-test/main/gis.test
+index c010ef8c..9749e973 100644
+--- a/mysql-test/main/gis.test
++++ b/mysql-test/main/gis.test
+@@ -3587,4 +3587,16 @@ select  glength(x'0000000001050000000100000001020000');
+ --echo #
+ select astext(concat(x'00000000', repeat(x'010700000001000000', 200), x'010100000000000000000000000000000000000000')) as oops;
+ 
++--echo #
++--echo # MDEV-40540 ST_GeomFromWKB stack overrun on deeply nested GeometryCollection
++--echo #
++set @a=concat(0x0107000000, repeat(0x010000000107000000, 120000), 0x00000000);
++--replace_regex /overrun:  [0-9]* bytes used of a [0-9]* byte stack, and [0-9]* bytes needed/overrun:  'used bytes' used of a 'available' byte stack, and 'X' bytes needed/
++--error ER_STACK_OVERRUN_NEED_MORE
++SELECT ST_GeomFromWKB(@a);
++--replace_regex /overrun:  [0-9]* bytes used of a [0-9]* byte stack, and [0-9]* bytes needed/overrun:  'used bytes' used of a 'available' byte stack, and 'X' bytes needed/
++--error ER_STACK_OVERRUN_NEED_MORE
++SELECT ST_AsText(concat(0x00000000, @a));
++set @a=NULL;
++
+ --echo # End of 10.6 tests
+diff --git a/sql/spatial.cc b/sql/spatial.cc
+index 20b8a551..b487f26c 100644
+--- a/sql/spatial.cc
++++ b/sql/spatial.cc
+@@ -3275,6 +3275,9 @@ uint32 Gis_geometry_collection::get_data_size() const
+   n_objects= uint4korr(data);
+   data+= 4;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, (uchar*)&buffer))
++    return GET_SIZE_ERROR;
++
+   while (n_objects--)
+   {
+     uint32 wkb_type,object_size;
+@@ -3402,6 +3405,9 @@ uint Gis_geometry_collection::init_from_wkb(const char *wkb, uint len,
+   uint32 n_geom;
+   const char *wkb_orig= wkb;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, (uchar*)&n_geom))
++    return 0;
++
+   if (len < 4)
+     return 0;
+   n_geom= wkb_get_uint(wkb, bo);
+@@ -3445,6 +3451,9 @@ bool Gis_geometry_collection::init_from_json(json_engine_t *je, bool er_on_3D,
+   Geometry_buffer buffer;
+   Geometry *g;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, (uchar*)&buffer))
++    return TRUE;
++
+   if (json_read_value(je))
+     return TRUE;
+ 
+@@ -3492,6 +3501,9 @@ bool Gis_geometry_collection::get_data_as_wkt(String *txt,
+   n_objects= uint4korr(data);
+   data+= 4;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, (uchar*)&buffer))
++    return 1;
++
+   if (n_objects == 0)
+   {
+     txt->append(STRING_WITH_LEN(" EMPTY"), 512);
+@@ -3536,6 +3548,9 @@ bool Gis_geometry_collection::get_data_as_json(String *txt, uint max_dec_digits,
+   n_objects= uint4korr(data);
+   data+= 4;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, (uchar*)&buffer))
++    return 1;
++
+   txt->qs_append('[');
+   while (n_objects--)
+   {
+@@ -3574,6 +3589,9 @@ bool Gis_geometry_collection::get_mbr(MBR *mbr, const char **end) const
+     return 1;
+   n_objects= uint4korr(data);
+   data+= 4;
++
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, (uchar*)&buffer))
++    return 1;
+   if (n_objects == 0)
+     goto exit;
+ 
+@@ -3611,6 +3629,9 @@ int Gis_geometry_collection::area(double *ar,  const char **end) const
+   n_objects= uint4korr(data);
+   data+= 4;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, (uchar*)&buffer))
++    return 1;
++
+   result= 0.0;
+   if (n_objects == 0)
+     goto exit;
+@@ -3650,6 +3671,9 @@ int Gis_geometry_collection::geom_length(double *len, const char **end) const
+     return 1;
+   n_objects= uint4korr(data);
+   data+= 4;
++
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, (uchar*)&buffer))
++    return 1;
+   result= 0.0;
+ 
+   if (n_objects == 0)
+@@ -3752,6 +3776,9 @@ bool Gis_geometry_collection::dimension(uint32 *res_dim, const char **end) const
+   n_objects= uint4korr(data);
+   data+= 4;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, (uchar*)&buffer))
++    return 1;
++
+   *res_dim= 0;
+   while (n_objects--)
+   {
+@@ -3792,6 +3819,9 @@ int Gis_geometry_collection::store_shapes(Gcalc_shape_transporter *trn) const
+   n_objects= uint4korr(data);
+   data+= 4;
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, (uchar*)&buffer))
++    return 1;
++
+   if (!n_objects)
+   {
+     trn->empty_shape();

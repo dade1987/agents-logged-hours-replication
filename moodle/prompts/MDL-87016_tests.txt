@@ -1,0 +1,48 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You CAN run Moodle's existing PHPUnit tests: `cd {WS} && vendor/bin/phpunit <path/to/some_test.php>` (the test environment is already initialised). You may also run `php -l <file>` and read code with grep/find/cat. Use absolute paths starting with {WS} in every command.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-87016: Prepend fake BBB subplugins to ensure consistent test overrides
+
+Ensure fake subplugins are prepended in plugin list to allow test overrides to take effect during automated testing
+
+h3. *Description*
+
+When running automated tests that rely on *fake subplugins* (used as fixtures to override or extend existing functionality), the tests may not behave as expected depending on the plugin load order.
+
+This issue occurs particularly when a *real subplugin* with an override (for example, a {{view.php}} override) is already installed in the environment. In such cases, the fake subplugin defined for testing is not guaranteed to take precedence, causing inconsistencies or test failures.
+
+h4. *Steps to Reproduce*
+
+# Install a subplugin that overrides a core view or function.
+# Run automated tests that include a fake subplugin fixture.
+# Observe that the fake subplugin’s overrides may not apply, and core or installed subplugin behavior may take precedence.
+
+h4. *Expected Behavior*
+
+Fake subplugins created for testing purposes should always have *highest priority*, ensuring that their overrides are effective regardless of the existing subplugins installed in the environment.
+
+h4. *Actual Behavior*
+
+Fake subplugins may not take precedence if a real subplugin is already installed, leading to unexpected test behavior or incorrect results.
+
+h4. *Proposed Solution*
+
+When preparing the plugin cache during tests:
+
+* *Prepend* both the fake plugin path and the subplugin list so that fake subplugins appear *first* (highest priority) in the resulting {{core_component::get_cache_content()}} data structure.
+
+This guarantees that test fixtures consistently override real or existing subplugins, making automated tests reliable and isolated from the development environment state.
+
+h4. *Impact*
+
+This change improves the reliability of Moodle’s automated test framework for plugin and subplugin overrides.
+
+It is particularly important for *subplugin* development, code reviews, tests, automated-deployment, where developers need to verify that existing core functionality continues to work correctly even when it is *overridden or extended* by new subplugins.
+
+By ensuring fake subplugins always take precedence, developers can safely test both the overridden and original behaviors within a controlled environment.

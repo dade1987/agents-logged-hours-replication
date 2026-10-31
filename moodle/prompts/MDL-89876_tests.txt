@@ -1,0 +1,32 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You CAN run Moodle's existing PHPUnit tests: `cd {WS} && vendor/bin/phpunit <path/to/some_test.php>` (the test environment is already initialised). You may also run `php -l <file>` and read code with grep/find/cat. Use absolute paths starting with {WS} in every command.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-89876: 5.3 - upgrade fails due to identityhash column not existing when queueing adhoc tasks to remove blocks
+
+On a real Moodle upgrade run from an old version, the upgrade aborts with a database error referencing an unknown or missing "identityhash" column on task_adhoc, immediately after a core block removal step (block_mnet_hosts is the earliest one hit). 
+This matches the crash log captured in MDLQA-22062 (comment 1182834).  
+
+The root cause is that  MDL-86422 added a nullable identityhash column and a unique index to mdl_task_adhoc, at upgrade savepoint 2026081800.06 in lib/db/upgrade.php, and changed core\task\manager::queue_adhoc_task() to run "SELECT ... WHERE identityhash = ?" whenever $checkforexisting = true.  
+
+MDL-89289 separately changed core\plugininfo\block::uninstall_cleanup() to queue an ad-hoc task with $checkforexisting = true whenever a removed block still has existing instances.  Several earlier upgrade steps remove core blocks via uninstall_plugin('block', ...). The earliest is the "Remove block_mnet_hosts" step, originally at savepoint 2025030600.04, well before the identityhash column addition later in the same file.
+
+Moodle executes upgrade steps in physical file order, not in numeric savepoint order, so on a real upgrade from an old version with an existing block_mnet_hosts instance, the block removal step ran and queued its ad-hoc task before the identityhash column existed, and the query failed.  
+
+*Effected upgrades*
+Upgrading a Moodle 4.5 LTS site to current main reproduces exactly as described above, immediately after the block_mnet_hosts removal step is logged.
+Upgrading a Moodle 5.2 (5.2.3+) site to current main does not hit the bug. 5.2.3+ already carries MDL-89289's block-removal steps at a point in its own history before this fix area, so a 5.2-to-main upgrade never re-executes those steps and never calls queue_adhoc_task with checkforexisting=true during the upgrade. 
+
+The affected population is sites whose upgrade path executes the block-removal steps in the same run that also reaches the identityhash savepoint (for example 4.5 LTS, or an older main/dev snapshot), not all pre-5.3 sites generally.
+
+Fresh installs are unaffected, since install.xml already defines the identityhash column.
+
+*Fix*
+Relocated the identityhash column and index-adding upgrade step to run before the earliest block-removal step, so the column exists before any upgrade-time block uninstall can query it.  
+
+A new regression test, lib/tests/upgrade_ordering_test.php, asserts the identityhash savepoint marker appears before every uninstall_plugin('block', ...) call in upgrade.php, to catch this class of ordering bug recurring.

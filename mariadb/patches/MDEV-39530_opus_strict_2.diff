@@ -1,0 +1,102 @@
+diff --git a/mysql-test/main/ctype_utf8.result b/mysql-test/main/ctype_utf8.result
+index 55b95de9..e4339de4 100644
+--- a/mysql-test/main/ctype_utf8.result
++++ b/mysql-test/main/ctype_utf8.result
+@@ -10832,5 +10832,24 @@ COERCIBILITY(@col_type)	COERCIBILITY('binary(128)')
+ 5	6
+ DROP TABLE t1;
+ #
++# MDEV-39530 Collation mix issue after update
++#
++SET NAMES utf8mb3 COLLATE utf8mb3_uca1400_ai_ci;
++CREATE TABLE t1 (id INT NOT NULL PRIMARY KEY, path VARCHAR(800) NOT NULL DEFAULT '')
++ENGINE=Aria CHARACTER SET utf8mb3 COLLATE utf8mb3_unicode_ci;
++INSERT INTO t1 VALUES (1,'text');
++SELECT IF((@p:=(SELECT f.path FROM t1 f WHERE f.id=1 AND f.path REGEXP '^xx'))!='',1,2) AS c;
++c
++2
++SELECT IF((@p:=(SELECT f.path FROM t1 f WHERE f.id=1))!='',1,2) AS c;
++c
++1
++SELECT COERCIBILITY(@p:=(SELECT f.path FROM t1 f WHERE f.id=1)) AS c1,
++COLLATION(@p:=(SELECT f.path FROM t1 f WHERE f.id=1)) AS c2;
++c1	c2
++5	utf8mb3_unicode_ci
++DROP TABLE t1;
++SET NAMES utf8mb3;
++#
+ # End of 11.6 tests
+ #
+diff --git a/mysql-test/main/ctype_utf8.test b/mysql-test/main/ctype_utf8.test
+index e6b43cd4..aaeaa229 100644
+--- a/mysql-test/main/ctype_utf8.test
++++ b/mysql-test/main/ctype_utf8.test
+@@ -2561,6 +2561,22 @@ SELECT @col_type != 'binary(128)';
+ SELECT COERCIBILITY(@col_type), COERCIBILITY('binary(128)');
+ DROP TABLE t1;
+ 
++--echo #
++--echo # MDEV-39530 Collation mix issue after update
++--echo #
++
++SET NAMES utf8mb3 COLLATE utf8mb3_uca1400_ai_ci;
++CREATE TABLE t1 (id INT NOT NULL PRIMARY KEY, path VARCHAR(800) NOT NULL DEFAULT '')
++  ENGINE=Aria CHARACTER SET utf8mb3 COLLATE utf8mb3_unicode_ci;
++INSERT INTO t1 VALUES (1,'text');
++SELECT IF((@p:=(SELECT f.path FROM t1 f WHERE f.id=1 AND f.path REGEXP '^xx'))!='',1,2) AS c;
++SELECT IF((@p:=(SELECT f.path FROM t1 f WHERE f.id=1))!='',1,2) AS c;
++SELECT COERCIBILITY(@p:=(SELECT f.path FROM t1 f WHERE f.id=1)) AS c1,
++       COLLATION(@p:=(SELECT f.path FROM t1 f WHERE f.id=1)) AS c2;
++DROP TABLE t1;
++SET NAMES utf8mb3;
++
++
+ 
+ --echo #
+ --echo # End of 11.6 tests
+diff --git a/mysql-test/main/user_var.result b/mysql-test/main/user_var.result
+index 8afe3839..24e6c90a 100644
+--- a/mysql-test/main/user_var.result
++++ b/mysql-test/main/user_var.result
+@@ -162,13 +162,13 @@ collation(@a:=_latin2'test')
+ latin2_general_ci
+ select coercibility(@a:=_latin2'test');
+ coercibility(@a:=_latin2'test')
+-6
++5
+ select collation(@a:=_latin2'test' collate latin2_bin);
+ collation(@a:=_latin2'test' collate latin2_bin)
+ latin2_bin
+ select coercibility(@a:=_latin2'test' collate latin2_bin);
+ coercibility(@a:=_latin2'test' collate latin2_bin)
+-6
++5
+ select (@a:=_latin2'test' collate latin2_bin) = _latin2'TEST';
+ (@a:=_latin2'test' collate latin2_bin) = _latin2'TEST'
+ 0
+diff --git a/sql/item_func.cc b/sql/item_func.cc
+index 07b811eb..4fcd16be 100644
+--- a/sql/item_func.cc
++++ b/sql/item_func.cc
+@@ -4851,7 +4851,7 @@ bool Item_func_set_user_var::fix_fields(THD *thd, Item **ref)
+                              &my_charset_numeric : args[0]->collation.collation);
+   collation.set(m_var_entry->charset(),
+                 args[0]->collation.derivation == DERIVATION_NUMERIC ?
+-                DERIVATION_NUMERIC : DERIVATION_COERCIBLE);
++                DERIVATION_NUMERIC : DERIVATION_USERVAR);
+   switch (args[0]->result_type()) {
+   case STRING_RESULT:
+   case TIME_RESULT:
+@@ -4916,7 +4916,11 @@ Item_func_set_user_var::fix_length_and_dec(THD *thd)
+   }
+   else
+   {
+-    collation.set(DERIVATION_COERCIBLE);
++    /*
++      Use the same derivation that Item_func_get_user_var uses,
++      so @a:=expr and @a have equal collation strength (MDEV-39530).
++    */
++    collation.set(DERIVATION_USERVAR);
+     fix_length_and_charset(args[0]->max_char_length(),
+                            args[0]->collation.collation);
+   }

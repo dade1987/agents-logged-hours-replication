@@ -1,0 +1,131 @@
+diff --git a/mysql-test/main/vector.result b/mysql-test/main/vector.result
+index 536a52f1..39be4f84 100644
+--- a/mysql-test/main/vector.result
++++ b/mysql-test/main/vector.result
+@@ -909,3 +909,24 @@ where table_schema = database() and table_name = 't1';
+ has_index_length
+ 1
+ drop table t1;
++#
++# MDEV-40229 Unclear or inconsistent semantics of vector index size
++#
++create table t1 (id int auto_increment primary key, v vector(1) not null, vector index (v));
++insert into t1 (v) values (vec_fromtext('[1]'));
++select index_length into @index_length_1
++from information_schema.tables
++where table_schema = database() and table_name = 't1';
++select count(*) from t1;
++count(*)
++8192
++analyze table t1;
++Table	Op	Msg_type	Msg_text
++test.t1	analyze	status	Engine-independent statistics collected
++test.t1	analyze	status	OK
++select index_length > @index_length_1 as index_length_grows
++from information_schema.tables
++where table_schema = database() and table_name = 't1';
++index_length_grows
++1
++drop table t1;
+diff --git a/mysql-test/main/vector.test b/mysql-test/main/vector.test
+index 161d2612..de0c5bc9 100644
+--- a/mysql-test/main/vector.test
++++ b/mysql-test/main/vector.test
+@@ -459,3 +459,26 @@ from information_schema.tables
+ where table_schema = database() and table_name = 't1';
+ 
+ drop table t1;
++
++--echo #
++--echo # MDEV-40229 Unclear or inconsistent semantics of vector index size
++--echo #
++create table t1 (id int auto_increment primary key, v vector(1) not null, vector index (v));
++insert into t1 (v) values (vec_fromtext('[1]'));
++select index_length into @index_length_1
++from information_schema.tables
++where table_schema = database() and table_name = 't1';
++--disable_query_log
++let $i= 13;
++while ($i)
++{
++  insert into t1 (v) select vec_fromtext(concat('[', rand(), ']')) from t1;
++  dec $i;
++}
++--enable_query_log
++select count(*) from t1;
++analyze table t1;
++select index_length > @index_length_1 as index_length_grows
++from information_schema.tables
++where table_schema = database() and table_name = 't1';
++drop table t1;
+diff --git a/sql/handler.cc b/sql/handler.cc
+index 56a784d3..d0bda014 100644
+--- a/sql/handler.cc
++++ b/sql/handler.cc
+@@ -5676,7 +5676,27 @@ handler::ha_analyze(THD* thd, HA_CHECK_OPT* check_opt)
+               m_lock_type != F_UNLCK);
+   mark_trx_read_write();
+ 
+-  return analyze(thd, check_opt);
++  int error= analyze(thd, check_opt);
++  if (error != HA_ADMIN_OK && error != HA_ADMIN_ALREADY_DONE)
++    return error;
++
++  /*
++    Also analyze the high-level (e.g. vector) index tables. The statistics
++    of an hlindex table (in particular, in InnoDB, its persistent size
++    statistics) are what INDEX_LENGTH in I_S.TABLES / SHOW TABLE STATUS
++    is calculated from, so an ANALYZE must refresh them too.
++  */
++  for (uint i= table->s->keys; i < table->s->total_keys; i++)
++  {
++    DBUG_ASSERT(table->s->hlindexes() == 1);
++    if (table->hlindex_open(i) || table->hlindex_lock(i))
++      return HA_ADMIN_FAILED;
++    int err= table->hlindex->file->analyze(thd, check_opt);
++    if (err != HA_ADMIN_OK && err != HA_ADMIN_ALREADY_DONE &&
++        err != HA_ADMIN_NOT_IMPLEMENTED)
++      return err;
++  }
++  return error;
+ }
+ 
+ 
+diff --git a/sql/sql_show.cc b/sql/sql_show.cc
+index ed108adf..3e358d1c 100644
+--- a/sql/sql_show.cc
++++ b/sql/sql_show.cc
+@@ -6083,13 +6083,26 @@ static int get_schema_tables_record(THD *thd, TABLE_LIST *tables,
+ 
+       if (show_table->s->hlindexes())
+       {
+-          // make sure hlindex is opened
+-          if (show_table->hlindex || !show_table->hlindex_open(show_table->s->keys))
+-          {
+-              handler *hi= show_table->hlindex->file;
+-              if (!hi->info(HA_STATUS_VARIABLE))
+-                  file->stats.index_file_length+= hi->stats.data_file_length;
+-          }
++        // make sure hlindex is opened
++        if (show_table->hlindex ||
++            !show_table->hlindex_open(show_table->s->keys))
++        {
++          /*
++            A high-level (e.g. vector) index is stored in a separate
++            internal table. From the user's point of view that whole
++            table is an index of the main table, so both its data and
++            its index files contribute to the INDEX_LENGTH of the
++            main table. Request the statistics with the same flags
++            that were used for the main table above (sans
++            HA_STATUS_AUTO and HA_STATUS_VARIABLE_EXTRA, that have no
++            meaning for an hlindex table), so that both are equally fresh,
++            e.g. that innodb_stats_on_metadata affects both.
++          */
++          handler *hi= show_table->hlindex->file;
++          if (!hi->info(HA_STATUS_VARIABLE | HA_STATUS_TIME))
++            file->stats.index_file_length+= hi->stats.data_file_length +
++                                            hi->stats.index_file_length;
++        }
+       }
+ 
+       enum row_type row_type = file->get_row_type();

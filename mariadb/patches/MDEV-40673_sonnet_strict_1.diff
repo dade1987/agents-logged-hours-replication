@@ -1,0 +1,48 @@
+diff --git a/mysql-test/main/func_concat.result b/mysql-test/main/func_concat.result
+index 4b91fb97..5a2d2ec0 100644
+--- a/mysql-test/main/func_concat.result
++++ b/mysql-test/main/func_concat.result
+@@ -304,3 +304,15 @@ f
+ NULL
+ DROP TABLE t1;
+ # End of 10.5 tests
++#
++# MDEV-40673 CONCAT drops first argument for JSON_TYPE()/GET_FORMAT()
++#
++SELECT CONCAT(JSON_TYPE('{"a":1}'), 'X');
++CONCAT(JSON_TYPE('{"a":1}'), 'X')
++OBJECTX
++SELECT CONCAT(GET_FORMAT(DATE, 'USA'), 'X');
++CONCAT(GET_FORMAT(DATE, 'USA'), 'X')
++%m.%d.%YX
++SELECT CONCAT(JSON_TYPE('{"a":1}'), '');
++CONCAT(JSON_TYPE('{"a":1}'), '')
++OBJECT
+diff --git a/mysql-test/main/func_concat.test b/mysql-test/main/func_concat.test
+index f93b150f..d9c07593 100644
+--- a/mysql-test/main/func_concat.test
++++ b/mysql-test/main/func_concat.test
+@@ -281,3 +281,10 @@ SELECT CONCAT_WS(' ', a, b, PASSWORD(c)) AS f FROM t1 GROUP BY f WITH ROLLUP;
+ DROP TABLE t1;
+ 
+ --echo # End of 10.5 tests
++
++--echo #
++--echo # MDEV-40673 CONCAT drops first argument for JSON_TYPE()/GET_FORMAT()
++--echo #
++SELECT CONCAT(JSON_TYPE('{"a":1}'), 'X');
++SELECT CONCAT(GET_FORMAT(DATE, 'USA'), 'X');
++SELECT CONCAT(JSON_TYPE('{"a":1}'), '');
+diff --git a/sql/item_strfunc.cc b/sql/item_strfunc.cc
+index b4388f12..9b6714d9 100644
+--- a/sql/item_strfunc.cc
++++ b/sql/item_strfunc.cc
+@@ -642,7 +642,7 @@ bool Item_func_concat::realloc_result(String *str, uint length) const
+   if (str->alloced_length() >= length)
+     return false; // Alloced space is big enough, nothing to do.
+ 
+-  if (str->alloced_length() == 0)
++  if (str->alloced_length() == 0 && str->length() == 0)
+     return str->alloc(length);
+ 
+   /*

@@ -1,0 +1,80 @@
+diff --git a/sql/sql_acl.cc b/sql/sql_acl.cc
+index 3dc5f391..1f4db977 100644
+--- a/sql/sql_acl.cc
++++ b/sql/sql_acl.cc
+@@ -11783,7 +11783,6 @@ bool sp_revoke_privileges(THD *thd, const char *sp_db, const char *sp_name,
+ {
+   uint counter, revoked;
+   int result;
+-  HASH *hash= sph->get_priv_hash();
+   Silence_routine_definer_errors error_handler;
+   DBUG_ENTER("sp_revoke_privileges");
+ 
+@@ -11802,32 +11801,46 @@ bool sp_revoke_privileges(THD *thd, const char *sp_db, const char *sp_name,
+   mysql_rwlock_wrlock(&LOCK_grant);
+   mysql_mutex_lock(&acl_cache->lock);
+ 
++  /*
++    DROP PACKAGE also drops the corresponding PACKAGE BODY
++    (see Sp_handler_package_spec::sp_find_and_drop_routine()),
++    so the PACKAGE BODY grants must be revoked as well.
++  */
++  const Sp_handler *handlers[2]= { sph, NULL };
++  if (sph->type() == SP_TYPE_PACKAGE)
++    handlers[1]= &sp_handler_package_body;
++
+   /* Remove procedure access */
+-  do
++  for (uint h= 0; h < 2 && handlers[h]; h++)
+   {
+-    for (counter= 0, revoked= 0 ; counter < hash->records ; )
++    const Sp_handler *cur_sph= handlers[h];
++    HASH *hash= cur_sph->get_priv_hash();
++    do
+     {
+-      GRANT_NAME *grant_proc= (GRANT_NAME*) my_hash_element(hash, counter);
+-      if (!my_strcasecmp(&my_charset_utf8mb3_bin, grant_proc->db, sp_db) &&
+-	  !my_strcasecmp(system_charset_info, grant_proc->tname, sp_name))
++      for (counter= 0, revoked= 0 ; counter < hash->records ; )
+       {
+-        LEX_USER lex_user;
+-	lex_user.user.str= grant_proc->user;
+-	lex_user.user.length= strlen(grant_proc->user);
+-        lex_user.host.str= safe_str(grant_proc->host.hostname);
+-        lex_user.host.length= strlen(lex_user.host.str);
+-        if (replace_routine_table(thd, grant_proc,
+-                                  tables.procs_priv_table().table(), lex_user,
+-                                  grant_proc->db, grant_proc->tname,
+-                                  sph, ALL_KNOWN_ACL, 1) == 0)
+-	{
+-	  revoked= 1;
+-	  continue;
+-	}
++        GRANT_NAME *grant_proc= (GRANT_NAME*) my_hash_element(hash, counter);
++        if (!my_strcasecmp(&my_charset_utf8mb3_bin, grant_proc->db, sp_db) &&
++            !my_strcasecmp(system_charset_info, grant_proc->tname, sp_name))
++        {
++          LEX_USER lex_user;
++          lex_user.user.str= grant_proc->user;
++          lex_user.user.length= strlen(grant_proc->user);
++          lex_user.host.str= safe_str(grant_proc->host.hostname);
++          lex_user.host.length= strlen(lex_user.host.str);
++          if (replace_routine_table(thd, grant_proc,
++                                    tables.procs_priv_table().table(), lex_user,
++                                    grant_proc->db, grant_proc->tname,
++                                    cur_sph, ALL_KNOWN_ACL, 1) == 0)
++          {
++            revoked= 1;
++            continue;
++          }
++        }
++        counter++;
+       }
+-      counter++;
+-    }
+-  } while (revoked);
++    } while (revoked);
++  }
+ 
+   mysql_mutex_unlock(&acl_cache->lock);
+   mysql_rwlock_unlock(&LOCK_grant);

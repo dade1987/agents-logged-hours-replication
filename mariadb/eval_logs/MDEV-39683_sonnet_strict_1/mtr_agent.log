@@ -1,0 +1,73 @@
+Logging: /home/user/mdb_src/mysql-test/mariadb-test-run.pl  --vardir=/home/mtr/var/t --force --parallel=4 --retry=0 type_xmltype.type_xmltype
+VS config: 
+vardir: /home/mtr/var/t
+Removing old var directory...
+Creating var directory '/home/mtr/var/t'...
+Checking supported features...
+MariaDB Version 12.3.3-MariaDB-debug
+ - SSL connections supported
+ - binaries are debug compiled
+Collecting tests...
+Installing system database...
+
+==============================================================================
+
+TEST                                  WORKER RESULT   TIME (ms) or COMMENT
+--------------------------------------------------------------------------
+
+worker[01] Using MTR_BUILD_THREAD 300, with reserved ports 19000..19029
+worker[03] Using MTR_BUILD_THREAD 302, with reserved ports 19060..19089
+worker[02] Using MTR_BUILD_THREAD 301, with reserved ports 19030..19059
+worker[04] Using MTR_BUILD_THREAD 303, with reserved ports 19090..19119
+type_xmltype.type_xmltype                w3 [ fail ]
+        Test ended at 2026-10-28 08:37:43
+
+CURRENT_TEST: type_xmltype.type_xmltype
+mysqltest: At line 320: query 'SELECT round(x) FROM t' succeeded - should have failed with error ER_ILLEGAL_PARAMETER_DATA_TYPE_FOR_OPERATION (4079)...
+
+The result from queries just before the failure was:
+< snip >
+INSERT INTO t1 VALUES (1),(2),(3),(4);
+CREATE TABLE t2 (x XMLTYPE not null);
+INSERT IGNORE INTO t2 SELECT i FROM t1;
+ERROR HY000: Incorrect XMLTYPE value: '1'
+DROP TABLE t1, t2;
+#
+# MDEV-39655 No warning after CAST( AS xmltype).
+#
+SELECT CAST('a' AS xmltype);
+CAST('a' AS xmltype)
+NULL
+Warnings:
+Warning	1292	Truncated incorrect xmltype value: 'a'
+#
+# MDEV-39683 Numeric aggregates should end up with an error for xmltype.
+#
+CREATE TABLE t (x XMLTYPE);
+INSERT INTO t VALUES ('<a/>');
+INSERT INTO t VALUES ('<a/>'),('<b>1</b>'),('<n>4.5</n>'),('<c/>');
+SELECT round(x) FROM t;
+
+More results from queries before failure can be found in /home/mtr/var/t/3/log/type_xmltype.log
+
+Warnings from just before the error:
+Warning 1292 Truncated incorrect DOUBLE value: '<a/>' 
+Warning 1292 Truncated incorrect DOUBLE value: '<a/>' 
+Warning 1292 Truncated incorrect DOUBLE value: '<b>1</b>' 
+Warning 1292 Truncated incorrect DOUBLE value: '<n>4.5</n>'
+
+ - saving '/home/mtr/var/t/3/log/type_xmltype.type_xmltype/' to '/home/mtr/var/t/log/type_xmltype.type_xmltype/'
+--------------------------------------------------------------------------
+The servers were restarted 0 times
+Spent 0.000 of 2 seconds executing testcases
+
+Completed: Failed 1/1 tests, 0.00% were successful.
+
+Failing test(s): type_xmltype.type_xmltype
+
+The log files in var/log may give you some hint of what went wrong.
+
+If you want to report this error, MariaDB's bug tracker is found at
+https://jira.mariadb.org
+
+mysql-test-run: *** ERROR: there were failing test cases

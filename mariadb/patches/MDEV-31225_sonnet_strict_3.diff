@@ -1,0 +1,48 @@
+diff --git a/mysql-test/main/func_debug.result b/mysql-test/main/func_debug.result
+index a8a00a56..3a83f911 100644
+--- a/mysql-test/main/func_debug.result
++++ b/mysql-test/main/func_debug.result
+@@ -1967,3 +1967,12 @@ Warning	1292	Truncated incorrect DECIMAL value: '0x'
+ SET SESSION debug_dbug="-d,Predicant_to_list_comparator";
+ SET SESSION debug_dbug="-d,Item_func_in";
+ SET SESSION debug_dbug="-d,cmp_item";
++#
++# MDEV-31225: nested rows with in_predicate_conversion_threshold
++#
++SET @@in_predicate_conversion_threshold=1;
++CREATE TABLE t1 (a INT);
++SELECT 1 FROM t1 WHERE ROW(a,(a,a))  IN ((1,(1,1)),(2,(2,null)));
++1
++DROP TABLE t1;
++SET @@in_predicate_conversion_threshold=DEFAULT;
+diff --git a/mysql-test/main/func_debug.test b/mysql-test/main/func_debug.test
+index b65676de..cde349d6 100644
+--- a/mysql-test/main/func_debug.test
++++ b/mysql-test/main/func_debug.test
+@@ -592,3 +592,12 @@ SELECT ('0x',1) IN ((0,1),(1,1));
+ SET SESSION debug_dbug="-d,Predicant_to_list_comparator";
+ SET SESSION debug_dbug="-d,Item_func_in";
+ SET SESSION debug_dbug="-d,cmp_item";
++
++--echo #
++--echo # MDEV-31225: nested rows with in_predicate_conversion_threshold
++--echo #
++SET @@in_predicate_conversion_threshold=1;
++CREATE TABLE t1 (a INT);
++SELECT 1 FROM t1 WHERE ROW(a,(a,a))  IN ((1,(1,1)),(2,(2,null)));
++DROP TABLE t1;
++SET @@in_predicate_conversion_threshold=DEFAULT;
+diff --git a/sql/sql_tvc.cc b/sql/sql_tvc.cc
+index 46835972..c1bf42ec 100644
+--- a/sql/sql_tvc.cc
++++ b/sql/sql_tvc.cc
+@@ -894,6 +894,9 @@ static bool cmp_row_types(Item* item1, Item* item2)
+   {
+     Item *inner= item1->element_index(i);
+     Item *outer= item2->element_index(i);
++    /* Nested rows are not supported by the conversion */
++    if (inner->cols() != 1 || outer->cols() != 1)
++      return true;
+     if (!inner->type_handler()->subquery_type_allows_materialization(inner,
+                                                                      outer,
+                                                                      true))

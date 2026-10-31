@@ -1,0 +1,71 @@
+diff --git a/mysql-test/main/set_authorization.result b/mysql-test/main/set_authorization.result
+index 71194c22..8c6ae358 100644
+--- a/mysql-test/main/set_authorization.result
++++ b/mysql-test/main/set_authorization.result
+@@ -148,4 +148,17 @@ set session authorization root@localhost;
+ -- Tracker : SESSION_TRACK_SCHEMA
+ -- 
+ 
++#
++# MDEV-40336 SET SESSION AUTHORIZATION un-expires passwords
++#
++create user u1@localhost;
++alter user u1@localhost password expire;
++connect con1,localhost,root;
++set session authorization u1@localhost;
++select 2;
++ERROR HY000: You must SET PASSWORD before executing this statement
++disconnect con1;
++connection default;
++drop user u1@localhost;
++
+ # End of 12.0 tests
+diff --git a/mysql-test/main/set_authorization.test b/mysql-test/main/set_authorization.test
+index d13ee4aa..d949229c 100644
+--- a/mysql-test/main/set_authorization.test
++++ b/mysql-test/main/set_authorization.test
+@@ -143,4 +143,18 @@ enable_session_track_info;
+ set session authorization root@localhost;
+ disable_session_track_info;
+ 
++--echo #
++--echo # MDEV-40336 SET SESSION AUTHORIZATION un-expires passwords
++--echo #
++
++create user u1@localhost;
++alter user u1@localhost password expire;
++connect con1,localhost,root;
++set session authorization u1@localhost;
++--error ER_MUST_CHANGE_PASSWORD
++select 2;
++disconnect con1;
++connection default;
++drop user u1@localhost;
++
+ --echo # End of 12.0 tests
+diff --git a/sql/sql_acl.cc b/sql/sql_acl.cc
+index de8a27c9..27067f8c 100644
+--- a/sql/sql_acl.cc
++++ b/sql/sql_acl.cc
+@@ -339,6 +339,7 @@ ulong role_global_merges= 0, role_db_merges= 0, role_table_merges= 0,
+ 
+ #ifndef NO_EMBEDDED_ACCESS_CHECKS
+ static bool ignore_max_password_errors(const ACL_USER *acl_user);
++static bool check_password_lifetime(THD *thd, const ACL_USER &acl_user);
+ static void update_hostname(acl_host_and_ip *host, const char *hostname);
+ static bool show_proxy_grants (THD *, const char *, const char *,
+                                char *, size_t);
+@@ -12869,6 +12870,13 @@ int acl_setauthorization(THD *thd, const LEX_USER *user)
+   thd->reset_db(&null_clex_str);
+ 
+   sctx->init();
++  /*
++    The target account's password expiration state must carry over to the
++    new security context, otherwise SET SESSION AUTHORIZATION would let an
++    account with an expired password run statements (MDEV-40336).
++  */
++  sctx->password_expired= acl_user->password_expired ||
++                          check_password_lifetime(thd, *acl_user);
+   sctx->user= *user->user.str
+               ? my_strndup(key_memory_MPVIO_EXT_auth_info, user->user.str,
+                            user->user.length, MYF(MY_WME))

@@ -1,0 +1,171 @@
+diff --git a/public/question/classes/local/bank/question_bank_helper.php b/public/question/classes/local/bank/question_bank_helper.php
+index f6b6befbc72..f33bb1df94b 100644
+--- a/public/question/classes/local/bank/question_bank_helper.php
++++ b/public/question/classes/local/bank/question_bank_helper.php
+@@ -269,11 +269,17 @@ class question_bank_helper {
+         // Build the left joins for all modules of the type requested i.e. those that do or do not share questions.
+         $pluginjoins = [];
+         $pluginfields = [];
++        $excludepreviewsql = '';
+         foreach ($plugins as $key => $plugin) {
+             $join = "LEFT JOIN {{$plugin}} p{$key} ON p{$key}.id = cm.instance
+                      AND m.name = '{$plugin}'";
+             if ($plugin === self::get_default_question_bank_activity_name()) {
+-                $join .= " AND p{$key}.type <> '" . self::TYPE_PREVIEW . "'";
++                // The preview bank is never visible or accessible to users, so it must be excluded from the results.
++                // This has to be done in the WHERE clause, as a condition on the LEFT JOIN would only null the joined
++                // columns while leaving the course module row in the result set.
++                $excludepreviewsql = "AND (m.name <> :previewmodname OR p{$key}.type <> :previewtype)";
++                $params['previewmodname'] = $plugin;
++                $params['previewtype'] = self::TYPE_PREVIEW;
+             }
+             $pluginjoins[] = $join;
+             $pluginfields[] = "p{$key}.name";
+@@ -282,7 +288,7 @@ class question_bank_helper {
+ 
+         // Build the SQL to filter by module name and exclude deleted course modules.
+         [$modulenamesql, $modulenameparams] = $DB->get_in_or_equal($plugins, SQL_PARAMS_NAMED, 'modname');
+-        $wheremodulesql = "AND m.name $modulenamesql AND cm.deletioninprogress = 0";
++        $wheremodulesql = "AND m.name $modulenamesql AND cm.deletioninprogress = 0 {$excludepreviewsql}";
+         $params = array_merge($params, $modulenameparams);
+ 
+         // Build the search condition using COALESCE only if there are multiple plugin fields.
+diff --git a/public/question/tests/external/search_shared_banks_test.php b/public/question/tests/external/search_shared_banks_test.php
+index 145f67466ec..741b5993877 100644
+--- a/public/question/tests/external/search_shared_banks_test.php
++++ b/public/question/tests/external/search_shared_banks_test.php
+@@ -17,6 +17,7 @@
+ namespace core_question\external;
+ 
+ use core\context\module;
++use core_question\local\bank\question_bank_helper;
+ 
+ /**
+  * Unit tests for core_question\external\search_shared_banks
+@@ -214,4 +215,60 @@ final class search_shared_banks_test extends \advanced_testcase {
+             $lastresult
+         );
+     }
++
++    /**
++     * The preview question bank must never be returned in the search results.
++     */
++    public function test_search_excludes_preview_bank(): void {
++        $this->resetAfterTest();
++        [
++            ,
++            $course2,
++            $course3,
++            $teacher,
++            $quizcontext,
++            $qbank1,
++            $qbank2,
++            $qbank3,
++            $qbank4,
++        ] = $this->create_banks();
++
++        // Create the preview bank, and give the teacher access to it.
++        $this->setAdminUser();
++        $previewbank = question_bank_helper::get_preview_open_instance_type(true);
++        $this->assertNotNull($previewbank);
++        $generator = $this->getDataGenerator();
++        $generator->enrol_user($teacher->id, $previewbank->course, 'editingteacher');
++
++        $this->setUser($teacher);
++
++        // The preview bank must not be included in an empty search.
++        $result = search_shared_banks::execute($quizcontext->id);
++        $this->assertEquals(
++            [
++                [
++                    'label' => "{$course2->shortname} - {$qbank1->name}",
++                    'value' => $qbank1->cmid,
++                ],
++                [
++                    'label' => "{$course2->shortname} - {$qbank2->name}",
++                    'value' => $qbank2->cmid,
++                ],
++                [
++                    'label' => "{$course2->shortname} - {$qbank3->name}",
++                    'value' => $qbank3->cmid,
++                ],
++                [
++                    'label' => "{$course3->shortname} - {$qbank4->name}",
++                    'value' => $qbank4->cmid,
++                ],
++            ],
++            $result['sharedbanks'],
++        );
++        $this->assertNotContains($previewbank->id, array_column($result['sharedbanks'], 'value'));
++
++        // Nor when searching for its name explicitly.
++        $result = search_shared_banks::execute($quizcontext->id, $previewbank->name);
++        $this->assertEmpty($result['sharedbanks']);
++    }
+ }
+diff --git a/public/question/tests/local/bank/question_bank_helper_test.php b/public/question/tests/local/bank/question_bank_helper_test.php
+index 9a025884809..914c9598142 100644
+--- a/public/question/tests/local/bank/question_bank_helper_test.php
++++ b/public/question/tests/local/bank/question_bank_helper_test.php
+@@ -269,6 +269,61 @@ final class question_bank_helper_test extends \advanced_testcase {
+         $this->assertEmpty(array_filter($limitedbanks, fn($bank) => in_array($bank->name, ['Shared bank 21', 'Another bank'])));
+     }
+ 
++    /**
++     * The preview bank must never be returned as a shareable (or private) instance, regardless of search term or capabilities.
++     *
++     * @covers ::get_activity_instances_with_shareable_questions
++     * @covers ::get_activity_instances_with_private_questions
++     * @return void
++     */
++    public function test_get_instances_excludes_preview_bank(): void {
++        $this->resetAfterTest();
++        self::setAdminUser();
++
++        $course = self::getDataGenerator()->create_course();
++        $sharedmodgen = self::getDataGenerator()->get_plugin_generator('mod_qbank');
++        $sharedmod = $sharedmodgen->create_instance(['course' => $course, 'name' => 'Shared bank']);
++        $previewbank = question_bank_helper::get_preview_open_instance_type(true);
++        $this->assertNotNull($previewbank);
++
++        $getcmids = static fn(array $banks): array => array_map(
++            static fn(formatted_bank $bank): int => $bank->get_formatted()->modid,
++            $banks,
++        );
++
++        // No parameters.
++        $sharedbanks = question_bank_helper::get_activity_instances_with_shareable_questions();
++        $this->assertEquals([$sharedmod->cmid], $getcmids($sharedbanks));
++
++        // With capabilities (admin has them all, including on the preview bank context).
++        $sharedbanks = question_bank_helper::get_activity_instances_with_shareable_questions(
++            havingcap: ['moodle/question:useall'],
++        );
++        $this->assertEquals([$sharedmod->cmid], $getcmids($sharedbanks));
++
++        // Searching for the preview bank by name returns nothing.
++        $sharedbanks = question_bank_helper::get_activity_instances_with_shareable_questions(search: $previewbank->name);
++        $this->assertEmpty($sharedbanks);
++
++        // Restricting to the preview bank's course returns nothing.
++        $sharedbanks = question_bank_helper::get_activity_instances_with_shareable_questions(
++            incourseids: [$previewbank->course],
++        );
++        $this->assertEmpty($sharedbanks);
++
++        // Requesting the preview bank as the current bank does not sneak it in either.
++        $sharedbanks = question_bank_helper::get_activity_instances_with_shareable_questions(
++            currentbankid: $previewbank->id,
++        );
++        $this->assertEquals([$sharedmod->cmid], $getcmids($sharedbanks));
++
++        // It is not returned as a private instance either.
++        $privatebanks = question_bank_helper::get_activity_instances_with_private_questions(
++            incourseids: [$previewbank->course],
++        );
++        $this->assertEmpty($privatebanks);
++    }
++
+     /**
+      * Assert creating a default mod_qbank instance on a course provides the expected boilerplate settings.
+      *

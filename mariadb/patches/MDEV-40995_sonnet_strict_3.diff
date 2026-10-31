@@ -1,0 +1,19 @@
+diff --git a/sql/ha_partition.cc b/sql/ha_partition.cc
+index 411e1d30..aaaf0595 100644
+--- a/sql/ha_partition.cc
++++ b/sql/ha_partition.cc
+@@ -11138,7 +11138,14 @@ void ha_partition::release_auto_increment()
+         value, and the reserved value was reserved by this thread,
+         we can lower the reserved value.
+       */
++      /*
++        next_insert_id must also lie within the last reserved interval.
++        restore_auto_increment() after a failed row may have rolled it back
++        across a block boundary, below the last interval; the values in
++        between were then reserved (and possibly used) by other threads.
++      */
+       if (next_insert_id < next_auto_inc_val &&
++          next_insert_id >= auto_inc_interval_for_cur_row.minimum() &&
+           auto_inc_interval_for_cur_row.maximum() >= next_auto_inc_val)
+       {
+         THD *thd= ha_thd();

@@ -1,0 +1,20 @@
+diff --git a/sql/sql_base.cc b/sql/sql_base.cc
+index eabad770..98e7719f 100644
+--- a/sql/sql_base.cc
++++ b/sql/sql_base.cc
+@@ -876,8 +876,14 @@ int close_thread_tables(THD *thd) noexcept
+       /*
+         For simple locking we cleanup it here because we don't close thread
+         tables. For prelocking we close it when we do close thread tables.
++
++        Do not cleanup inside a sub-statement (e.g. a trigger body): the
++        tables may still be in use by the outer statement, whose session
++        dependent virtual column expressions must stay fixed (see
++        TABLE::vcol_fix_expr()). They are cleaned up when the outer
++        statement finishes.
+       */
+-      if (thd->locked_tables_mode != LTM_PRELOCKED)
++      if (thd->locked_tables_mode != LTM_PRELOCKED && !thd->in_sub_stmt)
+         table->vcol_cleanup_expr(thd);
+     }
+ 

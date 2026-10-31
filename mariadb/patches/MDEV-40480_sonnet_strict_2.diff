@@ -1,0 +1,19 @@
+diff --git a/sql/sql_base.cc b/sql/sql_base.cc
+index 544df995..eaa66635 100644
+--- a/sql/sql_base.cc
++++ b/sql/sql_base.cc
+@@ -9372,7 +9372,13 @@ fill_record_n_invoke_before_triggers(THD *thd, TABLE *table,
+       Re-calculate virtual fields to cater for cases when base columns are
+       updated by the triggers.
+     */
+-    if (table->vfield && fields.elements)
++    if (table->vfield && !fields.elements)
++    {
++      /* E.g. LOAD DATA without a SET clause: values are already in record */
++      result|= table->update_virtual_fields(table->file,
++                                            VCOL_UPDATE_FOR_WRITE);
++    }
++    else if (table->vfield)
+     {
+       Item *fld= (Item_field*) fields.head();
+       Item_field *item_field= fld->field_for_view_update();

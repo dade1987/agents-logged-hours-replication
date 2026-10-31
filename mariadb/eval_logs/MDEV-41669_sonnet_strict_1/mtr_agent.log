@@ -1,0 +1,65 @@
+Logging: /home/user/mdb_src/mysql-test/mariadb-test-run.pl  --vardir=/home/mtr/var/t --force --parallel=4 --retry=0 innodb.mvcc
+VS config: 
+vardir: /home/mtr/var/t
+Removing old var directory...
+Creating var directory '/home/mtr/var/t'...
+Checking supported features...
+MariaDB Version 10.11.19-MariaDB-debug
+ - SSL connections supported
+ - binaries are debug compiled
+Collecting tests...
+Installing system database...
+
+==============================================================================
+
+TEST                                  WORKER RESULT   TIME (ms) or COMMENT
+--------------------------------------------------------------------------
+
+worker[01] Using MTR_BUILD_THREAD 300, with reserved ports 19000..19029
+worker[02] Using MTR_BUILD_THREAD 301, with reserved ports 19030..19059
+worker[03] Using MTR_BUILD_THREAD 302, with reserved ports 19060..19089
+worker[04] Using MTR_BUILD_THREAD 303, with reserved ports 19090..19119
+innodb.mvcc                              w1 [ fail ]
+        Test ended at 2026-10-29 05:55:00
+
+CURRENT_TEST: innodb.mvcc
+mysqltest: At line 47: query 'SELECT * FROM t1' succeeded - should have failed with error ER_TABLE_DEF_CHANGED (1412)...
+
+The result from queries just before the failure was:
+< snip >
+CREATE TABLE t1 (a INT PRIMARY KEY) ENGINE=InnoDB;
+INSERT INTO t1 VALUES(0);
+FLUSH TABLES t1 WITH READ LOCK;
+UNLOCK TABLES;
+START TRANSACTION WITH CONSISTENT SNAPSHOT;
+connect  con1,localhost,root,,;
+ALTER TABLE t1 FORCE, ALGORITHM=COPY;
+connection default;
+SELECT * FROM t1;
+ERROR HY000: Table definition has changed, please retry transaction
+COMMIT;
+START TRANSACTION WITH CONSISTENT SNAPSHOT;
+connection con1;
+ALTER TABLE t1 DISCARD TABLESPACE;
+ALTER TABLE t1 IMPORT TABLESPACE;
+disconnect con1;
+connection default;
+SELECT * FROM t1;
+
+More results from queries before failure can be found in /home/mtr/var/t/1/log/mvcc.log
+
+ - saving '/home/mtr/var/t/1/log/innodb.mvcc/' to '/home/mtr/var/t/log/innodb.mvcc/'
+--------------------------------------------------------------------------
+The servers were restarted 0 times
+Spent 0.000 of 2 seconds executing testcases
+
+Completed: Failed 1/1 tests, 0.00% were successful.
+
+Failing test(s): innodb.mvcc
+
+The log files in var/log may give you some hint of what went wrong.
+
+If you want to report this error, MariaDB's bug tracker is found at
+https://jira.mariadb.org
+
+mysql-test-run: *** ERROR: there were failing test cases

@@ -1,0 +1,44 @@
+You are a software engineer fixing an issue in MariaDB Server (C/C++). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot build MariaDB or run its test suite. Read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update mysql-test tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDEV-41669: ALTER TABLE…IMPORT TABLESPACE may break MVCC
+
+Oracle released a MySQL bug fix without a test case:
+[Bug#36999166 ALTER TABLE ... IMPORT TABLESPACE may cause unsafe reads|https://github.com/mysql/mysql-server/commit/b1fc1e18b76ceb1204634beb65be81ddc6c4104a]
+It is easy to reproduce this with a small change to an existing test case:
+{code:diff}
+diff --git a/mysql-test/suite/innodb/t/import_bugs.test b/mysql-test/suite/innodb/t/import_bugs.test
+index 1b7edcf8f73..82aa6e0996c 100644
+--- a/mysql-test/suite/innodb/t/import_bugs.test
++++ b/mysql-test/suite/innodb/t/import_bugs.test
+@@ -53,6 +53,10 @@ CREATE TABLE t1(
+ 
+ CREATE TABLE t2 LIKE t1;
+ 
++--connect mvcc,localhost,root
++START TRANSACTION WITH CONSISTENT SNAPSHOT;
++--connection default
++
+ ALTER TABLE t2 DISCARD TABLESPACE;
+ 
+ INSERT INTO t1() VALUES();
+@@ -80,6 +84,11 @@ INSERT INTO t2() VALUES();
+ INSERT INTO t2() VALUES();
+ 
+ SELECT * FROM t2 ORDER BY id;
++
++--connection mvcc
++SELECT * FROM t2;
++--disconnect mvcc
++--connection default
+ DROP TABLE t2;
+ 
+ --echo #
+{code}
+We would expect the {{SELECT}} to fail with an error. Instead, it is returning the contents of the imported table, which does not correspond to the snapshot.

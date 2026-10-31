@@ -1,0 +1,84 @@
+diff --git a/mysql-test/suite/json/r/json_table.result b/mysql-test/suite/json/r/json_table.result
+index e4060877..caf3fbba 100644
+--- a/mysql-test/suite/json/r/json_table.result
++++ b/mysql-test/suite/json/r/json_table.result
+@@ -1298,4 +1298,25 @@ COLLATION(virtual_table_from_json.property)
+ utf8mb4_uca1400_ai_ci
+ DROP TABLE table_with_longtext_column;
+ DROP DATABASE collation_testing;
++#
++# MDEV-39969 Incorrect result of JSON_TABLE with BIT
++#
++SELECT ord, i, b+0, HEX(b)
++FROM JSON_TABLE('[0,1]', '$[*]' COLUMNS (ord FOR ORDINALITY,
++i INT PATH '$',
++b BIT(1) PATH '$')) AS jt
++ORDER BY ord;
++ord	i	b+0	HEX(b)
++1	0	0	0
++2	1	1	1
++SELECT ord, b+0, HEX(b)
++FROM JSON_TABLE('[0,5,255,true,false]', '$[*]' COLUMNS (ord FOR ORDINALITY,
++b BIT(8) PATH '$')) AS jt
++ORDER BY ord;
++ord	b+0	HEX(b)
++1	0	0
++2	5	5
++3	255	FF
++4	1	1
++5	0	0
+ # End of 10.11 test
+diff --git a/mysql-test/suite/json/t/json_table.test b/mysql-test/suite/json/t/json_table.test
+index bab6d4b7..1db0fbd5 100644
+--- a/mysql-test/suite/json/t/json_table.test
++++ b/mysql-test/suite/json/t/json_table.test
+@@ -1121,4 +1121,20 @@ SELECT COLLATION(virtual_table_from_json.property) FROM JSON_TABLE((SELECT colum
+ DROP TABLE table_with_longtext_column;
+ DROP DATABASE collation_testing;
+ 
++
++--echo #
++--echo # MDEV-39969 Incorrect result of JSON_TABLE with BIT
++--echo #
++
++SELECT ord, i, b+0, HEX(b)
++FROM JSON_TABLE('[0,1]', '$[*]' COLUMNS (ord FOR ORDINALITY,
++                                         i INT PATH '$',
++                                         b BIT(1) PATH '$')) AS jt
++ORDER BY ord;
++
++SELECT ord, b+0, HEX(b)
++FROM JSON_TABLE('[0,5,255,true,false]', '$[*]' COLUMNS (ord FOR ORDINALITY,
++                                         b BIT(8) PATH '$')) AS jt
++ORDER BY ord;
++
+ --echo # End of 10.11 test
+diff --git a/sql/json_table.cc b/sql/json_table.cc
+index e5ac6008..f32c25e7 100644
+--- a/sql/json_table.cc
++++ b/sql/json_table.cc
+@@ -384,6 +384,24 @@ static void store_json_in_field(Field *f, const json_engine_t *je)
+     }
+     break;
+   }
++  case JSON_VALUE_NUMBER:
++    if (f->type() == MYSQL_TYPE_BIT)
++    {
++      /*
++        Storing the textual representation of a number into a BIT field
++        would store the raw bytes of the string (e.g. '0' is 0x30).
++        Convert the JSON number to an integer value instead.
++      */
++      char *end;
++      int err;
++      bool is_unsigned= !(je->num_flags & JSON_NUM_NEG);
++      ulonglong nr= je->s.cs->strntoull10rnd((const char *) je->value,
++                                             je->value_len, is_unsigned,
++                                             &end, &err);
++      f->store((longlong) nr, is_unsigned);
++      return;
++    }
++    break;
+   default:
+     break;
+   };

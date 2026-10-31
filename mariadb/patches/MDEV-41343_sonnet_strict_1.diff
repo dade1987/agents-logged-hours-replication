@@ -1,0 +1,56 @@
+diff --git a/sql/sql_acl.cc b/sql/sql_acl.cc
+index 70984625..22eea225 100644
+--- a/sql/sql_acl.cc
++++ b/sql/sql_acl.cc
+@@ -14403,6 +14403,19 @@ bool Sql_cmd_grant_proxy::execute(THD *thd)
+   @retval false  normal check applies
+ */
+ 
++class Silence_all_errors_handler : public Internal_error_handler
++{
++public:
++  bool handle_condition(THD *, uint, const char*,
++                        Sql_condition::enum_warning_level *level,
++                        const char*, Sql_condition **cond_hdl) override
++  {
++    *cond_hdl= NULL;
++    return *level == Sql_condition::WARN_LEVEL_ERROR;
++  }
++};
++
++
+ bool Sql_cmd_grant::should_bypass_revoke_deny(THD *thd)
+ {
+   /* Is current command a REVOKE DENY ? */
+@@ -14423,9 +14436,28 @@ bool Sql_cmd_grant::should_bypass_revoke_deny(THD *thd)
+   TABLE_LIST tl;
+   tl.init_one_table(&MYSQL_SCHEMA_NAME, &MYSQL_TABLE_NAME[USER_TABLE],
+                     NULL, TL_WRITE);
+-  return !check_access(thd, UPDATE_ACL, tl.db.str, &tl.grant.privilege,
+-                       &tl.grant.m_internal, 0, 1) &&
+-         !check_grant(thd, UPDATE_ACL, &tl, FALSE, 1, TRUE);
++  if (check_access(thd, UPDATE_ACL, tl.db.str, &tl.grant.privilege,
++                   &tl.grant.m_internal, 0, 1) ||
++      check_grant(thd, UPDATE_ACL, &tl, FALSE, 1, TRUE))
++    return false;
++
++  /*
++    check_grant() succeeds also when the user has UPDATE only on some
++    columns (want_privilege is left for per-column checks). DENYs are stored
++    in the Priv column, so UPDATE on that very column is required.
++  */
++  if (tl.grant.want_privilege)
++  {
++    Silence_all_errors_handler silencer;
++    thd->push_internal_handler(&silencer);
++    bool denied= check_grant_column(thd, &tl.grant, tl.db.str,
++                                    tl.table_name.str, "Priv"_Lex_ident_column,
++                                    thd->security_ctx);
++    thd->pop_internal_handler();
++    if (denied)
++      return false;
++  }
++  return true;
+ }
+ 
+ 

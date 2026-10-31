@@ -1,0 +1,137 @@
+diff --git a/mysql-test/main/view_grant.result b/mysql-test/main/view_grant.result
+index aff05893..f7eaf201 100644
+--- a/mysql-test/main/view_grant.result
++++ b/mysql-test/main/view_grant.result
+@@ -2047,4 +2047,36 @@ connection default;
+ disconnect con1;
+ drop user foo@localhost;
+ drop schema foo;
++#
++# MDEV-40484 ambiguous view frm parsing when username includes \n
++#
++create user 'root
++definer_host=localhost
++suid=1'@localhost;
++connect  u,localhost,'root
++definer_host=localhost
++suid=1';
++select group_concat(user,'@',host) from mysql.global_priv;
++ERROR 42000: SELECT command denied to user 'root
++definer_host=localhost
++suid=1'@'localhost' for table `mysql`.`global_priv`
++create function f() returns text sql security invoker
++return (select group_concat(user,'@',host) from mysql.global_priv);
++create view v as select f();
++ERROR 0L000: Invalid definer
++select * from v;
++ERROR 42S02: Table 'test.v' doesn't exist
++drop function f;
++disconnect u;
++connection default;
++create definer='root
++definer_host=localhost
++suid=1'@localhost view v as select 1;
++ERROR 0L000: Invalid definer
++create definer=root@'localhost
++suid=1' view v as select 1;
++ERROR 0L000: Invalid definer
++drop user 'root
++definer_host=localhost
++suid=1'@localhost;
+ # End of 10.6 tests
+diff --git a/mysql-test/main/view_grant.test b/mysql-test/main/view_grant.test
+index 73c2fd51..4997a710 100644
+--- a/mysql-test/main/view_grant.test
++++ b/mysql-test/main/view_grant.test
+@@ -2306,6 +2306,37 @@ connection default;
+ disconnect con1;
+ drop user foo@localhost;
+ drop schema foo;
++--echo #
++--echo # MDEV-40484 ambiguous view frm parsing when username includes \n
++--echo #
++create user 'root
++definer_host=localhost
++suid=1'@localhost;
++--connect u,localhost,'root
++definer_host=localhost
++suid=1'
++--error ER_TABLEACCESS_DENIED_ERROR
++select group_concat(user,'@',host) from mysql.global_priv;
++create function f() returns text sql security invoker
++  return (select group_concat(user,'@',host) from mysql.global_priv);
++--error ER_MALFORMED_DEFINER
++create view v as select f();
++--error ER_NO_SUCH_TABLE
++select * from v;
++drop function f;
++--disconnect u
++--connection default
++--error ER_MALFORMED_DEFINER
++create definer='root
++definer_host=localhost
++suid=1'@localhost view v as select 1;
++--error ER_MALFORMED_DEFINER
++create definer=root@'localhost
++suid=1' view v as select 1;
++drop user 'root
++definer_host=localhost
++suid=1'@localhost;
++
+ --echo # End of 10.6 tests
+ 
+ # Wait till we reached the initial number of concurrent sessions
+diff --git a/sql/parse_file.cc b/sql/parse_file.cc
+index f4aae130..64866495 100644
+--- a/sql/parse_file.cc
++++ b/sql/parse_file.cc
+@@ -148,6 +148,17 @@ write_parameter(IO_CACHE *file, const uchar* base, File_option *parameter)
+   case FILE_OPTIONS_STRING:
+   {
+     LEX_STRING *val_s= (LEX_STRING *)(base + parameter->offset);
++    /*
++      Unescaped strings are newline-terminated in the file. A newline
++      inside the value would be parsed as the end of the value and the
++      rest as other parameters, so it can never be written here.
++    */
++    if (val_s->length && memchr(val_s->str, '\n', val_s->length))
++    {
++      my_error(ER_FPARSER_ERROR_IN_PARAMETER, MYF(0), parameter->name.str,
++               "");
++      DBUG_RETURN(TRUE);
++    }
+     if (my_b_write(file, (const uchar *)val_s->str, val_s->length))
+       DBUG_RETURN(TRUE);
+     break;
+diff --git a/sql/sql_view.cc b/sql/sql_view.cc
+index ab2d4df9..fe8e9b36 100644
+--- a/sql/sql_view.cc
++++ b/sql/sql_view.cc
+@@ -514,7 +514,27 @@ bool mysql_create_view(THD *thd, TABLE_LIST *views,
+ 
+   sp_cache_invalidate();
+   if (sp_process_definer(thd))
++  {
++    res= TRUE;
++    goto err;
++  }
++
++  /*
++    The definer user and host names are stored in the view .frm file as
++    plain (unescaped) newline-terminated values. A newline inside the
++    name would be interpreted as the end of the value and the rest of the
++    name as additional parameters (e.g. "suid=1"), which must not be
++    allowed.
++  */
++  if ((lex->definer->user.length &&
++       memchr(lex->definer->user.str, '\n', lex->definer->user.length)) ||
++      (lex->definer->host.length &&
++       memchr(lex->definer->host.str, '\n', lex->definer->host.length)))
++  {
++    my_error(ER_MALFORMED_DEFINER, MYF(0));
++    res= TRUE;
+     goto err;
++  }
+ 
+   /*
+     check that tables are not temporary  and this VIEW do not used in query

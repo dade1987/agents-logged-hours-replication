@@ -1,0 +1,39 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You CAN run Moodle's existing PHPUnit tests: `cd {WS} && vendor/bin/phpunit <path/to/some_test.php>` (the test environment is already initialised). You may also run `php -l <file>` and read code with grep/find/cat. Use absolute paths starting with {WS} in every command.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-88446: YouTube playback breaks when preceded by an OGV‑supported video embed
+
+When content includes both an ogv/webm compatible video and a YouTube embed processed sequentially by the same *media_videojs_plugin* instance, the YouTube embed incorrectly gets {{"techOrder": ["OgvJS"]}} appended to its Video.js configuration, causing it to fail to play and throwing CORS/network errors in the browser console.
+
+In *media/player/videojs/classes/plugin.php*, {{list_supported_urls()}} sets
+
+{noformat} if (in_array($extension, $this->ogvsupportedextensions)) {
+      $this->ogvtech = true;
+      …
+  }{noformat}
+
+on sight of any ogv supported extensions (e.g., .webm/.ogv). Because the same *media_videojs_plugin* instance processes multiple media embeds sequentially, the {{$ogvtech}} flag isn’t reset cleanly between them when the YouTube early return bypasses the foreach loop where the reset normally occurs, so it leaks into the YouTube block.
+
+This was first spotted in *mod_cms* but I was also able to replicate it in a standard assignment activity, so it’s not specific to one activity.
+
+h2. Steps to replicate
+
+# Install the mod_cms plugin:
+git clone [https://github.com/catalyst/moodle-mod_cms.git|https://github.com/catalyst/moodle-mod_cms.git|smart-link] 
+# In *_Site administration → Plugins → Activity modules → CMS → Manage content types,_* click Add new content type.
+# Give it a name (e.g. Overview Section) and an ID number (e.g. overview-section-1).
+# Under *Datasources* select *Custom fields*, then click Save and display.
+# In Custom field settings add a new category → add a *Textarea* field named “overview” (shortname overview) → save.
+# In the CMS Content field enter:
+{{{fields.overview}}}
+# Save and return.
+# Create a new course and add your “Overview” CMS activity.
+# In the Atto editor, record a WebM video first, then embed a YouTube URL in the same field.
+# Save changes.
+# Visit the “Overview” CMS → notice the YouTube player now has "techOrder":["OgvJS"] and fails to load.

@@ -1,0 +1,122 @@
+diff --git a/public/mod/assign/locallib.php b/public/mod/assign/locallib.php
+index b6c384ac7e3..eb375d2e659 100644
+--- a/public/mod/assign/locallib.php
++++ b/public/mod/assign/locallib.php
+@@ -3214,11 +3214,9 @@ class assign {
+ 
+         $grade->timemodified = \core\di::get(\core\clock::class)->time();
+ 
+-        if (!empty($grade->workflowstate)) {
+-            $validstates = $this->get_marking_workflow_states_for_current_user();
+-            if (!array_key_exists($grade->workflowstate, $validstates)) {
+-                return false;
+-            }
++        // The marking workflow state is stored in assign_user_flags, so check the state for this user there.
++        if ($this->grading_locked($grade->userid)) {
++            return false;
+         }
+ 
+         if ($grade->grade && $grade->grade != -1) {
+@@ -3353,7 +3351,7 @@ class assign {
+     public function update_mark(stdClass $grade, mixed $mark, ?string $workflowstate = null): bool {
+         global $DB;
+ 
+-        if ($this->grading_disabled($grade->userid)) {
++        if ($this->grading_disabled($grade->userid) || $this->marks_locked_by_overall_state($grade->userid)) {
+             return false;
+         }
+ 
+@@ -8783,6 +8781,58 @@ class assign {
+     }
+ 
+ 
++    /**
++     * Determine if the grade for this user is locked by the marking workflow state for the current user.
++     *
++     * The marking workflow state is stored in the assign_user_flags table, not in assign_grades.
++     *
++     * @param int $userid - The student userid
++     * @return bool true if the overall marking workflow state is not available to the current user
++     */
++    public function grading_locked(int $userid): bool {
++        if (!$this->get_instance()->markingworkflow) {
++            return false;
++        }
++        $flags = $this->get_user_flags($userid, false);
++        return $this->workflow_state_locked($flags ? $flags->workflowstate : null);
++    }
++
++    /**
++     * Determine if a marking workflow state is locked for the current user.
++     *
++     * A state is locked when it is set and it is not one the current user is permitted to transition a grade to.
++     *
++     * @param string|null $workflowstate The marking workflow state to check.
++     * @return bool true if the state is locked for the current user
++     */
++    public function workflow_state_locked(?string $workflowstate): bool {
++        if (!$this->get_instance()->markingworkflow || empty($workflowstate)) {
++            return false;
++        }
++        $validstates = $this->get_marking_workflow_states_for_current_user();
++        return !array_key_exists($workflowstate, $validstates);
++    }
++
++    /**
++     * Determine if the individual marker marks for this user are locked by the overall marking workflow state.
++     *
++     * With multiple marking, marks are read only once the overall state is ready for release or released,
++     * regardless of the permissions of the current user.
++     *
++     * @param int $userid - The student userid
++     * @return bool true if the marks are locked
++     */
++    protected function marks_locked_by_overall_state(int $userid): bool {
++        if (!$this->is_using_multiple_marking()) {
++            return false;
++        }
++        $flags = $this->get_user_flags($userid, false);
++        return $flags && in_array($flags->workflowstate, [
++            ASSIGN_MARKING_WORKFLOW_STATE_READYFORRELEASE,
++            ASSIGN_MARKING_WORKFLOW_STATE_RELEASED,
++        ], true);
++    }
++
+     /**
+      * Determine if this users grade can be edited.
+      *
+@@ -8792,12 +8842,8 @@ class assign {
+      * @return bool $gradingdisabled
+      */
+     public function grading_disabled($userid, $checkworkflow = true, $gradinginfo = null) {
+-        if ($checkworkflow && $this->get_instance()->markingworkflow) {
+-            $grade = $this->get_user_grade($userid, false);
+-            $validstates = $this->get_marking_workflow_states_for_current_user();
+-            if (!empty($grade) && !empty($grade->workflowstate) && !array_key_exists($grade->workflowstate, $validstates)) {
+-                return true;
+-            }
++        if ($checkworkflow && $this->grading_locked($userid)) {
++            return true;
+         }
+ 
+         if (is_null($gradinginfo)) {
+@@ -8962,6 +9008,9 @@ class assign {
+                         $mform->addElement('text', 'mark', $name);
+                         $mform->addHelpButton('mark', 'markoutof', 'assign');
+                         $mform->setType('mark', PARAM_RAW);
++                        if ($this->marks_locked_by_overall_state($userid)) {
++                            $mform->freeze('mark');
++                        }
+                     } else {
+                         $name = get_string('gradeoutof', 'assign', $this->get_instance()->grade);
+                         $mform->addElement('text', 'grade', $name);
+@@ -8988,6 +9037,9 @@ class assign {
+                             $data->mark = (int)unformat_float($data->mark);
+                         }
+                         $mform->setType('mark', PARAM_INT);
++                        if ($this->marks_locked_by_overall_state($userid)) {
++                            $gradingelement->freeze();
++                        }
+                     } else {
+                         $gradingelement = $mform->addElement('select', 'grade', get_string('gradenoun') . ':', $grademenu);
+ 

@@ -1,0 +1,44 @@
+diff --git a/public/mod/quiz/report/statistics/classes/task/recalculate.php b/public/mod/quiz/report/statistics/classes/task/recalculate.php
+index efd36e50155..7614ccdf9d6 100644
+--- a/public/mod/quiz/report/statistics/classes/task/recalculate.php
++++ b/public/mod/quiz/report/statistics/classes/task/recalculate.php
+@@ -140,7 +140,7 @@ class recalculate extends \core\task\adhoc_task {
+      */
+     public static function task_due_in(int $quizid): ?int {
+         $task = self::instance($quizid);
+-        $scheduledtask = manager::get_queued_adhoc_task_record($task);
++        $scheduledtask = manager::get_queued_adhoc_task_record($task, false);
+         if (!$scheduledtask) {
+             return null;
+         }
+diff --git a/public/mod/quiz/report/statistics/tests/recalculate_test.php b/public/mod/quiz/report/statistics/tests/recalculate_test.php
+index 62de45e5f8d..0e4379e3fb2 100644
+--- a/public/mod/quiz/report/statistics/tests/recalculate_test.php
++++ b/public/mod/quiz/report/statistics/tests/recalculate_test.php
+@@ -262,4 +262,26 @@ final class recalculate_test extends \advanced_testcase {
+         $this->assertNotNull(recalculate::task_due_in($quizid1));
+         $this->assertNull(recalculate::task_due_in($quizid2));
+     }
++
++    /**
++     * task_due_in should ignore tasks that have exhausted their retries, and "recalculate now" should requeue them.
++     */
++    public function test_task_due_in_ignores_failed_tasks(): void {
++        global $DB;
++        $this->resetAfterTest();
++        $this->mock_clock_with_frozen();
++        $quizid = $this->create_quiz_id();
++
++        recalculate::queue_future_run($quizid);
++        $this->assertNotNull(recalculate::task_due_in($quizid));
++
++        // Simulate the task having exhausted all of its retries.
++        $DB->set_field('task_adhoc', 'attemptsavailable', 0, ['component' => 'quiz_statistics']);
++        $DB->set_field('task_adhoc', 'nextruntime', 1, ['component' => 'quiz_statistics']);
++        $this->assertNull(recalculate::task_due_in($quizid));
++
++        // Requesting a recalculation now should make the task pending again.
++        recalculate::queue_future_run($quizid, true);
++        $this->assertSame(0, recalculate::task_due_in($quizid));
++    }
+ }

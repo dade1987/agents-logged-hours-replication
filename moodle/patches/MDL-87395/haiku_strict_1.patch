@@ -1,0 +1,34 @@
+diff --git a/public/lib/classes/task/tag_cron_task.php b/public/lib/classes/task/tag_cron_task.php
+index 5be4bb1a473..6fad6890613 100644
+--- a/public/lib/classes/task/tag_cron_task.php
++++ b/public/lib/classes/task/tag_cron_task.php
+@@ -198,15 +198,21 @@ class tag_cron_task extends scheduled_task {
+         }
+         $tagareas->close();
+ 
+-        // Get instances for each of the ids to be deleted.
++        // Get instances for each of the ids to be deleted. The ids are processed in batches, because
++        // a single IN (...) clause with too many values exceeds the maximum number of bound parameters
++        // allowed by the database (65535 for PostgreSQL).
+         if (count($tagarray) > 0) {
+-            list($sqlin, $params) = $DB->get_in_or_equal($tagarray);
+-            $sql = "SELECT ti.*, COALESCE(t.name, 'deleted') AS name, COALESCE(t.rawname, 'deleted') AS rawname
+-                      FROM {tag_instance} ti
+-                 LEFT JOIN {tag} t ON t.id = ti.tagid
+-                     WHERE ti.id $sqlin";
+-            $instances = $DB->get_records_sql($sql, $params);
+-            $this->bulk_delete_instances($instances);
++            $batchsize = 1000;
++            $tagarray = array_unique($tagarray);
++            foreach (array_chunk($tagarray, $batchsize) as $tagidbatch) {
++                list($sqlin, $params) = $DB->get_in_or_equal($tagidbatch);
++                $sql = "SELECT ti.*, COALESCE(t.name, 'deleted') AS name, COALESCE(t.rawname, 'deleted') AS rawname
++                          FROM {tag_instance} ti
++                     LEFT JOIN {tag} t ON t.id = ti.tagid
++                         WHERE ti.id $sqlin";
++                $instances = $DB->get_records_sql($sql, $params);
++                $this->bulk_delete_instances($instances);
++            }
+         }
+ 
+         core_tag_collection::cleanup_unused_tags();

@@ -1,0 +1,29 @@
+diff --git a/public/question/classes/local/bank/question_bank_helper.php b/public/question/classes/local/bank/question_bank_helper.php
+index f6b6befbc72..d0a76f1ef74 100644
+--- a/public/question/classes/local/bank/question_bank_helper.php
++++ b/public/question/classes/local/bank/question_bank_helper.php
+@@ -269,11 +269,14 @@ class question_bank_helper {
+         // Build the left joins for all modules of the type requested i.e. those that do or do not share questions.
+         $pluginjoins = [];
+         $pluginfields = [];
++        // Preview banks must never be returned. This has to be a WHERE condition rather than part of the LEFT JOIN,
++        // otherwise the preview bank's course module row is still returned with empty joined fields.
++        $previewexclusionsql = '';
+         foreach ($plugins as $key => $plugin) {
+             $join = "LEFT JOIN {{$plugin}} p{$key} ON p{$key}.id = cm.instance
+                      AND m.name = '{$plugin}'";
+             if ($plugin === self::get_default_question_bank_activity_name()) {
+-                $join .= " AND p{$key}.type <> '" . self::TYPE_PREVIEW . "'";
++                $previewexclusionsql = " AND COALESCE(p{$key}.type, '') <> '" . self::TYPE_PREVIEW . "'";
+             }
+             $pluginjoins[] = $join;
+             $pluginfields[] = "p{$key}.name";
+@@ -329,7 +332,7 @@ class question_bank_helper {
+                 {$pluginjoinsql}
+                 {$contextsql}
+                 {$catsql}
+-                WHERE 1=1 {$wheremodulesql} {$notincoursesql} {$incoursesql} {$searchsql}
++                WHERE 1=1 {$wheremodulesql} {$notincoursesql} {$incoursesql} {$searchsql} {$previewexclusionsql}
+                 GROUP BY cm.id, cm.course {$contextgroupby}
+                 {$orderbysql}";
+ 

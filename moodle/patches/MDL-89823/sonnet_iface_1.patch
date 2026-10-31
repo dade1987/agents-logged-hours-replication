@@ -1,0 +1,84 @@
+diff --git a/public/lib/classes/api/repository/api_token_repository.php b/public/lib/classes/api/repository/api_token_repository.php
+index 8773ba7243f..90ac9482737 100644
+--- a/public/lib/classes/api/repository/api_token_repository.php
++++ b/public/lib/classes/api/repository/api_token_repository.php
+@@ -53,7 +53,10 @@ class api_token_repository {
+ 
+         $record = new \stdClass();
+         $record->name = $name;
+-        $record->token = password_hash($secret, PASSWORD_DEFAULT);
++        $record->token = password_hash(
++            $this->prehash_secret($this->get_integrity_secret($secret, $scopes, $expirytime)),
++            PASSWORD_DEFAULT,
++        );
+         $record->userid = $userid;
+         $record->scopes = implode(' ', $scopes);
+         $record->description = $description;
+@@ -66,6 +69,40 @@ class api_token_repository {
+         return api_token_entity::create_from_record($record);
+     }
+ 
++    /**
++     * Combine the raw secret with the token scopes and expiry, so that the stored hash also protects them.
++     *
++     * If the scopes or expiry are modified directly in the database, verification will fail.
++     *
++     * @param string $secret The raw secret.
++     * @param string[] $scopes The scopes.
++     * @param int|null $expirytime The expiry timestamp.
++     * @return string
++     */
++    protected function get_integrity_secret(
++        #[\SensitiveParameter]
++        string $secret,
++        array $scopes,
++        ?int $expirytime,
++    ): string {
++        return json_encode([$secret, array_values($scopes), $expirytime]);
++    }
++
++    /**
++     * Pre-hash a secret so that input of any length can be safely passed to password_hash.
++     *
++     * Bcrypt truncates its input, so the value is first reduced to a fixed-length digest.
++     *
++     * @param string $secret The value to pre-hash.
++     * @return string
++     */
++    protected function prehash_secret(
++        #[\SensitiveParameter]
++        string $secret,
++    ): string {
++        return hash('sha256', $secret);
++    }
++
+     /**
+      * Get a token entity by its ID.
+      *
+@@ -189,7 +226,12 @@ class api_token_repository {
+     public function validate_token(int $tokenid, string $secret): api_token_entity {
+         $tokenentity = $this->get_by_id($tokenid);
+ 
+-        if (!password_verify($secret, $tokenentity->get_token())) {
++        $integritysecret = $this->get_integrity_secret(
++            $secret,
++            $tokenentity->get_scopes(),
++            $tokenentity->get_expirytime(),
++        );
++        if (!password_verify($this->prehash_secret($integritysecret), $tokenentity->get_token())) {
+             throw new \core\exception\invalid_api_token_exception();
+         }
+ 
+diff --git a/public/lib/classes/api/token_manager.php b/public/lib/classes/api/token_manager.php
+index 5a59145f171..95a901152bd 100644
+--- a/public/lib/classes/api/token_manager.php
++++ b/public/lib/classes/api/token_manager.php
+@@ -103,7 +103,7 @@ class token_manager {
+         $this->validate_expiry($expirytime);
+         $this->validate_scopes($scopes);
+ 
+-        $secret = random_string(self::SECRET_LENGTH);
++        $secret = bin2hex(random_bytes(self::SECRET_LENGTH));
+ 
+         $token = $this->repository->create_token(
+             $name,

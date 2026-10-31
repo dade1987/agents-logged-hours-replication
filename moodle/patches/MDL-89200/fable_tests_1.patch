@@ -1,0 +1,81 @@
+diff --git a/public/lib/classes/task/manager.php b/public/lib/classes/task/manager.php
+index 1bd67857f72..a31a10240b7 100644
+--- a/public/lib/classes/task/manager.php
++++ b/public/lib/classes/task/manager.php
+@@ -1460,7 +1460,13 @@ class manager {
+         if ($record) {
+             $record->lastruntime = $clock->time();
+             $record->faildelay = 0;
+-            $record->nextruntime = $task->get_next_scheduled_time();
++            // Only reschedule the task if the next run time was not changed while it was running.
++            // If it was changed (for example, by a "Run ASAP" request made while the task was executing),
++            // preserve that request so it is honoured on the next cron run instead of being silently
++            // overwritten with the next scheduled time.
++            if ((int)($record->nextruntime ?? 0) === (int)$task->get_next_run_time()) {
++                $record->nextruntime = $task->get_next_scheduled_time();
++            }
+             $record->timestarted = null;
+             $record->hostname = null;
+             $record->pid = null;
+diff --git a/public/lib/tests/task/manager_test.php b/public/lib/tests/task/manager_test.php
+index 7e28d285776..5bc1c453f22 100644
+--- a/public/lib/tests/task/manager_test.php
++++ b/public/lib/tests/task/manager_test.php
+@@ -702,4 +702,57 @@ final class manager_test extends \advanced_testcase {
+         $this->assertNotNull($next);
+         manager::scheduled_task_complete($next);
+     }
++
++    /**
++     * Test that a "Run ASAP" request made while a scheduled task is running is not
++     * discarded when the running task completes.
++     *
++     * @covers ::scheduled_task_complete
++     * @covers ::set_scheduled_task_nextruntime
++     */
++    public function test_run_asap_while_task_running(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $this->preventResetByRollback();
++        $clock = $this->mock_clock_with_frozen(
++            (new \DateTimeImmutable('2026-01-01 12:00:00', \core_date::get_server_timezone_object()))->getTimestamp(),
++        );
++
++        // Disable all the tasks, so we can insert our own and be sure it's the only one being run.
++        $DB->set_field('task_scheduled', 'disabled', 1);
++
++        $task = new scheduled_test_task();
++        $task->set_month('*');
++        $task->set_hour('0');
++        $task->set_next_run_time($clock->time() - HOURSECS);
++        $DB->insert_record('task_scheduled', manager::record_from_scheduled_task($task));
++
++        // Start running the task.
++        $running = manager::get_next_scheduled_task($clock->time());
++        $this->assertNotNull($running);
++        manager::scheduled_task_starting($running);
++
++        // While it is running, request that it runs ASAP.
++        $asaptime = $clock->time() - 10;
++        manager::set_scheduled_task_nextruntime($running, $asaptime);
++
++        // The running task completes: the ASAP request must be preserved.
++        manager::scheduled_task_complete($running);
++        $classname = manager::get_canonical_class_name($running);
++        $this->assertEquals($asaptime, $DB->get_field('task_scheduled', 'nextruntime', ['classname' => $classname]));
++        $this->assertNull($DB->get_field('task_scheduled', 'timestarted', ['classname' => $classname]));
++
++        // So it is picked up again on the next cron run.
++        $next = manager::get_next_scheduled_task($clock->time() + 10);
++        $this->assertNotNull($next);
++        $this->assertEquals($asaptime, $next->get_next_run_time());
++
++        // And when that run completes without any further request, it is rescheduled normally.
++        manager::scheduled_task_complete($next);
++        $nextruntime = $DB->get_field('task_scheduled', 'nextruntime', ['classname' => $classname]);
++        $this->assertEquals($next->get_next_scheduled_time(), $nextruntime);
++        $this->assertGreaterThan($clock->time(), $nextruntime);
++        $this->assertNull(manager::get_next_scheduled_task($clock->time() + 20));
++    }
+ }

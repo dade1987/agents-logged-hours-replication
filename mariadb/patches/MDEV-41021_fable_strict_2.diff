@@ -1,0 +1,47 @@
+diff --git a/mysql-test/suite/innodb/r/log_archive.result b/mysql-test/suite/innodb/r/log_archive.result
+index 3bc20f3c..a5215e8d 100644
+--- a/mysql-test/suite/innodb/r/log_archive.result
++++ b/mysql-test/suite/innodb/r/log_archive.result
+@@ -31,6 +31,9 @@ FOUND 1 /InnoDB: cannot fulfill innodb_log_recovery_target=18446744073705357290<
+ FOUND 1 /InnoDB: innodb_log_archive=ON but .*ib_logfile0 exists/ in mysqld.1.err
+ # restart: --innodb-log-recovery-start=0 --innodb-read-only --skip-innodb-log-archive
+ FOUND 2 /InnoDB: innodb_read_only prevents crash recovery between 18446744073705357279 and 18446744073705357311/ in mysqld.1.err
++# MDEV-41021 SET GLOBAL innodb_log_archive ignores read-only mode
++SET GLOBAL innodb_log_archive=!@@GLOBAL.innodb_log_archive;
++ERROR HY000: InnoDB is in read only mode
+ # restart: --innodb-log-recovery-start=0 --innodb-log-recovery-target=18446744073705357295
+ SELECT variable_name, variable_value FROM information_schema.global_status
+ WHERE variable_name LIKE 'INNODB_LSN%';
+diff --git a/mysql-test/suite/innodb/t/log_archive.test b/mysql-test/suite/innodb/t/log_archive.test
+index 282a0676..6f056c75 100644
+--- a/mysql-test/suite/innodb/t/log_archive.test
++++ b/mysql-test/suite/innodb/t/log_archive.test
+@@ -115,6 +115,9 @@ let SEARCH_PATTERN = InnoDB: innodb_log_archive=ON but .*ib_logfile0 exists;
+ --source include/restart_mysqld.inc
+ let SEARCH_PATTERN = InnoDB: innodb_read_only prevents crash recovery between 18446744073705357279 and 18446744073705357311;
+ --source include/search_pattern_in_file.inc
++--echo # MDEV-41021 SET GLOBAL innodb_log_archive ignores read-only mode
++--error ER_INNODB_READ_ONLY
++SET GLOBAL innodb_log_archive=!@@GLOBAL.innodb_log_archive;
+ 
+ --move_file $DATADIR/ib_logfile0 $DATADIR/ib_ffffffffff803000.log
+ 
+diff --git a/storage/innobase/log/log0log.cc b/storage/innobase/log/log0log.cc
+index ae236359..fed3c9b9 100644
+--- a/storage/innobase/log/log0log.cc
++++ b/storage/innobase/log/log0log.cc
+@@ -767,6 +767,14 @@ void log_t::header_rewrite(my_bool archive) noexcept
+ @param thd      SQL connection */
+ void log_t::set_archive(my_bool archive, THD *thd) noexcept
+ {
++  if (UNIV_UNLIKELY(recv_sys.rpo != 0))
++  {
++    /* innodb_read_only or innodb_log_recovery_target: the log is
++    not writable, and header_rewrite() would fail or crash. */
++    my_error(ER_INNODB_READ_ONLY, MYF(0));
++    return;
++  }
++
+   thd_wait_begin(thd, THD_WAIT_DISKIO);
+   tpool::tpool_wait_begin();
+   lsn_t wait_lsn;

@@ -1,0 +1,112 @@
+diff --git a/mysql-test/main/column_compression.result b/mysql-test/main/column_compression.result
+index 5b35d70a..ecbc4299 100644
+--- a/mysql-test/main/column_compression.result
++++ b/mysql-test/main/column_compression.result
+@@ -3051,3 +3051,43 @@ REPLACE INTO t VALUES ('abcdefghijklm');
+ UPDATE t SET c=MID(c,2,4);
+ DROP TABLE t;
+ # End of 10.6 tests
++#
++# MDEV-40417 Compressed column always gets default value added
++#
++CREATE TABLE t (
++c1 LONGTEXT COMPRESSED NOT NULL,
++nc1 LONGTEXT NOT NULL,
++c2 LONGTEXT COMPRESSED NOT NULL DEFAULT '',
++nc2 LONGTEXT NOT NULL DEFAULT '',
++c3 VARCHAR(100) COMPRESSED NOT NULL,
++nc3 VARCHAR(100) NOT NULL
++);
++SHOW CREATE TABLE t;
++Table	Create Table
++t	CREATE TABLE `t` (
++  `c1` longtext /*M!100301 COMPRESSED*/ NOT NULL,
++  `nc1` longtext NOT NULL,
++  `c2` longtext /*M!100301 COMPRESSED*/ NOT NULL DEFAULT '',
++  `nc2` longtext NOT NULL DEFAULT '',
++  `c3` varchar(100) /*M!100301 COMPRESSED*/ NOT NULL,
++  `nc3` varchar(100) NOT NULL
++) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
++SELECT COLUMN_NAME, COLUMN_DEFAULT, IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS
++WHERE TABLE_SCHEMA='test' AND TABLE_NAME='t' ORDER BY ORDINAL_POSITION;
++COLUMN_NAME	COLUMN_DEFAULT	IS_NULLABLE
++c1	NULL	NO
++nc1	NULL	NO
++c2	''	NO
++nc2	''	NO
++c3	NULL	NO
++nc3	NULL	NO
++INSERT INTO t (nc1,nc3) VALUES ('x','y');
++ERROR HY000: Field 'c1' doesn't have a default value
++INSERT INTO t (c1,nc1,c3) VALUES ('x','x','y');
++ERROR HY000: Field 'nc3' doesn't have a default value
++INSERT INTO t (c1,nc1,c3,nc3) VALUES ('x','x','y','y');
++SELECT * FROM t;
++c1	nc1	c2	nc2	c3	nc3
++x	x			y	y
++DROP TABLE t;
++# End of 10.11 tests
+diff --git a/mysql-test/main/column_compression.test b/mysql-test/main/column_compression.test
+index 2aba8862..bf2c0a96 100644
+--- a/mysql-test/main/column_compression.test
++++ b/mysql-test/main/column_compression.test
+@@ -594,3 +594,28 @@ UPDATE t SET c=MID(c,2,4);
+ DROP TABLE t;
+ 
+ --echo # End of 10.6 tests
++
++--echo #
++--echo # MDEV-40417 Compressed column always gets default value added
++--echo #
++
++CREATE TABLE t (
++  c1 LONGTEXT COMPRESSED NOT NULL,
++  nc1 LONGTEXT NOT NULL,
++  c2 LONGTEXT COMPRESSED NOT NULL DEFAULT '',
++  nc2 LONGTEXT NOT NULL DEFAULT '',
++  c3 VARCHAR(100) COMPRESSED NOT NULL,
++  nc3 VARCHAR(100) NOT NULL
++);
++SHOW CREATE TABLE t;
++SELECT COLUMN_NAME, COLUMN_DEFAULT, IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS
++  WHERE TABLE_SCHEMA='test' AND TABLE_NAME='t' ORDER BY ORDINAL_POSITION;
++--error ER_NO_DEFAULT_FOR_FIELD
++INSERT INTO t (nc1,nc3) VALUES ('x','y');
++--error ER_NO_DEFAULT_FOR_FIELD
++INSERT INTO t (c1,nc1,c3) VALUES ('x','x','y');
++INSERT INTO t (c1,nc1,c3,nc3) VALUES ('x','x','y','y');
++SELECT * FROM t;
++DROP TABLE t;
++
++--echo # End of 10.11 tests
+diff --git a/sql/field.cc b/sql/field.cc
+index 5dac5414..629cb963 100644
+--- a/sql/field.cc
++++ b/sql/field.cc
+@@ -10937,7 +10937,7 @@ bool Column_definition::check(THD *thd)
+     We need to do this check here and in mysql_create_prepare_table() as
+     sp_head::fill_field_definition() calls this function.
+   */
+-  if (!default_value && unireg_check == Field::NONE && (flags & NOT_NULL_FLAG))
++  if (!default_value && !has_default_function() && (flags & NOT_NULL_FLAG))
+   {
+     /*
+       TIMESTAMP columns get implicit DEFAULT value when
+diff --git a/sql/field.h b/sql/field.h
+index ae407e47..130c92ac 100644
+--- a/sql/field.h
++++ b/sql/field.h
+@@ -5487,7 +5487,12 @@ class Column_definition: public Sql_alloc,
+ 
+   bool has_default_function() const
+   {
+-    return unireg_check != Field::NONE;
++    /*
++      TMYSQL_COMPRESSED is not a default function, it's a flag that
++      marks a COMPRESSED column.
++    */
++    return unireg_check != Field::NONE &&
++           unireg_check != Field::TMYSQL_COMPRESSED;
+   }
+ 
+   Field *make_field(TABLE_SHARE *share, MEM_ROOT *mem_root,

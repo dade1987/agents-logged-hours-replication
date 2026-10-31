@@ -1,0 +1,44 @@
+diff --git a/sql/rpl_gtid.cc b/sql/rpl_gtid.cc
+index 9004aea2..4835133c 100644
+--- a/sql/rpl_gtid.cc
++++ b/sql/rpl_gtid.cc
+@@ -700,6 +700,22 @@ rpl_slave_state::record_gtid(THD *thd, const rpl_gtid *gtid, uint64 sub_id,
+   suspended_wfc= thd->suspend_subsequent_commits();
+   thd->lex->reset_n_backup_query_tables_list(&lex_backup);
+   tlist.init_one_table(&MYSQL_SCHEMA_NAME, &gtid_pos_table_name, NULL, TL_WRITE);
++  /*
++    Reset the option bits before opening and locking the table, so that the
++    storage engine does not register itself in the "all" transaction (which
++    would happen with autocommit=0) and then get committed as a statement
++    transaction only.
++  */
++  if (!in_transaction)
++  {
++    DBUG_PRINT("info", ("resetting OPTION_BEGIN"));
++    thd->variables.option_bits&=
++      ~(ulonglong)(OPTION_NOT_AUTOCOMMIT |OPTION_BEGIN |OPTION_BIN_LOG |
++                   OPTION_GTID_BEGIN);
++  }
++  else
++    thd->variables.option_bits&= ~(ulonglong)OPTION_BIN_LOG;
++
+   if ((err= open_and_lock_tables(thd, &tlist, FALSE, 0)))
+     goto end;
+   table_opened= true;
+@@ -714,16 +730,6 @@ rpl_slave_state::record_gtid(THD *thd, const rpl_gtid *gtid, uint64 sub_id,
+   thd->wsrep_ignore_table= true; // Do not replicate mysql.gtid_slave_pos table
+ #endif
+ 
+-  if (!in_transaction)
+-  {
+-    DBUG_PRINT("info", ("resetting OPTION_BEGIN"));
+-    thd->variables.option_bits&=
+-      ~(ulonglong)(OPTION_NOT_AUTOCOMMIT |OPTION_BEGIN |OPTION_BIN_LOG |
+-                   OPTION_GTID_BEGIN);
+-  }
+-  else
+-    thd->variables.option_bits&= ~(ulonglong)OPTION_BIN_LOG;
+-
+   bitmap_set_all(table->write_set);
+   table->rpl_write_set= table->write_set;
+ 

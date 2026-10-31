@@ -1,0 +1,49 @@
+diff --git a/public/backup/util/loggers/file_logger.class.php b/public/backup/util/loggers/file_logger.class.php
+index 797ffa0e29f..ae7451e8917 100644
+--- a/public/backup/util/loggers/file_logger.class.php
++++ b/public/backup/util/loggers/file_logger.class.php
+@@ -29,8 +29,9 @@
+  */
+ class file_logger extends base_logger {
+ 
+-    protected $fullpath; // Full path to OS file where contents will be stored
+-    protected $fhandle;  // File handle where all write operations happen
++    protected $fullpath;     // Full path to OS file where contents will be stored
++    protected $relativepath; // Relative path (just the filename) to OS file, relative to $CFG->backuptempdir
++    protected $fhandle;      // File handle where all write operations happen
+ 
+     public function __construct($level, $showdate = false, $showlevel = false, $fullpath = null) {
+         if (empty($fullpath)) {
+@@ -41,6 +42,7 @@ class file_logger extends base_logger {
+         }
+         // Open the OS file for writing (append)
+         $this->fullpath = $fullpath;
++        $this->relativepath = basename($fullpath);
+         if ($level > backup::LOG_NONE) { // Only create the file if we are going to log something
+             if (! $this->fhandle = fopen($this->fullpath, 'a')) {
+                 throw new base_logger_exception('error_opening_file', $fullpath);
+@@ -62,16 +64,18 @@ class file_logger extends base_logger {
+             @fclose($this->fhandle);
+             $this->fhandle = null;
+         }
+-        return array('level', 'showdate', 'showlevel', 'next', 'fullpath');
++        // Only the relative path is serialized, so the backup stays portable across hosts/backuptempdir changes.
++        return array('level', 'showdate', 'showlevel', 'next', 'relativepath');
+     }
+ 
+     public function __wakeup() {
+-        // If the stored path no longer exists, reconstruct it using the current backup temp dir.
+-        if (!empty($this->fullpath) && !file_exists(dirname($this->fullpath))) {
+-            $filename = basename($this->fullpath);
+-            $backuptempdir = make_backup_temp_directory('');
+-            $this->fullpath = $backuptempdir . '/' . $filename;
++        // Rebuild the full path on the fly using the current backup temp dir.
++        if (empty($this->relativepath)) {
++            // Loggers serialized by previous versions stored the absolute path instead.
++            $this->relativepath = basename((string)$this->fullpath);
+         }
++        $backuptempdir = make_backup_temp_directory('');
++        $this->fullpath = $backuptempdir . '/' . $this->relativepath;
+ 
+         if ($this->level > backup::LOG_NONE) { // Only create the file if we are going to log something
+             if (! $this->fhandle = fopen($this->fullpath, 'a')) {

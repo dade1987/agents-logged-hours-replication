@@ -1,0 +1,128 @@
+diff --git a/mysql-test/main/func_json_notembedded.result b/mysql-test/main/func_json_notembedded.result
+index cf895da6..e6fcbc3d 100644
+--- a/mysql-test/main/func_json_notembedded.result
++++ b/mysql-test/main/func_json_notembedded.result
+@@ -55,3 +55,29 @@ set global max_allowed_packet=default;
+ #
+ # End of 10.6 tests
+ #
++#
++# MDEV-39743 IS JSON was not interuptable
++#
++set global max_allowed_packet=1073741824;
++connect u,localhost,root;
++set group_concat_max_len= 1000000000;
++set @obj=concat_ws('','{', repeat('"a":"b",', 1250000/2), '"c":"d"}');
++set @arr=concat_ws('','[', repeat('1234567,', 1250000/2), '2345678]');
++set max_statement_time=0.0001;
++SET @old_debug= @@debug_dbug;
++SET debug_dbug='+d,json_pause_execution';
++select @obj is json;
++ERROR 70100: Query was interrupted: execution time limit 0.0001 sec exceeded
++select @arr is json array;
++ERROR 70100: Query was interrupted: execution time limit 0.0001 sec exceeded
++select @obj is json object with unique keys;
++ERROR 70100: Query was interrupted: execution time limit 0.0001 sec exceeded
++select @arr is not json;
++ERROR 70100: Query was interrupted: execution time limit 0.0001 sec exceeded
++SET debug_dbug= @old_debug;
++disconnect u;
++connection default;
++set global max_allowed_packet=default;
++#
++# End of 12.3 tests
++#
+diff --git a/mysql-test/main/func_json_notembedded.test b/mysql-test/main/func_json_notembedded.test
+index bf5cc4d9..8b856a2f 100644
+--- a/mysql-test/main/func_json_notembedded.test
++++ b/mysql-test/main/func_json_notembedded.test
+@@ -46,3 +46,29 @@ set global max_allowed_packet=default;
+ --echo #
+ --echo # End of 10.6 tests
+ --echo #
++
++--echo #
++--echo # MDEV-39743 IS JSON was not interuptable
++--echo #
++set global max_allowed_packet=1073741824;
++connect u,localhost,root;
++set group_concat_max_len= 1000000000;
++set @obj=concat_ws('','{', repeat('"a":"b",', 1250000/2), '"c":"d"}');
++set @arr=concat_ws('','[', repeat('1234567,', 1250000/2), '2345678]');
++set max_statement_time=0.0001;
++disable_abort_on_error;
++SET @old_debug= @@debug_dbug;
++SET debug_dbug='+d,json_pause_execution';
++select @obj is json;
++select @arr is json array;
++select @obj is json object with unique keys;
++select @arr is not json;
++enable_abort_on_error;
++SET debug_dbug= @old_debug;
++disconnect u;
++connection default;
++set global max_allowed_packet=default;
++
++--echo #
++--echo # End of 12.3 tests
++--echo #
+diff --git a/sql/item_jsonfunc.cc b/sql/item_jsonfunc.cc
+index 3f49b122..8dd45e4a 100644
+--- a/sql/item_jsonfunc.cc
++++ b/sql/item_jsonfunc.cc
+@@ -6499,16 +6499,22 @@ bool Item_func_is_json::val_bool()
+ {
+   bool result= true;
+   bool unique_keys= true;
+-  String *js= args[0]->val_json(&tmp_value);
++  THD *thd= current_thd;
++  String *js;
++
++  JSON_DO_PAUSE_EXECUTION(thd, 0.0002);
++
++  js= args[0]->val_json(&tmp_value);
+ 
+   if ((null_value= args[0]->null_value))
+     return 0;
+ 
+   json_scan_start(&je, js->charset(), (const uchar*)js->ptr(),
+                   (const uchar*)js->end());
++  je.killed_ptr= (uint32_t *) &thd->killed;
+ 
+   if (json_read_value(&je))
+-    return negated;
++    goto js_error;
+ 
+   switch (type_constraint)
+   {
+@@ -6536,17 +6542,28 @@ bool Item_func_is_json::val_bool()
+       unique_keys= handle_nested_value(&je);
+ 
+     if (je.s.error)
+-      return negated;
++      goto js_error;
+   }
+   else
+   {
+     // verify JSON is well-formed
+     while (json_scan_next(&je) == 0) {}
+     if (je.s.error)
+-      return negated;
++      goto js_error;
+   }
+ 
+   return negated ? !(result && unique_keys) : (result && unique_keys);
++
++js_error:
++  if (je.s.error == JE_KILLED)
++  {
++    /* The query was killed or timed out: report it and return NULL. */
++    report_json_error(js, &je, 0);
++    null_value= 1;
++    return 0;
++  }
++  /* Any other error means the value is not a valid JSON document. */
++  return negated;
+ }
+ 
+ 

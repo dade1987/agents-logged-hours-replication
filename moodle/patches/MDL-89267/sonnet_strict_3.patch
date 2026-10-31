@@ -1,0 +1,80 @@
+diff --git a/public/backup/moodle2/backup_stepslib.php b/public/backup/moodle2/backup_stepslib.php
+index aec50f520e9..defb3689b2c 100644
+--- a/public/backup/moodle2/backup_stepslib.php
++++ b/public/backup/moodle2/backup_stepslib.php
+@@ -2757,7 +2757,7 @@ class backup_questions_structure_step extends backup_structure_step {
+             ],
+         );
+ 
+-        $questionverion->set_source_table('question_versions', ['questionbankentryid' => backup::VAR_PARENTID]);
++        $questionverion->set_source_table('question_versions', ['questionbankentryid' => backup::VAR_PARENTID], 'version ASC');
+ 
+         $question->set_source_sql('
+                 SELECT q.*
+diff --git a/public/backup/moodle2/restore_stepslib.php b/public/backup/moodle2/restore_stepslib.php
+index 981e26797fb..9c588a790e1 100644
+--- a/public/backup/moodle2/restore_stepslib.php
++++ b/public/backup/moodle2/restore_stepslib.php
+@@ -5408,6 +5408,12 @@ class restore_create_categories_and_questions extends restore_structure_step {
+                 $this->latestqbe->oldid = $this->latestqbe->id;
+                 $this->latestqbe->newid = $newquestionversion->questionbankentryid;
+                 $this->set_mapping('question_bank_entry', $this->latestqbe->oldid, $this->latestqbe->newid);
++            } else if ($this->latestqbe->newid != $newquestionversion->questionbankentryid) {
++                // A sibling version processed earlier caused a new question bank entry to be created, but this version
++                // already exists in another entry. Merge the earlier versions into the existing entry.
++                $this->merge_question_bank_entry($this->latestqbe->newid, $newquestionversion->questionbankentryid);
++                $this->latestqbe->newid = $newquestionversion->questionbankentryid;
++                $this->set_mapping('question_bank_entry', $this->latestqbe->oldid, $this->latestqbe->newid);
+             }
+         }
+ 
+@@ -5418,6 +5424,49 @@ class restore_create_categories_and_questions extends restore_structure_step {
+         // step will be in charge of restoring all the question files.
+     }
+ 
++    /**
++     * Move all versions from a question bank entry created during this restore into an existing entry, then remove it.
++     *
++     * @param int $fromentryid The question bank entry created by restore.
++     * @param int $toentryid The pre-existing question bank entry that should hold the versions.
++     */
++    protected function merge_question_bank_entry(int $fromentryid, int $toentryid): void {
++        global $DB;
++
++        $transaction = $DB->start_delegated_transaction();
++        $moving = $DB->get_records('question_versions', ['questionbankentryid' => $fromentryid], 'version ASC');
++        foreach ($moving as $movingversion) {
++            if (
++                $DB->record_exists(
++                    'question_versions',
++                    ['questionbankentryid' => $toentryid, 'version' => $movingversion->version],
++                )
++            ) {
++                // Make room, moving higher versions (and their references) up one at a time, highest first.
++                $moveversions = $DB->get_records_select(
++                    'question_versions',
++                    'questionbankentryid = :questionbankentryid AND version >= :oldversion',
++                    ['questionbankentryid' => $toentryid, 'oldversion' => $movingversion->version],
++                    'version DESC',
++                );
++                foreach ($moveversions as $moveversion) {
++                    $DB->set_field('question_versions', 'version', $moveversion->version + 1, [
++                        'questionbankentryid' => $toentryid,
++                        'version' => $moveversion->version,
++                    ]);
++                    $DB->set_field('question_references', 'version', $moveversion->version + 1, [
++                        'questionbankentryid' => $toentryid,
++                        'version' => $moveversion->version,
++                    ]);
++                }
++                versions::get_next_version($toentryid);
++            }
++            $DB->set_field('question_versions', 'questionbankentryid', $toentryid, ['id' => $movingversion->id]);
++        }
++        $DB->delete_records('question_bank_entries', ['id' => $fromentryid]);
++        $transaction->allow_commit();
++    }
++
+     protected function process_question_hint($data) {
+         global $DB;
+ 

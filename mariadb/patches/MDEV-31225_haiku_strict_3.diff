@@ -1,0 +1,19 @@
+diff --git a/sql/sql_tvc.cc b/sql/sql_tvc.cc
+index 46835972..45f2a3ba 100644
+--- a/sql/sql_tvc.cc
++++ b/sql/sql_tvc.cc
+@@ -894,6 +894,14 @@ static bool cmp_row_types(Item* item1, Item* item2)
+   {
+     Item *inner= item1->element_index(i);
+     Item *outer= item2->element_index(i);
++    /*
++      Nested row elements (e.g. ROW(a,(a,a))) are not supported by the
++      materialization check: Type_handler_row::subquery_type_allows_materialization()
++      is not applicable to them. Treat them as not comparable so that the
++      IN predicate is not converted into a subquery (MDEV-31225).
++    */
++    if (inner->cmp_type() == ROW_RESULT || outer->cmp_type() == ROW_RESULT)
++      return true;
+     if (!inner->type_handler()->subquery_type_allows_materialization(inner,
+                                                                      outer,
+                                                                      true))

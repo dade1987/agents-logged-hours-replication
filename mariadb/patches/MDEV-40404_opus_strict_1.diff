@@ -1,0 +1,22 @@
+diff --git a/storage/innobase/row/row0sel.cc b/storage/innobase/row/row0sel.cc
+index f56810e9..49f8148e 100644
+--- a/storage/innobase/row/row0sel.cc
++++ b/storage/innobase/row/row0sel.cc
+@@ -1249,12 +1249,17 @@ sel_set_rtr_rec_lock(
+ 		match->matched_recs->clear();
+ 		// FIXME: check for !cur_block
+ 
++		/* rtr_cur_search_with_match() may reinitialize
++		match->block by rtr_init_match(), which requires
++		that the latch of match->block is not being held. */
++		match->block->page.lock.x_unlock();
+ 		rtr_cur_search_with_match(
+ 			cur_block, index,
+ 			pcur->btr_cur.rtr_info->search_tuple,
+ 			pcur->btr_cur.rtr_info->search_mode,
+ 			&pcur->btr_cur.page_cur,
+ 			pcur->btr_cur.rtr_info);
++		match->block->page.lock.x_lock();
+ 
+ 		if (!page_is_leaf(buf_block_get_frame(cur_block))) {
+ 			/* Page got splitted and promoted (only for

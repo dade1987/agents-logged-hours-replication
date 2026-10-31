@@ -1,0 +1,52 @@
+diff --git a/public/lib/classes/plugininfo/orphaned.php b/public/lib/classes/plugininfo/orphaned.php
+index 2c496ae9320..71c0eb296c3 100644
+--- a/public/lib/classes/plugininfo/orphaned.php
++++ b/public/lib/classes/plugininfo/orphaned.php
+@@ -76,6 +76,7 @@ class orphaned extends base {
+             $plugin->type        = $type;
+             $plugin->typerootdir = $typerootdir;
+             $plugin->name        = $name;
++            $plugin->component   = $plugin->type . '_' . $plugin->name;
+             $plugin->rootdir     = null;
+             $plugin->displayname = $name;
+             $plugin->versiondb   = $version;
+diff --git a/public/lib/tests/plugin_manager_test.php b/public/lib/tests/plugin_manager_test.php
+index cdd59b5f1a4..8416675baed 100644
+--- a/public/lib/tests/plugin_manager_test.php
++++ b/public/lib/tests/plugin_manager_test.php
+@@ -1090,4 +1090,35 @@ final class plugin_manager_test extends \advanced_testcase {
+         );
+         $this->assertDebuggingCalled();
+     }
++
++    /**
++     * Orphaned subplugins (whose parent plugin was removed from disk) must still be
++     * identified by their full component name so they can be uninstalled.
++     *
++     * @covers \core\plugininfo\orphaned::get_plugins
++     */
++    public function test_orphaned_subplugin_can_be_uninstalled(): void {
++        $this->resetAfterTest();
++
++        // Simulate the DB records left behind by a subplugin whose parent was removed from disk.
++        set_config('version', 2025010100, 'orphanedtype_alpha');
++        core_plugin_manager::reset_caches();
++
++        $pluginman = core_plugin_manager::instance();
++
++        $plugininfo = $pluginman->get_plugin_info('orphanedtype_alpha');
++        $this->assertInstanceOf(\core\plugininfo\orphaned::class, $plugininfo);
++        $this->assertSame('orphanedtype', $plugininfo->type);
++        $this->assertSame('alpha', $plugininfo->name);
++        $this->assertSame('orphanedtype_alpha', $plugininfo->component);
++        $this->assertSame(core_plugin_manager::PLUGIN_STATUS_MISSING, $plugininfo->get_status());
++
++        $this->assertArrayHasKey('orphanedtype', $pluginman->get_plugins());
++        $this->assertArrayHasKey('alpha', $pluginman->get_plugins_of_type('orphanedtype'));
++
++        $this->assertTrue($pluginman->can_uninstall_plugin('orphanedtype_alpha'));
++        $uninstallurl = $pluginman->get_uninstall_url('orphanedtype_alpha');
++        $this->assertInstanceOf(\moodle_url::class, $uninstallurl);
++        $this->assertEquals('orphanedtype_alpha', $uninstallurl->param('uninstall'));
++    }
+ }

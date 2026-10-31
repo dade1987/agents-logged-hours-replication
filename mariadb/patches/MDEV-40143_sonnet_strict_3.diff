@@ -1,0 +1,34 @@
+diff --git a/sql/item_geofunc.cc b/sql/item_geofunc.cc
+index 29c1bd56..9a38b794 100644
+--- a/sql/item_geofunc.cc
++++ b/sql/item_geofunc.cc
+@@ -2132,24 +2132,26 @@ String *Item_func_buffer::val_str(String *str_value)
+ 
+ longlong Item_func_isvalid::val_int()
+ {
++  DBUG_ASSERT(fixed());
+   String *wkb= args[0]->val_str(&tmp);
+   Geometry_buffer buffer;
+   Geometry *geometry;
+ 
+   int valid;
+-  if ((args[0]->null_value ||
++  null_value= 0;
++  if ((args[0]->null_value || !wkb ||
+       !(geometry= Geometry::construct(&buffer, wkb->ptr(), wkb->length()))))
+   {
+     if (!args[0]->null_value)
+       my_error(ER_GIS_INVALID_DATA, MYF(0), func_name());
+     null_value= 1;
+-    return 1;
++    return 0;
+   }
+ 
+   if (geometry->is_valid(&valid))
+   {
+     null_value= 1;
+-    return 1;
++    return 0;
+   }
+ 
+   return (longlong) valid;

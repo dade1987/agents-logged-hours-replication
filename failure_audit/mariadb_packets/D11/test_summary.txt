@@ -1,0 +1,124 @@
+Evaluation: the agent's diff (without its own mysql-test changes) was applied on the parent commit, the developers' mysql-test files from the fix were added, the server was built (debug) and the fix's mtr tests were run: ['main.alter_table_combinations']
+On the parent commit these tests FAIL; with the human fix they PASS.
+
+AGENT RESULT: FAIL
+main.alter_table_combinations 'heap'     w3 [ fail ]
+        Test ended at 2026-10-28 07:30:55
+
+CURRENT_TEST: main.alter_table_combinations
+mysqltest: At line 269: query 'ALTER TABLE t FORCE, ALGORITHM=COPY, LOCK=EXCLUSIVE' failed: <Unknown> (2013): Lost connection to server during query
+
+The result from queries just before the failure was:
+< snip >
+create or replace table t1 (x int, y int, unique (y), unique (x), primary key(x)) engine myisam;
+alter table t1 change x xx int, algorithm=inplace;
+check table t1;
+Table	Op	Msg_type	Msg_text
+test.t1	check	status	OK
+create or replace table t1 (x int, y int, unique (y), unique (x), primary key(x));
+alter table t1 change x xx int, algorithm=inplace;
+check table t1;
+Table	Op	Msg_type	Msg_text
+test.t1	check	note	The storage engine for the table doesn't support check
+drop table t1;
+#
+# End of 10.5 tests
+#
+#
+# MDEV-31808 Server crash upon altering table with NEXTVAL for default under exclusive lock
+#
+CREATE SEQUENCE s ENGINE=Aria;
+CREATE TABLE t (a INT DEFAULT(NEXTVAL(s)), b INT);
+ALTER TABLE t FORCE, ALGORITHM=COPY, LOCK=EXCLUSIVE;
+
+More results from queries before failure can be found in /home/mtr/var/t/3/log/alter_table_combinations,heap.log
+
+
+Server [mysqld.1 - pid: 16910, winpid: 16910, exit: 256] failed during test run
+Server log from this test:
+----------SERVER LOG START-----------
+$ /home/user/mdb_build_dbg/sql/mariadbd --defaults-group-suffix=.1 --defaults-file=/home/mtr/var/t/3/my.cnf --log-output=file --core-file --loose-debug-sync-timeout=300
+2026-10-28  7:30:50 0 [Warning] Could not increase number of max_open_files to more than 1024 (request: 32186)
+2026-10-28  7:30:50 0 [Warning] Changed limits: max_open_files: 1024  max_connections: 151 (was 151)  table_cache: 421 (was 2000)
+2026-10-28  7:30:50 0 [Note] Starting MariaDB 10.6.28-MariaDB-debug-log source revision 43565b932e52fcecea6587db9bb1ec6af1292f63 server_uid zuyo88trYl5F5y0WPhf4gXJsbDA= as process 16911
+2026-10-28  7:30:50 0 [Note] Plugin 'partition' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'SEQUENCE' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'InnoDB' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'INNODB_FT_CONFIG' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'INNODB_SYS_TABLESTATS' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'INNODB_CMP_PER_INDEX' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'INNODB_FT_DELETED' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'INNODB_CMP' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'THREAD_POOL_WAITS' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'INNODB_CMP_RESET' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'THREAD_POOL_QUEUES' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'INNODB_SYS_FIELDS' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'INNODB_BUFFER_PAGE_LRU' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'FEEDBACK' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'INNODB_FT_INDEX_TABLE' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'INNODB_CMPMEM' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'THREAD_POOL_GROUPS' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'INNODB_CMP_PER_INDEX_RESET' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'INNODB_SYS_FOREIGN_COLS' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'INNODB_FT_INDEX_CACHE' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'INNODB_BUFFER_POOL_STATS' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'INNODB_FT_BEING_DELETED' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'INNODB_SYS_FOREIGN' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'INNODB_CMPMEM_RESET' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'INNODB_FT_DEFAULT_STOPWORD' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'INNODB_SYS_TABLES' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'INNODB_SYS_COLUMNS' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'INNODB_SYS_TABLESPACES' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'INNODB_SYS_INDEXES' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'INNODB_SYS_VIRTUAL' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'user_variables' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'INNODB_TABLESPACES_ENCRYPTION' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'THREAD_POOL_STATS' is disabled.
+2026-10-28  7:30:50 0 [Note] Plugin 'unix_socket' is disabled.
+2026-10-28  7:30:50 0 [Warning] /home/user/mdb_build_dbg/sql/mariadbd: unknown option '--loose-pam-debug'
+2026-10-28  7:30:50 0 [Warning] /home/user/mdb_build_dbg/sql/mariadbd: unknown option '--loose-aria'
+2026-10-28  7:30:50 0 [Note] Server socket created on IP: '127.0.0.1'.
+2026-10-28  7:30:51 0 [Note] /home/user/mdb_build_dbg/sql/mariadbd: ready for connections.
+Version: '10.6.28-MariaDB-debug-log'  socket: '/home/mtr/var/t/tmp/3/mysqld.1.sock'  port: 19060  Source distribution
+261028  7:30:51 [ERROR] /home/user/mdb_build_dbg/sql/mariadbd got signal 11 ;
+Sorry, we probably made a mistake, and this is a bug.
+
+Your assistance in bug reporting will enable us to fix this for the next release.
+To report this bug, see https://mariadb.com/kb/en/reporting-bugs about how to report
+a bug on https://jira.mariadb.org/.
+
+Please include the information from the server start above, to the end of the
+information below.
+
+Server version: 10.6.28-MariaDB-debug-log source revision: 43565b932e52fcecea6587db9bb1ec6af1292f63
+
+The information page at https://mariadb.com/kb/en/how-to-produce-a-full-stack-trace-for-mariadbd/
+contains instructions to obtain a better version of the backtrace below.
+Following these instructions will help MariaDB developers provide a fix quicker.
+
+Attempting backtrace. Include this in the bug report.
+(note: Retrieving this information may fail)
+
+Thread pointer: 0x7f4bd8000dc8
+stack_bottom = 0x7f4bf4d07000 thread_stack 0x49000
+mysys/stacktrace.c:215(my_print_stacktrace)[0x55c26c965c2f]
+sql/signal_handler.cc:230(handle_fatal_signal)[0x55c26bfc0e3f]
+libc_sigaction.c:0(__restore_rt)[0x7f4bfaa45330]
+sql/sql_table.cc:11023(mysql_alter_table(THD*, st_mysql_const_lex_string const*, st_mysql_const_lex_string const*, HA_CREATE_INFO*, TABLE_LIST*, Recreate_info*, Alter_info*, unsigned int, st_order*, bool, bool))[0x55c26bd10284]
+sql/sql_alter.cc:675(Sql_cmd_alter_table::execute(THD*))[0x55c26bdd113b]
+sql/sql_parse.cc:6166(mysql_execute_command(THD*, bool))[0x55c26bbf39fa]
+sql/sql_parse.cc:8199(mysql_parse(THD*, char*, unsigned int, Parser_state*))[0x55c26bbf91e9]
+sql/sql_parse.cc:1913(dispatch_command(enum_server_command, THD*, char*, unsigned int, bool))[0x55c26bbe75e7]
+sql/sql_parse.cc:1421(do_command(THD*, bool))[0x55c26bbe63ea]
+sql/sql_connect.cc:1393(do_handle_one_connection(CONNECT*, bool))[0x55c26bdc4d9c]
+sql/sql_connect.cc:1307(handle_one_connection)[0x55c26bdc4b28]
+perfschema/pfs.cc:2203(pfs_spawn_thread)[0x55c26c33d91c]
+nptl/pthread_create.c:447(start_thread)[0x7f4bfaa9cb84]
+x86_64/clone3.S:80(clone3)[0x7f4bfab29ecc]
+
+Connection ID (thread ID): 4
+Status: NOT_KILLED
+Query (0x7f4bd8014f60): ALTER TABLE t FORCE, ALGORITHM=COPY, LOCK=EXCLUSIVE
+Optimizer switch: index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,index_merge_sort_intersection=off,engine_condition_pushdown=off,index_condition_pushdown=on,derived_merge=on,derived_with_keys=on,firstmatch=on,loosescan=on,materialization=on,in_to_exists=on,semijoin=on,partial_match_rowid_merge=on,partial_match_table_scan=on,subquery_cache=on,mrr=off,mrr_cost_based=off,mrr_sort_keys=off,outer_join_with_cache=on,semijoin_with_cache=on,join_cache_incremental=on,join_cache_hashed=on,join_cache_bka=on,optimize_join_buffer_size=on,table_elimination=on,extended_keys=on,exists_to_in=on,orderby_uses_equalities=on,condition_pushdown_for_derived=on,split_materialized=on,condition_pushdown_for_subquery=on,rowid_filter=on,condition_pushdown_from_having=on,not_null_range_scan=off,hash_join_cardinality=off,cset_narrowing=off
+
+Writing a core file...

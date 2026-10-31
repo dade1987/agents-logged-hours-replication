@@ -1,0 +1,56 @@
+You are a software engineer fixing an issue in MariaDB Server (C/C++). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot build MariaDB or run its test suite. Read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update mysql-test tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDEV-40143: Inconsistent ST_IsValid() result between VIEW、CTE and TEMPORARY TABLE over RIGHT JOIN with ST_Dimension() predicate
+
+h2. Description:
+An equivalent VIEW, CTE, and TEMPORARY TABLE query produce inconsistent results when ST_IsValid() is evaluated over a RIGHT JOIN query body filtered by ST_Dimension(), and the result is filtered by an outer predicate.
+
+h2. Environment:
+MariaDB version: 12.2.2-MariaDB-ubu2404
+OS: Ubuntu 24.04
+
+h2. How to repeat:
+-- Table setup
+CREATE TABLE t0 (c0 INT,c1 POINT);
+INSERT INTO t0 VALUES (-4, Point(0,0));
+INSERT INTO t0 VALUES (6, NULL);
+INSERT INTO t0 VALUES (9, Point(1,1));
+
+-- VIEW construct
+CREATE VIEW v0 AS 
+SELECT ST_IsValid(a.c1) AS vc_0 FROM t0 AS a RIGHT JOIN t0 AS b ON a.c0 <=> b.c0 WHERE ST_Dimension(b.c1) >= 0; 
+
+SELECT vc_0 FROM v0 WHERE vc_0 > 0;  
+
+-- CTE construct
+WITH CTE AS (
+SELECT ST_IsValid(a.c1) AS vc_0 FROM t0 AS a RIGHT JOIN t0 AS b ON a.c0 <=> b.c0 WHERE ST_Dimension(b.c1) >= 0)
+SELECT vc_0 FROM CTE WHERE vc_0 > 0;  
+
+-- TEMPORARY TABLE construct
+CREATE TEMPORARY TABLE temp_t AS
+SELECT ST_IsValid(a.c1) AS vc_0 FROM t0 AS a RIGHT JOIN t0 AS b ON a.c0 <=> b.c0 WHERE ST_Dimension(b.c1) >= 0;
+
+SELECT vc_0 FROM temp_t WHERE vc_0 > 0 ;  
+
+Actual results:
+VIEW query returns:
+  1
+
+CTE query returns:
+  NULL
+
+TEMPORARY TABLE query returns:
+  1
+  1
+
+h2. Expected results:
+The three queries are constructed from the same query body and evaluated under the same database state with the same outer filtering condition. Therefore, they should return consistent results.
+

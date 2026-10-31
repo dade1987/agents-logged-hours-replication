@@ -1,0 +1,40 @@
+diff --git a/storage/innobase/fts/fts0exec.cc b/storage/innobase/fts/fts0exec.cc
+index 197eebc6..7f8bd27d 100644
+--- a/storage/innobase/fts/fts0exec.cc
++++ b/storage/innobase/fts/fts0exec.cc
+@@ -764,6 +764,27 @@ dberr_t AuxRecordReader::default_word_processor(
+   ulint ilist_len;
+   const byte* ilist_data= rec_get_nth_field(rec, offsets, 6, &ilist_len);
+ 
++  /* A large ilist may be stored off-page. rec_get_nth_field() then
++  returns only the local prefix, so fetch the whole ilist from the
++  external pages, as the query-side reader does. The copy lives in
++  ilist_heap and is released once it has been copied into the node. */
++  mem_heap_t* ilist_heap= nullptr;
++  if (rec_offs_nth_extern(offsets, 6) && ilist_data &&
++      ilist_len != UNIV_SQL_NULL)
++  {
++    ilist_heap= mem_heap_create(ilist_len + 1000);
++    ulint external_len;
++    ilist_data= btr_copy_externally_stored_field(
++      &external_len, ilist_data, index->table->space->zip_size(),
++      ilist_len, ilist_heap);
++    if (!ilist_data)
++    {
++      mem_heap_free(ilist_heap);
++      return DB_CORRUPTION;
++    }
++    ilist_len= external_len;
++  }
++
+   fts_word_t *word;
+   bool is_word_init= false;
+ 
+@@ -810,6 +831,7 @@ dberr_t AuxRecordReader::default_word_processor(
+     }
+     if (ilist_len == 0) return DB_SUCCESS_LOCKED_REC;
+   }
++  if (ilist_heap) mem_heap_free(ilist_heap);
+ 
+   if (this->total_memory)
+   {

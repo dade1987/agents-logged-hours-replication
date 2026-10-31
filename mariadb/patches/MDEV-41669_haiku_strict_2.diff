@@ -1,0 +1,71 @@
+diff --git a/mysql-test/suite/innodb/r/import_bugs.result b/mysql-test/suite/innodb/r/import_bugs.result
+index 20e70f03..6e3acd06 100644
+--- a/mysql-test/suite/innodb/r/import_bugs.result
++++ b/mysql-test/suite/innodb/r/import_bugs.result
+@@ -39,6 +39,7 @@ id INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,
+ PRIMARY KEY (id)
+ ) ENGINE=INNODB;
+ CREATE TABLE t2 LIKE t1;
++START TRANSACTION WITH CONSISTENT SNAPSHOT;
+ ALTER TABLE t2 DISCARD TABLESPACE;
+ INSERT INTO t1() VALUES();
+ INSERT INTO t1() VALUES();
+@@ -64,6 +65,8 @@ id
+ 3
+ 4
+ 5
++SELECT * FROM t2;
++ERROR HY000: Table definition has changed, please retry transaction
+ DROP TABLE t2;
+ #
+ # MDEV-34181  Instant table aborts after discard tablespace
+diff --git a/mysql-test/suite/innodb/t/import_bugs.test b/mysql-test/suite/innodb/t/import_bugs.test
+index 1b7edcf8..e50effbd 100644
+--- a/mysql-test/suite/innodb/t/import_bugs.test
++++ b/mysql-test/suite/innodb/t/import_bugs.test
+@@ -53,6 +53,10 @@ CREATE TABLE t1(
+ 
+ CREATE TABLE t2 LIKE t1;
+ 
++--connect mvcc,localhost,root
++START TRANSACTION WITH CONSISTENT SNAPSHOT;
++--connection default
++
+ ALTER TABLE t2 DISCARD TABLESPACE;
+ 
+ INSERT INTO t1() VALUES();
+@@ -80,6 +84,12 @@ INSERT INTO t2() VALUES();
+ INSERT INTO t2() VALUES();
+ 
+ SELECT * FROM t2 ORDER BY id;
++
++--connection mvcc
++--error ER_TABLE_DEF_CHANGED
++SELECT * FROM t2;
++--disconnect mvcc
++--connection default
+ DROP TABLE t2;
+ 
+ --echo #
+diff --git a/storage/innobase/row/row0import.cc b/storage/innobase/row/row0import.cc
+index c589b8f2..4daa4ef5 100644
+--- a/storage/innobase/row/row0import.cc
++++ b/storage/innobase/row/row0import.cc
+@@ -4998,6 +4998,17 @@ row_import_for_mysql(
+ 		goto import_error;
+ 	}
+ 
++	/* The imported records are not covered by the history of the
++	transactions that were active before the IMPORT, so read views
++	that were opened before this transaction must not use the
++	indexes. Otherwise, the imported contents would be visible to
++	them (MVCC violation). */
++	for (dict_index_t* index = dict_table_get_first_index(table);
++	     index != nullptr;
++	     index = dict_table_get_next_index(index)) {
++		index->trx_id = trx->id;
++	}
++
+ 	err = row_import_update_discarded_flag(trx, table->id, false);
+ 
+ 	if (err != DB_SUCCESS) {

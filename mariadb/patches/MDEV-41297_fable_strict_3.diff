@@ -1,0 +1,136 @@
+diff --git a/mysql-test/suite/heap/blob_group_by.result b/mysql-test/suite/heap/blob_group_by.result
+index d46a2297..48c9a702 100644
+--- a/mysql-test/suite/heap/blob_group_by.result
++++ b/mysql-test/suite/heap/blob_group_by.result
+@@ -60,3 +60,55 @@ HEX(val)	cnt
+ 0107	2
+ DROP TABLE t1;
+ # End of MDEV-38975 GROUP BY blob tests
++#
++# MDEV-41297 Wrong result upon DISTINCT/GROUP BY/UNION on TEXT with
++#            empty and all-space values
++#
++# Under a PAD SPACE collation '' and '   ' are one value. An empty
++# blob is stored with a NULL chain pointer; hp_materialize_one_blob()
++# must still hand a valid pointer to the collation comparison.
++#
++CREATE TABLE t1 (a TEXT);
++INSERT INTO t1 VALUES (''),('   ');
++SELECT COUNT(*) FROM (SELECT DISTINCT a FROM t1) AS d;
++COUNT(*)
++1
++SELECT COUNT(DISTINCT a) FROM t1;
++COUNT(DISTINCT a)
++1
++SELECT COUNT(*) FROM (SELECT a FROM t1 GROUP BY a) AS g;
++COUNT(*)
++1
++SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE LENGTH(a)=0 UNION SELECT a FROM t1 WHERE LENGTH(a)=3) AS u;
++COUNT(*)
++1
++SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE LENGTH(a)=3 UNION SELECT a FROM t1 WHERE LENGTH(a)=0) AS u;
++COUNT(*)
++1
++DROP TABLE t1;
++CREATE TABLE t1 (a TEXT CHARACTER SET latin1);
++INSERT INTO t1 VALUES ('   '),('');
++SELECT COUNT(*) FROM (SELECT DISTINCT a FROM t1) AS d;
++COUNT(*)
++1
++SELECT COUNT(DISTINCT a) FROM t1;
++COUNT(DISTINCT a)
++1
++SELECT COUNT(*) FROM (SELECT a FROM t1 GROUP BY a) AS g;
++COUNT(*)
++1
++DROP TABLE t1;
++# NO PAD collation: '' and '   ' stay two distinct values
++CREATE TABLE t1 (a TEXT COLLATE utf8mb4_bin);
++INSERT INTO t1 VALUES (''),('   ');
++SELECT COUNT(*) FROM (SELECT DISTINCT a FROM t1) AS d;
++COUNT(*)
++2
++SELECT COUNT(DISTINCT a) FROM t1;
++COUNT(DISTINCT a)
++2
++SELECT COUNT(*) FROM (SELECT a FROM t1 GROUP BY a) AS g;
++COUNT(*)
++2
++DROP TABLE t1;
++# End of MDEV-41297 tests
+diff --git a/mysql-test/suite/heap/blob_group_by.test b/mysql-test/suite/heap/blob_group_by.test
+index c536e7ad..affe8f53 100644
+--- a/mysql-test/suite/heap/blob_group_by.test
++++ b/mysql-test/suite/heap/blob_group_by.test
+@@ -59,3 +59,38 @@ SELECT HEX(val), COUNT(*) AS cnt FROM t1 GROUP BY val ORDER BY val;
+ DROP TABLE t1;
+ 
+ --echo # End of MDEV-38975 GROUP BY blob tests
++
++--echo #
++--echo # MDEV-41297 Wrong result upon DISTINCT/GROUP BY/UNION on TEXT with
++--echo #            empty and all-space values
++--echo #
++--echo # Under a PAD SPACE collation '' and '   ' are one value. An empty
++--echo # blob is stored with a NULL chain pointer; hp_materialize_one_blob()
++--echo # must still hand a valid pointer to the collation comparison.
++--echo #
++
++CREATE TABLE t1 (a TEXT);
++INSERT INTO t1 VALUES (''),('   ');
++SELECT COUNT(*) FROM (SELECT DISTINCT a FROM t1) AS d;
++SELECT COUNT(DISTINCT a) FROM t1;
++SELECT COUNT(*) FROM (SELECT a FROM t1 GROUP BY a) AS g;
++SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE LENGTH(a)=0 UNION SELECT a FROM t1 WHERE LENGTH(a)=3) AS u;
++SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE LENGTH(a)=3 UNION SELECT a FROM t1 WHERE LENGTH(a)=0) AS u;
++DROP TABLE t1;
++
++CREATE TABLE t1 (a TEXT CHARACTER SET latin1);
++INSERT INTO t1 VALUES ('   '),('');
++SELECT COUNT(*) FROM (SELECT DISTINCT a FROM t1) AS d;
++SELECT COUNT(DISTINCT a) FROM t1;
++SELECT COUNT(*) FROM (SELECT a FROM t1 GROUP BY a) AS g;
++DROP TABLE t1;
++
++--echo # NO PAD collation: '' and '   ' stay two distinct values
++CREATE TABLE t1 (a TEXT COLLATE utf8mb4_bin);
++INSERT INTO t1 VALUES (''),('   ');
++SELECT COUNT(*) FROM (SELECT DISTINCT a FROM t1) AS d;
++SELECT COUNT(DISTINCT a) FROM t1;
++SELECT COUNT(*) FROM (SELECT a FROM t1 GROUP BY a) AS g;
++DROP TABLE t1;
++
++--echo # End of MDEV-41297 tests
+diff --git a/storage/heap/hp_blob.c b/storage/heap/hp_blob.c
+index 3763b949..b8cd5bf2 100644
+--- a/storage/heap/hp_blob.c
++++ b/storage/heap/hp_blob.c
+@@ -920,18 +920,26 @@ int hp_read_blobs(HP_INFO *info, uchar *record, const uchar *pos)
+ 
+   @return Pointer into info->blob_buff with contiguous blob data,
+           or NULL on allocation failure.
++          A zero-length blob always returns a valid (non-NULL) pointer:
++          hp_write_blobs() stores a NULL chain pointer for an empty value,
++          and the callers treat NULL as a failure. Under a PAD SPACE
++          collation an empty value and an all-space value compare equal,
++          so the empty value must reach the collation comparison.
+ */
+ 
+ const uchar *hp_materialize_one_blob(HP_INFO *info,
+                                      const uchar *chain,
+                                      uint32 data_len)
+ {
++  static const uchar empty_blob[1]= { 0 };
+   HP_SHARE *share= info->s;
+   uint visible= share->visible;
+   uint recbuffer= share->block.recbuffer;
+ 
+-  if (data_len == 0 || !chain)
+-    return chain;
++  if (data_len == 0)
++    return empty_blob;
++  if (!chain)
++    return NULL;                              /* Corrupt: data without chain */
+ 
+   if (hp_is_single_rec(chain, visible))
+     return chain;                         /* Case A: no header, data at offset 0 */

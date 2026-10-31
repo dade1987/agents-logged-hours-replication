@@ -1,0 +1,57 @@
+diff --git a/public/lib/classes/oauth2/server/repository/access_token_repository.php b/public/lib/classes/oauth2/server/repository/access_token_repository.php
+index 123d2cd8202..bd8c64105df 100644
+--- a/public/lib/classes/oauth2/server/repository/access_token_repository.php
++++ b/public/lib/classes/oauth2/server/repository/access_token_repository.php
+@@ -70,6 +70,14 @@ class access_token_repository implements AccessTokenRepositoryInterface {
+         $record->timecreated = time();
+ 
+         $DB->insert_record('oauth2_server_client_access_tokens', $record);
++
++        // Issuing a token is the client being used, so record it against the client.
++        $DB->set_field(
++            'oauth2_server_clients',
++            'lastaccessed',
++            \core\di::get(\core\clock::class)->time(),
++            ['clientidentifier' => $record->clientidentifier],
++        );
+     }
+ 
+     #[\Override]
+diff --git a/public/lib/classes/oauth2/server/repository/auth_code_repository.php b/public/lib/classes/oauth2/server/repository/auth_code_repository.php
+index bac4471c8a0..8f62b9addb7 100644
+--- a/public/lib/classes/oauth2/server/repository/auth_code_repository.php
++++ b/public/lib/classes/oauth2/server/repository/auth_code_repository.php
+@@ -52,6 +52,14 @@ class auth_code_repository implements AuthCodeRepositoryInterface {
+         $record->timecreated = time();
+ 
+         $DB->insert_record('oauth2_server_client_auth_codes', $record);
++
++        // An authorisation was granted to the client, so record it against the client.
++        $DB->set_field(
++            'oauth2_server_clients',
++            'lastaccessed',
++            \core\di::get(\core\clock::class)->time(),
++            ['clientidentifier' => $record->clientidentifier],
++        );
+     }
+ 
+     #[\Override]
+diff --git a/public/lib/classes/oauth2/server/repository/client_repository.php b/public/lib/classes/oauth2/server/repository/client_repository.php
+index b8ae134a371..5b47b1f8280 100644
+--- a/public/lib/classes/oauth2/server/repository/client_repository.php
++++ b/public/lib/classes/oauth2/server/repository/client_repository.php
+@@ -91,6 +91,14 @@ class client_repository implements ClientRepositoryInterface {
+ 
+         foreach ($secrets as $secret) {
+             if (password_verify($clientsecret, $secret->secret)) {
++                // Record that this secret was just used to authenticate the client.
++                $DB->set_field(
++                    'oauth2_server_client_secrets',
++                    'lastaccessed',
++                    \core\di::get(\core\clock::class)->time(),
++                    ['id' => $secret->id],
++                );
++
+                 return true;
+             }
+         }

@@ -1,0 +1,31 @@
+diff --git a/sql/sql_acl.cc b/sql/sql_acl.cc
+index 70984625..6bbc2cb0 100644
+--- a/sql/sql_acl.cc
++++ b/sql/sql_acl.cc
+@@ -14423,9 +14423,23 @@ bool Sql_cmd_grant::should_bypass_revoke_deny(THD *thd)
+   TABLE_LIST tl;
+   tl.init_one_table(&MYSQL_SCHEMA_NAME, &MYSQL_TABLE_NAME[USER_TABLE],
+                     NULL, TL_WRITE);
+-  return !check_access(thd, UPDATE_ACL, tl.db.str, &tl.grant.privilege,
+-                       &tl.grant.m_internal, 0, 1) &&
+-         !check_grant(thd, UPDATE_ACL, &tl, FALSE, 1, TRUE);
++  if (check_access(thd, UPDATE_ACL, tl.db.str, &tl.grant.privilege,
++                   &tl.grant.m_internal, 0, 1) ||
++      check_grant(thd, UPDATE_ACL, &tl, FALSE, 1, TRUE))
++    return false;
++
++  /*
++    check_grant() succeeds on any column-level UPDATE grant. DENYs are stored
++    in the Priv column, so require UPDATE on that very column.
++  */
++  tl.grant.want_privilege= UPDATE_ACL;
++  Dummy_error_handler err_handler;
++  thd->push_internal_handler(&err_handler);
++  bool denied= check_grant_column(thd, &tl.grant, tl.db.str,
++                                  tl.table_name.str, "Priv"_Lex_ident_column,
++                                  thd->security_ctx);
++  thd->pop_internal_handler();
++  return !denied;
+ }
+ 
+ 

@@ -1,0 +1,94 @@
+diff --git a/mysql-test/main/grant5.result b/mysql-test/main/grant5.result
+index 5aeedb89..1178005d 100644
+--- a/mysql-test/main/grant5.result
++++ b/mysql-test/main/grant5.result
+@@ -472,3 +472,31 @@ DROP USER foo@localhost;
+ CREATE USER foo@localhost IDENTIFIED VIA not_installed_plugin;
+ ERROR HY000: Plugin 'not_installed_plugin' is not loaded
+ # End of 10.5 tests
++#
++# MDEV-40470 GRANT PROXY with empty password incorrectly checks
++#            grantor's privileges
++#
++CREATE USER u1@localhost;
++CREATE USER u2@localhost IDENTIFIED BY 'oldpassword';
++GRANT ALL PRIVILEGES ON *.* TO u2@localhost WITH GRANT OPTION;
++show create user u2@localhost;
++CREATE USER for u2@localhost
++CREATE USER `u2`@`localhost` IDENTIFIED BY PASSWORD '*F80A16243524922D382A633DDBD9671A2AEEACB9'
++connect u,localhost,u1;
++SHOW GRANTS;
++Grants for u1@localhost
++GRANT USAGE ON *.* TO `u1`@`localhost`
++GRANT PROXY ON u1@localhost TO u2@localhost IDENTIFIED VIA
++'' OR mysql_native_password USING PASSWORD('newpassword');
++ERROR 42000: Access denied for user 'u1'@'localhost' to database 'mysql'
++GRANT PROXY ON u1@localhost TO u2@localhost IDENTIFIED VIA
++mysql_native_password USING PASSWORD('newpassword');
++ERROR 42000: Access denied for user 'u1'@'localhost' to database 'mysql'
++disconnect u;
++connection default;
++show create user u2@localhost;
++CREATE USER for u2@localhost
++CREATE USER `u2`@`localhost` IDENTIFIED BY PASSWORD '*F80A16243524922D382A633DDBD9671A2AEEACB9'
++drop user u1@localhost;
++drop user u2@localhost;
++# End of 10.6 tests
+diff --git a/mysql-test/main/grant5.test b/mysql-test/main/grant5.test
+index a33cecbf..63c5d253 100644
+--- a/mysql-test/main/grant5.test
++++ b/mysql-test/main/grant5.test
+@@ -436,3 +436,31 @@ DROP USER foo@localhost;
+ CREATE USER foo@localhost IDENTIFIED VIA not_installed_plugin;
+ 
+ --echo # End of 10.5 tests
++
++--echo #
++--echo # MDEV-40470 GRANT PROXY with empty password incorrectly checks
++--echo #            grantor's privileges
++--echo #
++
++CREATE USER u1@localhost;
++CREATE USER u2@localhost IDENTIFIED BY 'oldpassword';
++GRANT ALL PRIVILEGES ON *.* TO u2@localhost WITH GRANT OPTION;
++show create user u2@localhost;
++
++connect u,localhost,u1;
++SHOW GRANTS;
++--error ER_DBACCESS_DENIED_ERROR
++GRANT PROXY ON u1@localhost TO u2@localhost IDENTIFIED VIA
++  '' OR mysql_native_password USING PASSWORD('newpassword');
++--error ER_DBACCESS_DENIED_ERROR
++GRANT PROXY ON u1@localhost TO u2@localhost IDENTIFIED VIA
++  mysql_native_password USING PASSWORD('newpassword');
++disconnect u;
++
++connection default;
++show create user u2@localhost;
++
++drop user u1@localhost;
++drop user u2@localhost;
++
++--echo # End of 10.6 tests
+diff --git a/sql/structs.h b/sql/structs.h
+index aed4dacb..ef399fed 100644
+--- a/sql/structs.h
++++ b/sql/structs.h
+@@ -256,7 +256,16 @@ struct LEX_USER: public AUTHID
+   USER_AUTH *auth;
+   bool has_auth()
+   {
+-    return auth && (auth->plugin.length || auth->auth_str.length || auth->pwtext.length);
++    /*
++      Authentication can be a chain of plugins (IDENTIFIED VIA a OR b ...).
++      Check the whole chain, not only the first element, otherwise
++      IDENTIFIED VIA '' OR plugin USING 'xxx' would be considered as
++      "no authentication specified".
++    */
++    for (USER_AUTH *a= auth; a; a= a->next)
++      if (a->plugin.length || a->auth_str.length || a->pwtext.length)
++        return true;
++    return false;
+   }
+ };
+ 

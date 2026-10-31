@@ -1,0 +1,185 @@
+diff --git a/public/mod/quiz/report/statistics/classes/event/observer/attempt_submitted.php b/public/mod/quiz/report/statistics/classes/event/observer/attempt_submitted.php
+index 8d058feb23c..b270f2a5c53 100644
+--- a/public/mod/quiz/report/statistics/classes/event/observer/attempt_submitted.php
++++ b/public/mod/quiz/report/statistics/classes/event/observer/attempt_submitted.php
+@@ -33,7 +33,7 @@ class attempt_submitted {
+     /**
+      * Queue an ad-hoc task to recalculate statistics for the quiz.
+      *
+-     * This will defer running the task for 1 hour, to give other attempts in progress
++     * This will defer running the task for the configured delay, to give other attempts in progress
+      * a chance to submit.
+      *
+      * @param \mod_quiz\event\attempt_submitted $event
+diff --git a/public/mod/quiz/report/statistics/classes/task/recalculate.php b/public/mod/quiz/report/statistics/classes/task/recalculate.php
+index 5d4f3c5a214..37da61ef9c4 100644
+--- a/public/mod/quiz/report/statistics/classes/task/recalculate.php
++++ b/public/mod/quiz/report/statistics/classes/task/recalculate.php
+@@ -37,9 +37,22 @@ require_once($CFG->dirroot . '/mod/quiz/report/statistics/report.php');
+  */
+ class recalculate extends \core\task\adhoc_task {
+     /**
+-     * The time to delay queued runs by, to prevent repeated recalculations.
++     * The default time to delay queued runs by, in seconds, if no value has been configured.
+      */
+-    const DELAY = HOURSECS;
++    const DEFAULT_DELAY = HOURSECS;
++
++    /**
++     * Get the configured time to debounce recalculations by, in seconds.
++     *
++     * @return int
++     */
++    public static function get_delay(): int {
++        $delay = get_config('quiz_statistics', 'recalculatedelay');
++        if ($delay === false) {
++            return self::DEFAULT_DELAY;
++        }
++        return max(0, (int) $delay);
++    }
+ 
+     /**
+      * Create a new instance of the task.
+@@ -100,18 +113,23 @@ class recalculate extends \core\task\adhoc_task {
+     }
+ 
+     /**
+-     * Queue an instance of this task to happen after a delay.
++     * Queue an instance of this task to happen after a delay, de-bouncing repeated requests.
+      *
+      * Multiple events may happen over a short period that require a recalculation. Rather than
+-     * run the recalculation each time, this will queue a single run of the task for a given quiz,
+-     * within the delay period.
++     * run the recalculation each time, this ensures a single run of the task is queued for a given quiz.
++     * If a run is already queued, its run time is pushed back to now plus the configured delay, so the
++     * recalculation only happens once the stream of events has stopped for the whole delay period.
+      *
+      * @param int $quizid The quiz to run the recalculation for.
+-     * @return bool true of the task was queued.
++     * @return bool true if the task is queued.
+      */
+     public static function queue_future_run(int $quizid): bool {
+         $task = self::instance($quizid);
+-        $task->set_next_run_time(time() + self::DELAY);
+-        return \core\task\manager::queue_adhoc_task($task, true);
++        $task->set_next_run_time(time() + self::get_delay());
++        if (\core\task\manager::get_queued_adhoc_task_record($task)) {
++            \core\task\manager::reschedule_or_queue_adhoc_task($task);
++            return true;
++        }
++        return \core\task\manager::queue_adhoc_task($task);
+     }
+ }
+diff --git a/public/mod/quiz/report/statistics/classes/tests/statistics_helper.php b/public/mod/quiz/report/statistics/classes/tests/statistics_helper.php
+index 471356651bf..ace302db896 100644
+--- a/public/mod/quiz/report/statistics/classes/tests/statistics_helper.php
++++ b/public/mod/quiz/report/statistics/classes/tests/statistics_helper.php
+@@ -27,7 +27,7 @@ class statistics_helper {
+     /**
+      * Run any ad-hoc recalculation tasks that have been scheduled.
+      *
+-     * We need a special function to do this as the tasks are deferred by one hour,
++     * We need a special function to do this as the tasks are deferred by the configured delay,
+      * so we need to pass a custom $timestart argument.
+      *
+      * @param bool $discardoutput Capture and discard output from executed tasks?
+@@ -35,7 +35,7 @@ class statistics_helper {
+      */
+     public static function run_pending_recalculation_tasks(bool $discardoutput = false): void {
+         while ($task = \core\task\manager::get_next_adhoc_task(
+-            time() + HOURSECS + 1,
++            time() + \quiz_statistics\task\recalculate::get_delay() + 1,
+             false,
+             '\quiz_statistics\task\recalculate'
+         )) {
+diff --git a/public/mod/quiz/report/statistics/classes/tests/statistics_test_trait.php b/public/mod/quiz/report/statistics/classes/tests/statistics_test_trait.php
+index 80021bf0fda..a135a0673de 100644
+--- a/public/mod/quiz/report/statistics/classes/tests/statistics_test_trait.php
++++ b/public/mod/quiz/report/statistics/classes/tests/statistics_test_trait.php
+@@ -45,7 +45,7 @@ trait statistics_test_trait {
+      * Assert that a task is queued for a quiz.
+      *
+      * Check that the quizid stored in the task's custom data matches the provided quiz,
+-     * and that the run time is in one hour from when the test is being run (within a small margin of error).
++     * and that the run time is the configured delay from when the test is being run (within a small margin of error).
+      *
+      * @param recalculate $task
+      * @param \stdClass $quiz
+@@ -54,6 +54,6 @@ trait statistics_test_trait {
+     protected function assert_task_is_queued_for_quiz(recalculate $task, \stdClass $quiz): void {
+         $data = $task->get_custom_data();
+         $this->assertEquals($quiz->id, $data->quizid);
+-        $this->assertEqualsWithDelta(time() + HOURSECS, $task->get_next_run_time(), 1);
++        $this->assertEqualsWithDelta(time() + recalculate::get_delay(), $task->get_next_run_time(), 1);
+     }
+ }
+diff --git a/public/mod/quiz/report/statistics/lang/en/quiz_statistics.php b/public/mod/quiz/report/statistics/lang/en/quiz_statistics.php
+index c66d34cbb7a..54fbd290480 100644
+--- a/public/mod/quiz/report/statistics/lang/en/quiz_statistics.php
++++ b/public/mod/quiz/report/statistics/lang/en/quiz_statistics.php
+@@ -106,6 +106,8 @@ $string['quizstructureanalysis'] = 'Quiz structure analysis';
+ $string['random_guess_score'] = 'Random guess score';
+ $string['rangeofvalues'] = 'Range of statistics for these questions';
+ $string['rangebetween'] = '{$a->min} − {$a->max}';
++$string['recalculatedelay'] = 'Statistics recalculation delay';
++$string['recalculatedelay_desc'] = 'After a quiz attempt is submitted or deleted, the quiz statistics are recalculated once no further changes have been made to the quiz attempts for this period. Each new attempt restarts the delay (a de-bounce), so the calculation runs only when the stream of attempts stops. A longer delay reduces server load on quizzes with frequent attempts.';
+ $string['recalculatenow'] = 'Recalculate now';
+ $string['recalculatetask'] = 'Recalculate question statistics';
+ $string['reportsettings'] = 'Statistics calculation settings';
+diff --git a/public/mod/quiz/report/statistics/settings.php b/public/mod/quiz/report/statistics/settings.php
+index 7aafb20b625..2e8c2008ecb 100644
+--- a/public/mod/quiz/report/statistics/settings.php
++++ b/public/mod/quiz/report/statistics/settings.php
+@@ -32,4 +32,12 @@ if ($ADMIN->fulltree) {
+         get_string('getstatslocktimeoutdesc', 'quiz_statistics'),
+         MINSECS * 15
+     ));
++
++    $settings->add(new admin_setting_configduration(
++        'quiz_statistics/recalculatedelay',
++        get_string('recalculatedelay', 'quiz_statistics'),
++        get_string('recalculatedelay_desc', 'quiz_statistics'),
++        HOURSECS,
++        HOURSECS
++    ));
+ }
+diff --git a/public/mod/quiz/report/statistics/tests/quiz_attempt_submitted_test.php b/public/mod/quiz/report/statistics/tests/quiz_attempt_submitted_test.php
+index a2933c36e46..10f17f83205 100644
+--- a/public/mod/quiz/report/statistics/tests/quiz_attempt_submitted_test.php
++++ b/public/mod/quiz/report/statistics/tests/quiz_attempt_submitted_test.php
+@@ -78,6 +78,35 @@ final class quiz_attempt_submitted_test extends \advanced_testcase {
+         $this->assert_task_is_queued_for_quiz($task, $quiz);
+     }
+ 
++    /**
++     * A subsequent submission should push back the run time of an already queued task (de-bounce),
++     * using the configured delay.
++     *
++     * @return void
++     */
++    public function test_queued_task_is_debounced_by_subsequent_submission(): void {
++        global $DB;
++        [$user1, $quiz] = $this->create_test_data();
++        $user2 = $this->getDataGenerator()->create_user();
++        set_config('recalculatedelay', WEEKSECS, 'quiz_statistics');
++
++        $this->attempt_quiz($quiz, $user1);
++        $tasks = manager::get_adhoc_tasks(recalculate::class);
++        $this->assertCount(1, $tasks);
++        $task = reset($tasks);
++        $this->assert_task_is_queued_for_quiz($task, $quiz);
++
++        // Pretend the existing task was due to run a while ago.
++        $DB->set_field('task_adhoc', 'nextruntime', time() - 60, ['id' => $task->get_id()]);
++
++        $this->attempt_quiz($quiz, $user2);
++
++        $tasks = manager::get_adhoc_tasks(recalculate::class);
++        $this->assertCount(1, $tasks);
++        $task = reset($tasks);
++        $this->assert_task_is_queued_for_quiz($task, $quiz);
++    }
++
+     /**
+      * Attempting the quiz again after processing the task should queue a new task.
+      *

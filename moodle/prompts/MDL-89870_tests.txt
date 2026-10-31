@@ -1,0 +1,49 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You CAN run Moodle's existing PHPUnit tests: `cd {WS} && vendor/bin/phpunit <path/to/some_test.php>` (the test environment is already initialised). You may also run `php -l <file>` and read code with grep/find/cat. Use absolute paths starting with {WS} in every command.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-89870: Install plugins page still offers installing from the plugins directory, which is no longer possible
+
+_Site administration > Plugins > Install plugins_ still shows an *Install plugins from the Moodle plugins directory* button, but that route can no longer install anything. The Sites functionality in the plugins directory — the part that produced the per-plugin *Install* button and sent the install request back to a registered site — was not carried over to Marketplace. An admin who clicks the button lands on the plugins directory, finds no way to install from there, and gets nothing explaining why.
+
+The ZIP upload route on the same page is unaffected and still works.
+
+h3. Steps to reproduce
+
+# Log in as an admin on a site with plugin installation enabled ({{$CFG->disableupdateautodeploy}} not set).
+# Go to _Site administration > Plugins > Install plugins_.
+# Click *Install plugins from the Moodle plugins directory*.
+# Choose any plugin, for example local_codechecker.
+
+*Expected:* an Install button offering to install the plugin into the site, as the button's own help text promises — "You will be redirected to the Moodle plugins directory to search for and install a plugin."
+
+*Actual:* no Install button exists for any plugin. There is no route back into the site's install flow and no indication that the feature has been retired.
+
+h3. Why it happens
+
+Nothing changed in core, which is rather the point. {{tool_installaddon\renderer::index_page_repository()}} ({{public/admin/tool/installaddon/renderer.php:206}}) still renders the button from {{tool_installaddon_installer::get_addons_repository_url()}} ({{public/admin/tool/installaddon/classes/installer.php:64}}), which still resolves to {{https://moodle.org/plugins/get.php}}, and {{handle_remote_request()}} is still sitting there waiting for a callback that can no longer be triggered. The change is entirely server-side.
+
+Ruslan Kabalin confirmed this on the QA issue:
+
+{quote}the Sites functionality was not migrated to Marketplace, we plan to rethink installation process after composer changes. For paid plugins that would not work anyway, that download callback would need authentication that existing Moodle releases would not support.{quote}
+
+h3. What needs deciding
+
+The long-term install story is waiting on the composer work, so this issue is only about not advertising a route that cannot complete. Roughly in increasing order of effort:
+
+# Reword the button and its help text, or show a notice on the page, saying direct installation from the plugins directory is currently unavailable.
+# Remove the button until there is a working replacement, leaving ZIP upload as the documented route.
+# Point it at Marketplace instead, once Marketplace has something for it to point at.
+
+Option 1 is the smallest change that stops admins hitting a dead end, and does not pre-empt the composer decision.
+
+h3. Notes
+
+* This affects every currently supported branch, not just 5.3 — the button is dead wherever it is rendered, because the change is at the other end. Raised against 5.2 and 5.3 so it does not read as a 5.3 regression.
+* Not caused by [MDL-87959|https://moodle.atlassian.net/browse/MDL-87959]. That added the Marketplace link in the activity chooser footer and the "Browse new plugins" link in Site administration; its acceptance criteria explicitly required no regression to addons repository functionality, and the code bears that out. It was fixed for 4.5.11, 5.0.7 and 5.1.4, months before this was found.
+* Found while running [MDLQA-22061|https://moodle.atlassian.net/browse/MDLQA-22061] (step 3) in the 5.3 QA cycle, where the test cannot pass as written. Checked against 5.3dev (Build: 20260911).

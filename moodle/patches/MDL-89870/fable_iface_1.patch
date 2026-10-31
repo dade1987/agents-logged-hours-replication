@@ -1,0 +1,96 @@
+diff --git a/public/admin/tool/installaddon/classes/installer.php b/public/admin/tool/installaddon/classes/installer.php
+index 80f04bc9b4e..19a7c09412d 100644
+--- a/public/admin/tool/installaddon/classes/installer.php
++++ b/public/admin/tool/installaddon/classes/installer.php
+@@ -73,6 +73,23 @@ class tool_installaddon_installer {
+         return $this->get_external_service_url($url);
+     }
+ 
++    /**
++     * Is an alternative add-ons repository configured for this site?
++     *
++     * Direct installation from the Moodle plugins directory is no longer available
++     * (the Sites functionality was not migrated to Moodle Marketplace). The button
++     * leading to the repository therefore only makes sense when the site has an
++     * alternative repository configured via $CFG->alternativeaddonsrepositoryurl
++     * in config.php.
++     *
++     * @return bool
++     */
++    public function has_alternative_addons_repository(): bool {
++        global $CFG;
++
++        return !empty($CFG->config_php_settings['alternativeaddonsrepositoryurl']);
++    }
++
+     /**
+      * Returns URL to Moodle Marketplace.
+      *
+diff --git a/public/admin/tool/installaddon/lang/en/tool_installaddon.php b/public/admin/tool/installaddon/lang/en/tool_installaddon.php
+index c104eb0b723..30cf1a36e9a 100644
+--- a/public/admin/tool/installaddon/lang/en/tool_installaddon.php
++++ b/public/admin/tool/installaddon/lang/en/tool_installaddon.php
+@@ -34,6 +34,7 @@ $string['installaddon'] = 'Install plugin!';
+ $string['installaddons'] = 'Install plugins';
+ $string['installfromrepo'] = 'Install plugins from the Moodle plugins directory';
+ $string['installfromrepo_help'] = 'You will be redirected to the Moodle plugins directory to search for and install a plugin. Note that your site full name, URL and Moodle version will be sent as well, to make the installation process easier for you.';
++$string['installfromrepounavailable'] = 'Installing plugins directly from the Moodle plugins directory is currently unavailable. You can browse plugins on {$a} and install them by uploading a ZIP package below.';
+ $string['installfromzip'] = 'Install plugin from ZIP file';
+ $string['installfromzip_help'] = 'An alternative to installing a plugin directly from the Moodle plugins directory is to upload a ZIP package of the plugin. The ZIP package should have the same structure as a package downloaded from the Moodle plugins directory.';
+ $string['installfromzipfile'] = 'ZIP package';
+diff --git a/public/admin/tool/installaddon/renderer.php b/public/admin/tool/installaddon/renderer.php
+index e69aa6789d5..d2efce61c7c 100644
+--- a/public/admin/tool/installaddon/renderer.php
++++ b/public/admin/tool/installaddon/renderer.php
+@@ -205,6 +205,20 @@ class tool_installaddon_renderer extends plugin_renderer_base {
+      */
+     protected function index_page_repository() {
+ 
++        if (!$this->installer->has_alternative_addons_repository()) {
++            // Direct installation from the Moodle plugins directory is no longer available.
++            // Do not advertise a route that cannot complete; explain the situation instead.
++            $marketplaceurl = $this->installer->get_marketplace_url();
++            $text = get_string('installfromrepounavailable', 'tool_installaddon',
++                html_writer::link($marketplaceurl, get_string('marketplacelink', 'tool_installaddon'),
++                    ['target' => '_blank', 'rel' => 'noopener noreferrer']));
++
++            return $this->box(
++                $this->output->notification($text, \core\output\notification::NOTIFY_INFO, false),
++                'generalbox', 'installfromrepobox'
++            );
++        }
++
+         $url = $this->installer->get_addons_repository_url();
+ 
+         $out = $this->box(
+diff --git a/public/admin/tool/installaddon/tests/installer_test.php b/public/admin/tool/installaddon/tests/installer_test.php
+index ac2645c0f14..8817021b9d9 100644
+--- a/public/admin/tool/installaddon/tests/installer_test.php
++++ b/public/admin/tool/installaddon/tests/installer_test.php
+@@ -49,6 +49,26 @@ final class installer_test extends \advanced_testcase {
+         $this->assertSame("2.5'; DROP TABLE mdl_user; --", $site['majorversion']);
+     }
+ 
++    /**
++     * Tests detection of an alternative add-ons repository configured in config.php.
++     */
++    public function test_has_alternative_addons_repository(): void {
++        global $CFG;
++        $this->resetAfterTest();
++
++        $installer = testable_tool_installaddon_installer::instance();
++
++        unset($CFG->config_php_settings['alternativeaddonsrepositoryurl']);
++        $this->assertFalse($installer->has_alternative_addons_repository());
++
++        $CFG->config_php_settings['alternativeaddonsrepositoryurl'] = '';
++        $this->assertFalse($installer->has_alternative_addons_repository());
++
++        $CFG->config_php_settings['alternativeaddonsrepositoryurl'] = 'https://example.com/plugins/get.php';
++        $this->assertTrue($installer->has_alternative_addons_repository());
++        $this->assertSame('example.com', parse_url($installer->get_addons_repository_url(), PHP_URL_HOST));
++    }
++
+     /**
+      * Tests that marketplace URL includes expected host, scheme and site payload.
+      */

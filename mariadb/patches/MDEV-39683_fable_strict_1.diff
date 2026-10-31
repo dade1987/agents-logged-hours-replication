@@ -1,0 +1,166 @@
+diff --git a/plugin/type_xmltype/mysql-test/type_xmltype/type_xmltype.result b/plugin/type_xmltype/mysql-test/type_xmltype/type_xmltype.result
+index e7416abe..678b0e9c 100644
+--- a/plugin/type_xmltype/mysql-test/type_xmltype/type_xmltype.result
++++ b/plugin/type_xmltype/mysql-test/type_xmltype/type_xmltype.result
+@@ -380,4 +380,35 @@ CAST('a' AS xmltype)
+ NULL
+ Warnings:
+ Warning	1292	Truncated incorrect xmltype value: 'a'
++#
++# MDEV-39683 Numeric aggregates should end up with an error for xmltype
++#
++CREATE TABLE t (x XMLTYPE);
++INSERT INTO t VALUES ('<a/>'),('<b>1</b>'),('<n>4.5</n>'),('<c/>');
++SELECT SUM(x) FROM t;
++ERROR HY000: Illegal parameter data type xmltype for operation 'sum'
++SELECT AVG(x) FROM t;
++ERROR HY000: Illegal parameter data type xmltype for operation 'avg'
++SELECT VARIANCE(x) FROM t;
++ERROR HY000: Illegal parameter data type xmltype for operation 'variance('
++SELECT VAR_SAMP(x) FROM t;
++ERROR HY000: Illegal parameter data type xmltype for operation 'var_samp('
++SELECT STD(x) FROM t;
++ERROR HY000: Illegal parameter data type xmltype for operation 'std('
++SELECT STDDEV_SAMP(x) FROM t;
++ERROR HY000: Illegal parameter data type xmltype for operation 'stddev_samp('
++SELECT ROUND(x) FROM t;
++ERROR HY000: Illegal parameter data type xmltype for operation 'round'
++SELECT FLOOR(x) FROM t;
++ERROR HY000: Illegal parameter data type xmltype for operation 'floor'
++SELECT CEILING(x) FROM t;
++ERROR HY000: Illegal parameter data type xmltype for operation 'ceiling'
++SELECT ABS(x) FROM t;
++ERROR HY000: Illegal parameter data type xmltype for operation 'abs'
++SELECT -x FROM t;
++ERROR HY000: Illegal parameter data type xmltype for operation '-'
++SELECT COUNT(x), MIN(x), MAX(x) FROM t;
++COUNT(x)	MIN(x)	MAX(x)
++4	<a/>	<n>4.5</n>
++DROP TABLE t;
+ # End of 12.3 tests
+diff --git a/plugin/type_xmltype/mysql-test/type_xmltype/type_xmltype.test b/plugin/type_xmltype/mysql-test/type_xmltype/type_xmltype.test
+index 67f8cb69..50a52a67 100644
+--- a/plugin/type_xmltype/mysql-test/type_xmltype/type_xmltype.test
++++ b/plugin/type_xmltype/mysql-test/type_xmltype/type_xmltype.test
+@@ -308,4 +308,35 @@ DROP TABLE t1, t2;
+ 
+ SELECT CAST('a' AS xmltype);
+ 
++--echo #
++--echo # MDEV-39683 Numeric aggregates should end up with an error for xmltype
++--echo #
++
++CREATE TABLE t (x XMLTYPE);
++INSERT INTO t VALUES ('<a/>'),('<b>1</b>'),('<n>4.5</n>'),('<c/>');
++--error ER_ILLEGAL_PARAMETER_DATA_TYPE_FOR_OPERATION
++SELECT SUM(x) FROM t;
++--error ER_ILLEGAL_PARAMETER_DATA_TYPE_FOR_OPERATION
++SELECT AVG(x) FROM t;
++--error ER_ILLEGAL_PARAMETER_DATA_TYPE_FOR_OPERATION
++SELECT VARIANCE(x) FROM t;
++--error ER_ILLEGAL_PARAMETER_DATA_TYPE_FOR_OPERATION
++SELECT VAR_SAMP(x) FROM t;
++--error ER_ILLEGAL_PARAMETER_DATA_TYPE_FOR_OPERATION
++SELECT STD(x) FROM t;
++--error ER_ILLEGAL_PARAMETER_DATA_TYPE_FOR_OPERATION
++SELECT STDDEV_SAMP(x) FROM t;
++--error ER_ILLEGAL_PARAMETER_DATA_TYPE_FOR_OPERATION
++SELECT ROUND(x) FROM t;
++--error ER_ILLEGAL_PARAMETER_DATA_TYPE_FOR_OPERATION
++SELECT FLOOR(x) FROM t;
++--error ER_ILLEGAL_PARAMETER_DATA_TYPE_FOR_OPERATION
++SELECT CEILING(x) FROM t;
++--error ER_ILLEGAL_PARAMETER_DATA_TYPE_FOR_OPERATION
++SELECT ABS(x) FROM t;
++--error ER_ILLEGAL_PARAMETER_DATA_TYPE_FOR_OPERATION
++SELECT -x FROM t;
++SELECT COUNT(x), MIN(x), MAX(x) FROM t;
++DROP TABLE t;
++
+ --echo # End of 12.3 tests
+diff --git a/plugin/type_xmltype/sql_type_xmltype.cc b/plugin/type_xmltype/sql_type_xmltype.cc
+index 0dd2e1ab..f525f7c9 100644
+--- a/plugin/type_xmltype/sql_type_xmltype.cc
++++ b/plugin/type_xmltype/sql_type_xmltype.cc
+@@ -170,6 +170,57 @@ const Type_handler *Type_handler_xmltype::
+ }
+ 
+ 
++bool Type_handler_xmltype::
++       Item_sum_sum_fix_length_and_dec(Item_sum_sum *item) const
++{
++  LEX_CSTRING name= {STRING_WITH_LEN("sum") };
++  return Item_func_or_sum_illegal_param(name);
++}
++
++
++bool Type_handler_xmltype::
++       Item_sum_avg_fix_length_and_dec(Item_sum_avg *item) const
++{
++  LEX_CSTRING name= {STRING_WITH_LEN("avg") };
++  return Item_func_or_sum_illegal_param(name);
++}
++
++
++bool Type_handler_xmltype::
++       Item_sum_variance_fix_length_and_dec(Item_sum_variance *item) const
++{
++  return Item_func_or_sum_illegal_param(item);
++}
++
++
++bool Type_handler_xmltype::
++       Item_func_round_fix_length_and_dec(Item_func_round *item) const
++{
++  return Item_func_or_sum_illegal_param(item);
++}
++
++
++bool Type_handler_xmltype::
++       Item_func_int_val_fix_length_and_dec(Item_func_int_val *item) const
++{
++  return Item_func_or_sum_illegal_param(item);
++}
++
++
++bool Type_handler_xmltype::
++       Item_func_abs_fix_length_and_dec(Item_func_abs *item) const
++{
++  return Item_func_or_sum_illegal_param(item);
++}
++
++
++bool Type_handler_xmltype::
++       Item_func_neg_fix_length_and_dec(Item_func_neg *item) const
++{
++  return Item_func_or_sum_illegal_param(item);
++}
++
++
+ 
+ /*****************************************************************/
+ void Field_xmltype::sql_type(String &res) const
+diff --git a/plugin/type_xmltype/sql_type_xmltype.h b/plugin/type_xmltype/sql_type_xmltype.h
+index c393c24c..2c5b1145 100644
+--- a/plugin/type_xmltype/sql_type_xmltype.h
++++ b/plugin/type_xmltype/sql_type_xmltype.h
+@@ -77,6 +77,19 @@ class Type_handler_xmltype: public Type_handler_long_blob
+   bool can_return_date() const override { return false; }
+   bool can_return_time() const override { return false; }
+ 
++  /*
++    Numeric aggregate functions and numeric unary functions
++    are not applicable to XMLTYPE. Raise an error instead of
++    silently converting the XML text to a number
++    (as the base class Type_handler_long_blob would do).
++  */
++  bool Item_sum_sum_fix_length_and_dec(Item_sum_sum *) const override;
++  bool Item_sum_avg_fix_length_and_dec(Item_sum_avg *) const override;
++  bool Item_sum_variance_fix_length_and_dec(Item_sum_variance *) const override;
++  bool Item_func_round_fix_length_and_dec(Item_func_round *) const override;
++  bool Item_func_int_val_fix_length_and_dec(Item_func_int_val *) const override;
++  bool Item_func_abs_fix_length_and_dec(Item_func_abs *) const override;
++  bool Item_func_neg_fix_length_and_dec(Item_func_neg *) const override;
+ };
+ 
+ extern Type_handler_xmltype type_handler_xmltype;

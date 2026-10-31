@@ -1,0 +1,23 @@
+diff --git a/public/lib/classes/task/refresh_mod_calendar_events_task.php b/public/lib/classes/task/refresh_mod_calendar_events_task.php
+index 3e2641aea06..7f3241efab6 100644
+--- a/public/lib/classes/task/refresh_mod_calendar_events_task.php
++++ b/public/lib/classes/task/refresh_mod_calendar_events_task.php
+@@ -71,7 +71,17 @@ class refresh_mod_calendar_events_task extends adhoc_task {
+             }
+             // Refresh events.
+             mtrace('Refreshing events for ' . $plugin->name);
+-            course_module_bulk_update_calendar_events($plugin->name, $courseid);
++            try {
++                course_module_bulk_update_calendar_events($plugin->name, $courseid);
++            } catch (\moodle_exception $e) {
++                // An orphaned course module (e.g. the activity was deleted after the task was queued) must not make
++                // this adhoc task fail forever. Report the problem and carry on, so the task is completed and cleaned up.
++                if ($e->errorcode === 'invalidcoursemoduleid' || $e->errorcode === 'invalidcoursemodule') {
++                    mtrace('Error refreshing events for ' . $plugin->name . ': ' . $e->getMessage());
++                } else {
++                    throw $e;
++                }
++            }
+         }
+     }
+ }

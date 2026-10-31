@@ -1,0 +1,168 @@
+diff --git a/public/lang/en/question.php b/public/lang/en/question.php
+index ea4adaa9c66..b97c18996f2 100644
+--- a/public/lang/en/question.php
++++ b/public/lang/en/question.php
+@@ -38,7 +38,8 @@ $string['byandon'] = 'by <em>{$a->user}</em> on <em>{$a->time}</em>';
+ $string['cannotcopybackup'] = 'Could not copy backup file';
+ $string['cannotcreate'] = 'Could not create new entry in question_attempts table';
+ $string['cannotcreatepath'] = 'Cannot create path: {$a}';
+-$string['cannotdeletebehaviourinuse'] = 'You cannot delete the behaviour \'{$a}\'. It is used by question attempts.';
++$string['cannotdeletecatwithusedquestions'] = 'This category cannot be deleted together with its questions, because some of them are in use. Move the questions to another category instead.';
++$string['cannotdeletebehaviourinuse'] ='You cannot delete the behaviour \'{$a}\'. It is used by question attempts.';
+ $string['cannotdeletecate'] = 'You can\'t delete that category it is the default category for this context.';
+ $string['cannotdeleteneededbehaviour'] = 'Cannot delete the question behaviour \'{$a}\'. There are other behaviours installed that rely on it.';
+ $string['cannotdeleteqtypeinuse'] = 'You cannot delete the question type \'{$a}\'. There are questions of this type in the question bank.';
+diff --git a/public/question/bank/managecategories/category.php b/public/question/bank/managecategories/category.php
+index 03233628c5c..f39513493e4 100644
+--- a/public/question/bank/managecategories/category.php
++++ b/public/question/bank/managecategories/category.php
+@@ -59,13 +59,16 @@ if ($todelete) {
+ 
+     helper::question_remove_stale_questions_from_category($todelete);
+ 
+-    $questionstomove = count($manager->get_real_question_ids_in_category($todelete));
++    $questionids = $manager->get_real_question_ids_in_category($todelete);
++    $questionstomove = count($questionids);
+ 
+     // Second pass, if we still have questions to move, setup the form.
+     if ($questionstomove) {
+         $categorycontext = context::instance_by_id($category->contextid);
++        // The questions can only be deleted along with the category if none of them are in use.
++        $canbedeleted = !questions_in_use($questionids);
+         $moveform = new question_move_form($thispageurl,
+-            ['contexts' => [$categorycontext], 'currentcat' => "$todelete"]);
++            ['contexts' => [$categorycontext], 'currentcat' => "$todelete", 'canbedeleted' => $canbedeleted]);
+         if ($moveform->is_cancelled()) {
+             $thispageurl->remove_all_params();
+             if (!is_null($cmid)) {
+@@ -75,8 +78,12 @@ if ($todelete) {
+             }
+             redirect($thispageurl);
+         } else if ($formdata = $moveform->get_data()) {
+-            list($tocategoryid, $tocontextid) = explode(',', $formdata->category);
+-            $manager->move_questions_and_delete_category($formdata->delete, $tocategoryid);
++            if (!empty($formdata->deletecategoryandquestions)) {
++                $manager->delete_category_and_questions($formdata->delete);
++            } else {
++                list($tocategoryid, $tocontextid) = explode(',', $formdata->category);
++                $manager->move_questions_and_delete_category($formdata->delete, $tocategoryid);
++            }
+             $thispageurl->remove_params('cat', 'category');
+             redirect($thispageurl);
+         }
+diff --git a/public/question/bank/managecategories/classes/form/question_move_form.php b/public/question/bank/managecategories/classes/form/question_move_form.php
+index 9d1ffc29f88..d2d858a80ab 100644
+--- a/public/question/bank/managecategories/classes/form/question_move_form.php
++++ b/public/question/bank/managecategories/classes/form/question_move_form.php
+@@ -43,10 +43,20 @@ class question_move_form extends moodleform {
+ 
+         $currentcat = $this->_customdata['currentcat'];
+         $contexts = $this->_customdata['contexts'];
++        $canbedeleted = !empty($this->_customdata['canbedeleted']);
+ 
+         $mform->addElement('questioncategory', 'category', get_string('category', 'question'), compact('contexts', 'currentcat'));
+ 
+-        $this->add_action_buttons(true, get_string('categorymoveto', 'question'));
++        // Same buttons as add_action_buttons(), with an extra option to delete the questions instead of moving them.
++        $buttonarray = [];
++        $buttonarray[] = $mform->createElement('submit', 'submitbutton', get_string('categorymoveto', 'question'));
++        if ($canbedeleted) {
++            $buttonarray[] = $mform->createElement('submit', 'deletecategoryandquestions',
++                get_string('categorydeleteandquestions', 'qbank_managecategories'));
++        }
++        $buttonarray[] = $mform->createElement('cancel');
++        $mform->addGroup($buttonarray, 'buttonar', '', [' '], false);
++        $mform->closeHeaderBefore('buttonar');
+ 
+         $mform->addElement('hidden', 'delete', $currentcat);
+         $mform->setType('delete', PARAM_INT);
+diff --git a/public/question/bank/managecategories/lang/en/qbank_managecategories.php b/public/question/bank/managecategories/lang/en/qbank_managecategories.php
+index 00b849eeab4..1411c377a15 100644
+--- a/public/question/bank/managecategories/lang/en/qbank_managecategories.php
++++ b/public/question/bank/managecategories/lang/en/qbank_managecategories.php
+@@ -26,7 +26,8 @@
+ $string['after'] = 'After {$a}';
+ $string['before'] = 'Before {$a}';
+ $string['categoryincategory'] = 'Cannot move category in same category.';
+-$string['categorymoved'] = 'The category has been moved successfully.';
++$string['categorydeleteandquestions'] = 'Delete category and questions';
++$string['categorymoved'] ='The category has been moved successfully.';
+ $string['categorymovedto'] = 'Category moved to <a href="{$a->url}">{$a->name}</a>.';
+ $string['confirmdelete'] = 'Delete category "{$a}"?. Any child categories will be moved to this category\'s parent.';
+ $string['descriptionnotdisplayed'] = 'Categories description not displayed';
+diff --git a/public/question/classes/category_manager.php b/public/question/classes/category_manager.php
+index 3dbb4696085..a71478b2c80 100644
+--- a/public/question/classes/category_manager.php
++++ b/public/question/classes/category_manager.php
+@@ -60,6 +60,34 @@ class category_manager {
+         $transaction->allow_commit();
+     }
+ 
++    /**
++     * Delete a question category together with the questions it contains.
++     *
++     * Nothing is deleted if any question in the category is in use (for example, used in a quiz).
++     * Those questions must be moved to another category first, using move_questions_and_delete_category().
++     *
++     * @param int $categoryid id of category to delete.
++     * @throws moodle_exception if any question in the category is in use.
++     */
++    public function delete_category_and_questions(int $categoryid): void {
++        global $DB, $CFG;
++        require_once($CFG->libdir . '/questionlib.php');
++
++        $this->require_can_delete_category($categoryid);
++        $questionids = $this->get_real_question_ids_in_category($categoryid);
++        if ($questionids && questions_in_use($questionids)) {
++            throw new moodle_exception('cannotdeletecatwithusedquestions', 'question');
++        }
++
++        $transaction = $DB->start_delegated_transaction();
++        foreach ($questionids as $questionid) {
++            question_require_capability_on($questionid, 'edit');
++            question_delete_question($questionid);
++        }
++        $this->delete_category($categoryid);
++        $transaction->allow_commit();
++    }
++
+     /**
+      * Move questions and then delete the category.
+      *
+diff --git a/public/question/tests/category_manager_test.php b/public/question/tests/category_manager_test.php
+index 3fb830c9ae2..09b0fd5ace7 100644
+--- a/public/question/tests/category_manager_test.php
++++ b/public/question/tests/category_manager_test.php
+@@ -666,4 +666,32 @@ final class category_manager_test extends \advanced_testcase {
+         $this->assertEquals($quiz2top->id, $DB->get_field('question_categories', 'parent', ['id' => $quiz2nontop->id]));
+         $this->assertEquals($qbank2top->id, $DB->get_field('question_categories', 'parent', ['id' => $qbank2nontop->id]));
+     }
++
++    /**
++     * Test that delete_category_and_questions() deletes the category and the unused questions in it.
++     *
++     * @covers ::delete_category_and_questions
++     */
++    public function test_delete_category_and_questions(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $this->setAdminUser();
++        $generator = $this->getDataGenerator();
++        $course = $generator->create_course();
++        $quiz = $generator->create_module('quiz', ['course' => $course->id]);
++        $contexts = new question_edit_contexts(context_module::instance($quiz->cmid));
++        $questiongenerator = $generator->get_plugin_generator('core_question');
++
++        $topcat = question_get_top_category($contexts->lowest()->id, true);
++        $category = $questiongenerator->create_question_category(['contextid' => $contexts->lowest()->id,
++            'parent' => $topcat->id]);
++        $question = $questiongenerator->create_question('shortanswer', null, ['category' => $category->id]);
++
++        $manager = new category_manager();
++        $manager->delete_category_and_questions($category->id);
++
++        $this->assertFalse($DB->record_exists('question_categories', ['id' => $category->id]));
++        $this->assertFalse($DB->record_exists('question', ['id' => $question->id]));
++    }
+ }

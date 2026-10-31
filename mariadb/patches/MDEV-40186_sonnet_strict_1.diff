@@ -1,0 +1,21 @@
+diff --git a/storage/heap/hp_rnext.c b/storage/heap/hp_rnext.c
+index a07d8fae..6a8a7142 100644
+--- a/storage/heap/hp_rnext.c
++++ b/storage/heap/hp_rnext.c
+@@ -126,6 +126,16 @@ int heap_rnext(HP_INFO *info, uchar *record)
+     DBUG_RETURN(my_errno);
+   }
+   memcpy(record,pos,(size_t) share->reclength);
++  if (keyinfo->algorithm == HA_KEY_ALG_BTREE)
++  {
++    /*
++      Remember the last found key (without the row pointer), so that if
++      this row is deleted the next heap_rnext() restarts the search from
++      here and not from the key that was used in heap_rkey().
++    */
++    info->lastkey_len= hp_rb_make_key(keyinfo, info->lastkey, record, pos) -
++                       (uint) sizeof(uchar*);
++  }
+   info->update=HA_STATE_AKTIV | HA_STATE_NEXT_FOUND;
+   DBUG_RETURN(0);
+ }

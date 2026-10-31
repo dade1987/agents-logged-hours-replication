@@ -1,0 +1,32 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot run Moodle's test suite. You may run `php -l <file>` and read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-88280: Preview qbank incorrectly returned in search_shared_banks results
+
+According to question/classes/local/bank/question_bank_helper.php at line 53, the preview qbank (type='preview') should never be visible or accessible to users, yet it is returned by core_question_search_shared_banks and appears as a selectable option in the bulk move question bank autocomplete.
+
+Steps to reproduce:
+
+# Visit /question/bank/columnsortorder/sortcolumns.php as admin (creates the preview qbank if it doesn't exist)
+# Create two qbanks instances in two different courses
+# Add a question to one of them
+# Select the question and open the bulk move dialog
+# Trigger the bank search autocomplete
+
+*Observed behaviour:*
+
+The preview qbank appears as an option in the bank selector. On sites where the preview qbank has an empty name (possible as explained in [https://moodle.atlassian.net/browse/MDL-86099?focusedCommentId=1030363|https://moodle.atlassian.net/browse/MDL-86099?focusedCommentId=1030363|smart-link] ), this also causes a fatal invalidcoursemoduleid error.
+
+*Expected behaviour:*
+
+The preview qbank is never returned in search results or shown to users.
+
+
+The developers' tests for this issue use these new or changed classes, functions or web services (names and signatures only; you must implement them):
+(nessuna interfaccia nuova usata dai test)

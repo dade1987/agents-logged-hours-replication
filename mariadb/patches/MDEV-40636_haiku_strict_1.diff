@@ -1,0 +1,57 @@
+diff --git a/mysql-test/suite/csv/csv_delete_many.result b/mysql-test/suite/csv/csv_delete_many.result
+new file mode 100644
+index 00000000..d3df8604
+--- /dev/null
++++ b/mysql-test/suite/csv/csv_delete_many.result
+@@ -0,0 +1,13 @@
++create table t1 (id int not null, pad char(10) not null) engine=csv;
++insert t1 select seq,'AAAAAAAAAA' from seq_1_to_2048;
++select count(*) from t1;
++count(*)
++2048
++delete from t1 where id % 2 = 0;
++select count(*) from t1;
++count(*)
++1024
++select 1;
++1
++1
++drop table t1;
+diff --git a/mysql-test/suite/csv/csv_delete_many.test b/mysql-test/suite/csv/csv_delete_many.test
+new file mode 100644
+index 00000000..c0360497
+--- /dev/null
++++ b/mysql-test/suite/csv/csv_delete_many.test
+@@ -0,0 +1,18 @@
++#-----------------------------------------------------------------------------
++# csv_delete_many.test
++# Purpose:  MDEV-40636 - deleting many non-adjacent rows from a CSV table
++#           overflowed the heap buffer used for the list of deleted
++#           positions ("chain") because it was reallocated with an element
++#           count instead of a byte size.
++#-----------------------------------------------------------------------------
++
++--source include/have_sequence.inc
++--source include/have_csv.inc
++
++create table t1 (id int not null, pad char(10) not null) engine=csv;
++insert t1 select seq,'AAAAAAAAAA' from seq_1_to_2048;
++select count(*) from t1;
++delete from t1 where id % 2 = 0;
++select count(*) from t1;
++select 1;
++drop table t1;
+diff --git a/storage/csv/ha_tina.cc b/storage/csv/ha_tina.cc
+index 71c06776..83f23055 100644
+--- a/storage/csv/ha_tina.cc
++++ b/storage/csv/ha_tina.cc
+@@ -646,7 +646,8 @@ int ha_tina::chain_append()
+       if (chain_alloced)
+       {
+         if ((chain= (tina_set *) my_realloc(csv_key_memory_tina_set,
+-                                            (uchar*)chain, chain_size,
++                                            (uchar*)chain,
++                                            chain_size * sizeof(tina_set),
+                                             MYF(MY_WME))) == NULL)
+           return -1;
+       }

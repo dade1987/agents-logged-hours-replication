@@ -1,0 +1,50 @@
+diff --git a/sql/item_geofunc.cc b/sql/item_geofunc.cc
+index 307f198c..1428d0e3 100644
+--- a/sql/item_geofunc.cc
++++ b/sql/item_geofunc.cc
+@@ -2321,7 +2321,18 @@ String *Item_func_simplify::val_str(String *str)
+     }
+   }
+ 
+-  if (geometry->simplify(str, max_distance))
++  /*
++    Simplify into a private buffer: 'geometry' may still reference the
++    memory behind 'res' (and 'str' may alias it), so writing the result
++    directly into 'str' while reading the source could corrupt the input.
++  */
++  String simplified;
++  if (geometry->simplify(&simplified, max_distance))
++  {
++    null_value= 1;
++    DBUG_RETURN(NULL);
++  }
++  if (str->copy(simplified))
+   {
+     null_value= 1;
+     DBUG_RETURN(NULL);
+diff --git a/sql/spatial.cc b/sql/spatial.cc
+index 5df5a555..d6ab9b7b 100644
+--- a/sql/spatial.cc
++++ b/sql/spatial.cc
+@@ -2387,6 +2387,9 @@ int Gis_polygon::simplify(String *result, double max_distance) const
+   if (geometry->simplify(&exterior_ring, max_distance))
+     return 1;
+ 
++  if (exterior_ring.length() < SRID_SIZE + WKB_HEADER_SIZE)
++    return 1;
++
+   if (!(geometry= Geometry::construct(&buffer, exterior_ring.ptr(),
+                           exterior_ring.length())))
+     return 1;
+@@ -2470,7 +2473,10 @@ int Gis_polygon::num_interior_ring(uint32 *n_int_rings) const
+ {
+   if (no_data(m_data, 4))
+     return 1;
+-  *n_int_rings= uint4korr(m_data)-1;
++  uint32 n_linear_rings= uint4korr(m_data);
++  if (n_linear_rings == 0)
++    return 1;
++  *n_int_rings= n_linear_rings - 1;
+   return 0;
+ }
+ 

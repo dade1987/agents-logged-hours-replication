@@ -1,0 +1,49 @@
+diff --git a/mysql-test/main/user_var.result b/mysql-test/main/user_var.result
+index 8afe3839..24e6c90a 100644
+--- a/mysql-test/main/user_var.result
++++ b/mysql-test/main/user_var.result
+@@ -162,13 +162,13 @@ collation(@a:=_latin2'test')
+ latin2_general_ci
+ select coercibility(@a:=_latin2'test');
+ coercibility(@a:=_latin2'test')
+-6
++5
+ select collation(@a:=_latin2'test' collate latin2_bin);
+ collation(@a:=_latin2'test' collate latin2_bin)
+ latin2_bin
+ select coercibility(@a:=_latin2'test' collate latin2_bin);
+ coercibility(@a:=_latin2'test' collate latin2_bin)
+-6
++5
+ select (@a:=_latin2'test' collate latin2_bin) = _latin2'TEST';
+ (@a:=_latin2'test' collate latin2_bin) = _latin2'TEST'
+ 0
+diff --git a/sql/item_func.cc b/sql/item_func.cc
+index 07b811eb..fbc42d08 100644
+--- a/sql/item_func.cc
++++ b/sql/item_func.cc
+@@ -4851,7 +4851,7 @@ bool Item_func_set_user_var::fix_fields(THD *thd, Item **ref)
+                              &my_charset_numeric : args[0]->collation.collation);
+   collation.set(m_var_entry->charset(),
+                 args[0]->collation.derivation == DERIVATION_NUMERIC ?
+-                DERIVATION_NUMERIC : DERIVATION_COERCIBLE);
++                DERIVATION_NUMERIC : DERIVATION_USERVAR);
+   switch (args[0]->result_type()) {
+   case STRING_RESULT:
+   case TIME_RESULT:
+@@ -4916,7 +4916,14 @@ Item_func_set_user_var::fix_length_and_dec(THD *thd)
+   }
+   else
+   {
+-    collation.set(DERIVATION_COERCIBLE);
++    /*
++      The value of a user variable has the same derivation as a read of
++      the variable (see Item_func_get_user_var), so that a later comparison
++      with a coercible literal of another collation of the same character
++      set (e.g. utf8mb3_unicode_ci vs utf8mb3_uca1400_ai_ci) does not fail
++      with "Illegal mix of collations".
++    */
++    collation.set(DERIVATION_USERVAR);
+     fix_length_and_charset(args[0]->max_char_length(),
+                            args[0]->collation.collation);
+   }

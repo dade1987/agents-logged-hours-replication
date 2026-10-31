@@ -1,0 +1,55 @@
+diff --git a/storage/heap/hp_rfirst.c b/storage/heap/hp_rfirst.c
+index 1b1610ac..9d718de0 100644
+--- a/storage/heap/hp_rfirst.c
++++ b/storage/heap/hp_rfirst.c
+@@ -34,20 +34,16 @@ int heap_rfirst(HP_INFO *info, uchar *record, int inx)
+     if ((pos = tree_search_edge(&keyinfo->rb_tree, info->parents,
+                                 &info->last_pos, offsetof(TREE_ELEMENT, left))))
+     {
+-      memcpy(&pos, pos + keyinfo->get_key_length(keyinfo, pos), sizeof(uchar*));
+-      info->current_ptr = pos;
+-      memcpy(record, pos, (size_t)share->reclength);
++      uint key_len= keyinfo->get_key_length(keyinfo, pos);
+       /*
+-        If we're performing index_first on a table that was taken from
+-        table cache, info->lastkey_len is initialized to previous query.
+-        Thus we set info->lastkey_len to proper value for subsequent
+-        heap_rnext() calls.
+-        This is needed for DELETE queries only, otherwise this variable is
+-        not used.
+-        Note that the same workaround may be needed for heap_rlast(), but
+-        for now heap_rlast() is never used for DELETE queries.
++        Remember the key of the found record, it is needed by heap_rnext()
++        if the record is deleted (see heap_rnext()).
+       */
+-      info->lastkey_len= 0;
++      memcpy(info->lastkey, pos, key_len);
++      info->lastkey_len= key_len;
++      memcpy(&pos, pos + key_len, sizeof(uchar*));
++      info->current_ptr = pos;
++      memcpy(record, pos, (size_t)share->reclength);
+       info->update = HA_STATE_AKTIV;
+     }
+     else
+diff --git a/storage/heap/hp_rnext.c b/storage/heap/hp_rnext.c
+index a07d8fae..2b9aa0b6 100644
+--- a/storage/heap/hp_rnext.c
++++ b/storage/heap/hp_rnext.c
+@@ -92,7 +92,16 @@ int heap_rnext(HP_INFO *info, uchar *record)
+     }
+     if (pos)
+     {
+-      memcpy(&pos, pos + keyinfo->get_key_length(keyinfo, pos), sizeof(uchar*));
++      uint key_len= keyinfo->get_key_length(keyinfo, pos);
++      /*
++        Remember the full key of the record just found. If this record is
++        deleted, the next heap_rnext() must restart the search from this key,
++        not from the key used by the original heap_rkey()/heap_rfirst() call,
++        otherwise already visited records would be returned again.
++      */
++      memcpy(info->lastkey, pos, key_len);
++      info->lastkey_len= key_len;
++      memcpy(&pos, pos + key_len, sizeof(uchar*));
+       info->current_ptr = pos;
+     }
+     else

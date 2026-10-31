@@ -1,0 +1,80 @@
+diff --git a/public/course/classes/task/course_delete_modules.php b/public/course/classes/task/course_delete_modules.php
+index 7bf12719cfb..d7f3c8172bc 100644
+--- a/public/course/classes/task/course_delete_modules.php
++++ b/public/course/classes/task/course_delete_modules.php
+@@ -47,7 +47,7 @@ class course_delete_modules extends \core\task\adhoc_task {
+      * @throws \coding_exception if the module could not be removed.
+      */
+     public function execute() {
+-        global $CFG;
++        global $CFG, $DB;
+         require_once($CFG->dirroot. '/course/lib.php');
+ 
+         // Set the proper user.
+@@ -65,8 +65,13 @@ class course_delete_modules extends \core\task\adhoc_task {
+         $cmsfailed = [];
+         foreach ($cms as $key => $cm) {
+             try {
+-                $coursecontext = \context_module::instance($cm->id)->get_course_context();
+-                \core_courseformat\formatactions::cm($coursecontext->instanceid)->delete($cm->id);
++                // The course module may have already been deleted (e.g. the task is being re-run, or the module
++                // was removed in the meantime). In that case there is nothing left to do, so treat it as a success.
++                $cmrecord = $DB->get_record('course_modules', ['id' => $cm->id], 'id, course');
++                if (!$cmrecord) {
++                    continue;
++                }
++                \core_courseformat\formatactions::cm($cmrecord->course)->delete($cm->id);
+             } catch (\Exception $e) {
+                 // Keep the information instead of throw an exception and continue with next cms.
+                 $exceptions[] = ("The course module {$cm->id} could not be deleted. "
+diff --git a/public/course/tests/course_delete_modules_test.php b/public/course/tests/course_delete_modules_test.php
+index 630fe466b20..aec77c44677 100644
+--- a/public/course/tests/course_delete_modules_test.php
++++ b/public/course/tests/course_delete_modules_test.php
+@@ -65,6 +65,46 @@ final class course_delete_modules_test extends \advanced_testcase {
+         // The module has deleted from the course.
+         $coursedmodules = get_course_mods($course->id);
+         $this->assertCount(0, $coursedmodules);
++
++        // Executing the task again must be harmless, even though the course module record no longer exists.
++        $removaltask->execute();
++        $coursedmodules = get_course_mods($course->id);
++        $this->assertCount(0, $coursedmodules);
++    }
++
++    /**
++     * Test that the task succeeds when the course module record is already missing (idempotent execution).
++     */
++    public function test_delete_module_already_deleted(): void {
++        global $DB;
++        $this->resetAfterTest();
++
++        // Generate test data.
++        $generator = $this->getDataGenerator();
++        $user = $generator->create_user();
++        $course = $generator->create_course();
++        $assign = $generator->create_module('assign', ['course' => $course]);
++        $assigncm = get_coursemodule_from_id('assign', $assign->cmid);
++        $quiz = $generator->create_module('quiz', ['course' => $course]);
++        $quizcm = get_coursemodule_from_id('quiz', $quiz->cmid);
++
++        // Remove the course module record of the assignment directly, so that the task can not find it.
++        $DB->delete_records('course_modules', ['id' => $assigncm->id]);
++
++        // Execute the task with both the missing and the existing course modules.
++        $removaltask = new \core_course\task\course_delete_modules();
++        $data = [
++            'cms' => [$assigncm, $quizcm],
++            'userid' => $user->id,
++            'realuserid' => $user->id,
++        ];
++        $removaltask->set_custom_data($data);
++        $removaltask->execute();
++
++        // No exception was thrown, and the existing module has been deleted.
++        $coursedmodules = get_course_mods($course->id);
++        $this->assertCount(0, $coursedmodules);
++        $this->assertFalse($DB->record_exists('quiz', ['id' => $quiz->id]));
+     }
+ 
+     /**

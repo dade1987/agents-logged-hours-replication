@@ -1,0 +1,74 @@
+diff --git a/mysql-test/suite/json/r/json_table.result b/mysql-test/suite/json/r/json_table.result
+index e4060877..4dca5fe6 100644
+--- a/mysql-test/suite/json/r/json_table.result
++++ b/mysql-test/suite/json/r/json_table.result
+@@ -1298,4 +1298,21 @@ COLLATION(virtual_table_from_json.property)
+ utf8mb4_uca1400_ai_ci
+ DROP TABLE table_with_longtext_column;
+ DROP DATABASE collation_testing;
++#
++# MDEV-39969 Incorrect result of JSON_TABLE with BIT
++#
++SELECT ord, i, b+0, HEX(b)
++FROM JSON_TABLE('[0,1]', '$[*]' COLUMNS (ord FOR ORDINALITY, i INT PATH '$',
++b BIT(1) PATH '$')) AS jt ORDER BY ord;
++ord	i	b+0	HEX(b)
++1	0	0	0
++2	1	1	1
++SELECT ord, b+0, HEX(b)
++FROM JSON_TABLE('[0,1,5,255]', '$[*]' COLUMNS (ord FOR ORDINALITY,
++b BIT(8) PATH '$')) AS jt ORDER BY ord;
++ord	b+0	HEX(b)
++1	0	0
++2	1	1
++3	5	5
++4	255	FF
+ # End of 10.11 test
+diff --git a/mysql-test/suite/json/t/json_table.test b/mysql-test/suite/json/t/json_table.test
+index bab6d4b7..ed9fb687 100644
+--- a/mysql-test/suite/json/t/json_table.test
++++ b/mysql-test/suite/json/t/json_table.test
+@@ -1121,4 +1121,15 @@ SELECT COLLATION(virtual_table_from_json.property) FROM JSON_TABLE((SELECT colum
+ DROP TABLE table_with_longtext_column;
+ DROP DATABASE collation_testing;
+ 
++
++--echo #
++--echo # MDEV-39969 Incorrect result of JSON_TABLE with BIT
++--echo #
++SELECT ord, i, b+0, HEX(b)
++FROM JSON_TABLE('[0,1]', '$[*]' COLUMNS (ord FOR ORDINALITY, i INT PATH '$',
++                b BIT(1) PATH '$')) AS jt ORDER BY ord;
++SELECT ord, b+0, HEX(b)
++FROM JSON_TABLE('[0,1,5,255]', '$[*]' COLUMNS (ord FOR ORDINALITY,
++                b BIT(8) PATH '$')) AS jt ORDER BY ord;
++
+ --echo # End of 10.11 test
+diff --git a/sql/json_table.cc b/sql/json_table.cc
+index e5ac6008..6e247474 100644
+--- a/sql/json_table.cc
++++ b/sql/json_table.cc
+@@ -384,6 +384,23 @@ static void store_json_in_field(Field *f, const json_engine_t *je)
+     }
+     break;
+   }
++  case JSON_VALUE_NUMBER:
++  {
++    if (f->type() == MYSQL_TYPE_BIT)
++    {
++      /*
++        A JSON number must be stored into a BIT column as a number,
++        not as a string of its digits (which would be interpreted
++        as a binary string, e.g. '0' -> 0x30).
++      */
++      my_decimal dec;
++      str2my_decimal(E_DEC_OOM, (const char *) je->value, je->value_len,
++                     je->s.cs, &dec);
++      f->store_decimal(&dec);
++      return;
++    }
++    break;
++  }
+   default:
+     break;
+   };

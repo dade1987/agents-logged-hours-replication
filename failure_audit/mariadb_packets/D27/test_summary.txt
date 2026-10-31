@@ -1,0 +1,124 @@
+Evaluation: the agent's diff (without its own mysql-test changes) was applied on the parent commit, the developers' mysql-test files from the fix were added, the server was built (debug) and the fix's mtr tests were run: ['main.spatial_utility_function_simplify']
+On the parent commit these tests FAIL; with the human fix they PASS.
+
+AGENT RESULT: FAIL
+main.spatial_utility_function_simplify   w4 [ fail ]
+        Test ended at 2026-10-28 09:37:51
+
+CURRENT_TEST: main.spatial_utility_function_simplify
+mysqltest: At line 512: query 'SELECT COLUMN_GET(COLUMN_CREATE('a', 1), ST_SIMPLIFY(ST_GEOMFROMTEXT('GEOMETRYCOLLECTION(MULTILINESTRING((0 0,5 5,0 10),(0 0,-5 5,0 10)))'), 5) AS CHAR) IS NULL AS ok' failed: <Unknown> (2013): Lost connection to server during query
+
+The result from queries just before the failure was:
+< snip >
+SELECT ST_ASTEXT(ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((0 0,0 10,10 10,10 0,0 0,0 0,0 0,0 0))'), a));
+ERROR 42S22: Unknown column 'a' in 'SELECT'
+#
+# MDEV-39911 Crash in ST_SIMPLIFY of a collection geometry
+#
+# ST_SIMPLIFY of a collection reserved less space than the WKB header it
+# writes, so the element count overran a small buffer.  CONCAT_WS
+# builds its separator in a ten byte stack buffer and COLUMN_GET builds its
+# column name in an eleven byte stack buffer.  Each query below crashed
+# before the fix.
+SELECT CONCAT_WS(ST_SIMPLIFY(ST_GEOMFROMTEXT('MULTILINESTRING((0 0,5 5,0 10),(0 0,-5 5,0 10))'), 5), 7, 5) IS NOT NULL AS ok;
+ok
+1
+SELECT CONCAT_WS(ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((0 0,10 0,15 5,10 10,0 10,-5 5,0 0))'), 0.0001), 7, 5) IS NOT NULL AS ok;
+ok
+1
+SELECT CONCAT_WS(ST_SIMPLIFY(ST_GEOMFROMTEXT('MULTIPOLYGON(((0 0,10 0,15 5,10 10,0 10,-5 5,0 0)))'), 0.0001), 7, 5) IS NOT NULL AS ok;
+ok
+1
+SELECT COLUMN_GET(COLUMN_CREATE('a', 1), ST_SIMPLIFY(ST_GEOMFROMTEXT('GEOMETRYCOLLECTION(MULTILINESTRING((0 0,5 5,0 10),(0 0,-5 5,0 10)))'), 5) AS CHAR) IS NULL AS ok;
+
+More results from queries before failure can be found in /home/mtr/var/t/4/log/spatial_utility_function_simplify.log
+
+
+Server [mysqld.1 - pid: 6267, winpid: 6267, exit: 256] failed during test run
+Server log from this test:
+----------SERVER LOG START-----------
+$ /home/user/mdb_build_dbg/sql/mariadbd --defaults-group-suffix=.1 --defaults-file=/home/mtr/var/t/4/my.cnf --log-output=file --core-file --loose-debug-sync-timeout=300
+2026-10-28  9:37:28 0 [Warning] Could not increase number of max_open_files to more than 1024 (request: 32186)
+2026-10-28  9:37:28 0 [Warning] Changed limits: max_open_files: 1024  max_connections: 151 (was 151)  table_cache: 421 (was 2000)
+2026-10-28  9:37:28 0 [Note] Starting MariaDB 12.3.3-MariaDB-debug-log source revision deed18f42d59193afbc8f64ebd8fdcff4cafd9e1 server_uid mbTPi4QZ8mGXQx/0OS3RvMWBj24= as process 6268
+2026-10-28  9:37:28 0 [Note] Plugin 'partition' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'InnoDB' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'SEQUENCE' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'INNODB_FT_CONFIG' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'INNODB_SYS_TABLESTATS' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'INNODB_CMP_PER_INDEX' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'INNODB_FT_DELETED' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'INNODB_CMP' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'THREAD_POOL_WAITS' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'INNODB_CMP_RESET' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'THREAD_POOL_QUEUES' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'INNODB_SYS_FIELDS' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'INNODB_BUFFER_PAGE_LRU' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'FEEDBACK' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'INNODB_FT_INDEX_TABLE' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'INNODB_CMPMEM' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'THREAD_POOL_GROUPS' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'INNODB_CMP_PER_INDEX_RESET' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'INNODB_SYS_FOREIGN_COLS' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'INNODB_FT_INDEX_CACHE' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'INNODB_BUFFER_POOL_STATS' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'INNODB_FT_BEING_DELETED' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'INNODB_SYS_FOREIGN' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'INNODB_CMPMEM_RESET' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'INNODB_FT_DEFAULT_STOPWORD' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'INNODB_SYS_TABLES' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'INNODB_SYS_COLUMNS' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'INNODB_SYS_TABLESPACES' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'INNODB_SYS_INDEXES' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'INNODB_SYS_VIRTUAL' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'user_variables' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'INNODB_TABLESPACES_ENCRYPTION' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'THREAD_POOL_STATS' is disabled.
+2026-10-28  9:37:28 0 [Note] Plugin 'unix_socket' is disabled.
+2026-10-28  9:37:28 0 [Warning] /home/user/mdb_build_dbg/sql/mariadbd: unknown option '--loose-pam-debug'
+2026-10-28  9:37:28 0 [Warning] /home/user/mdb_build_dbg/sql/mariadbd: unknown option '--loose-aria'
+2026-10-28  9:37:28 0 [Note] Server socket created on IP: '127.0.0.1', port: '19090'.
+2026-10-28  9:37:28 0 [Note] mariadbd: Event Scheduler: Loaded 0 events
+2026-10-28  9:37:28 0 [Note] /home/user/mdb_build_dbg/sql/mariadbd: ready for connections.
+Version: '12.3.3-MariaDB-debug-log'  socket: '/home/mtr/var/t/tmp/4/mysqld.1.sock'  port: 19090  Source distribution
+mariadbd: /home/user/mdb_src/sql/sql_string.h:360: void Binary_string::q_append(uint32): Assertion `str_length + (uint32) (4) <= Alloced_length' failed.
+261028  9:37:29 [ERROR] /home/user/mdb_build_dbg/sql/mariadbd got signal 6 ;
+Sorry, we probably made a mistake, and this is a bug.
+
+Your assistance in bug reporting will enable us to fix this for the next release.
+To report this bug, see https://mariadb.com/docs/general-resources/community/community/bug-tracking/reporting-bugs about how to report
+a bug on https://jira.mariadb.org/.
+
+Please include the information from the server start above, to the end of the
+information below.
+
+Server version: 12.3.3-MariaDB-debug-log source revision: deed18f42d59193afbc8f64ebd8fdcff4cafd9e1
+
+The information page at https://mariadb.com/docs/server/reference/product-development/mariadb-fault-finding/how-to-produce-a-full-stack-trace-for-mariadbdcontains instructions to obtain a better version of the backtrace below.
+Following these instructions will help MariaDB developers provide a fix quicker.
+
+Attempting backtrace. Include this in the bug report.
+(note: Retrieving this information may fail)
+
+Thread pointer: 0x7feb00000dd0
+stack_bottom = 0x7feb18119000 thread_stack 0x49000
+/home/user/mdb_build_dbg/sql/mariadbd(my_print_stacktrace+0x44)[0x55648b368c70]
+/home/user/mdb_build_dbg/sql/mariadbd(handle_fatal_signal+0x260)[0x55648a8ea6c1]
+libc_sigaction.c:0(__restore_rt)[0x7feb1d845330]
+nptl/pthread_kill.c:44(__pthread_kill_implementation)[0x7feb1d89ec0c]
+posix/raise.c:27(__GI_raise)[0x7feb1d84527e]
+stdlib/abort.c:81(__GI_abort)[0x7feb1d8288ff]
+intl/loadmsgcat.c:1177(_nl_load_domain)[0x7feb1d82881b]
+/lib/x86_64-linux-gnu/libc.so.6(+0x3b517)[0x7feb1d83b517]
+/home/user/mdb_build_dbg/sql/mariadbd(_ZN13Binary_string8q_appendEj+0xa8)[0x55648a9cd0b4]
+sql/sql_string.h:361(Binary_string::q_append(unsigned int))[0x55648ab367d4]
+sql/spatial.cc:4724(Gis_geometry_collection::simplify(String*, double) const)[0x55648a9c69d0]
+sql/item_strfunc.cc:5355(Item_dyncol_get::get_dyn_value(THD*, st_dynamic_column_value*, String*))[0x55648a9f427b]
+sql/item_strfunc.cc:5421(Item_dyncol_get::val_str(String*))[0x55648a9f4640]
+sql/item_timefunc.cc:4000(Item_char_typecast::val_str_generic(String*))[0x55648aa69bf9]
+sql/item_timefunc.cc:4118(Item_char_typecast_func_handler::val_str(Item_handled_func*, String*) const)[0x55648aa77a0e]
+sql/item_func.h:898(Item_handled_func::val_str(String*))[0x55648a79367d]
+sql/sql_type.cc:4367(Type_handler_string_result::Item_update_null_value(Item*) const)[0x55648a778923]
+sql/item.h:2172(Item::update_null_value())[0x55648a21858a]
+sql/item_func.h:249(Item_func::is_null())[0x55648a265e2b]
+sql/item_cmpfunc.cc:5884(Item_func_isnull::val_bool())[0x55648a95dc77]

@@ -1,0 +1,41 @@
+diff --git a/mysql-test/main/alter_table_combinations.result b/mysql-test/main/alter_table_combinations.result
+index 08cf6c4707c..51588d8e705 100644
+--- a/mysql-test/main/alter_table_combinations.result
++++ b/mysql-test/main/alter_table_combinations.result
+@@ -321,4 +321,13 @@ drop table t1;
+ #
+ # End of 10.5 tests
+ #
++#
++# MDEV-31808 Server crash upon altering table with NEXTVAL for default under exclusive lock
++#
++CREATE SEQUENCE s ENGINE=Aria;
++CREATE TABLE t (a INT DEFAULT(NEXTVAL(s)), b INT);
++ALTER TABLE t FORCE, ALGORITHM=COPY, LOCK=EXCLUSIVE;
++DROP TABLE t;
++DROP SEQUENCE s;
++# End of 10.6 tests
+ set @@default_storage_engine= @save_default_engine;
+diff --git a/mysql-test/main/alter_table_combinations.test b/mysql-test/main/alter_table_combinations.test
+index 7c8d7f42096..b208f0e4416 100644
+--- a/mysql-test/main/alter_table_combinations.test
++++ b/mysql-test/main/alter_table_combinations.test
+@@ -260,4 +260,18 @@ drop table t1;
+ --echo # End of 10.5 tests
+ --echo #
+ 
++--echo #
++--echo # MDEV-31808 Server crash upon altering table with NEXTVAL for default under exclusive lock
++--echo #
++
++CREATE SEQUENCE s ENGINE=Aria;
++CREATE TABLE t (a INT DEFAULT(NEXTVAL(s)), b INT);
++ALTER TABLE t FORCE, ALGORITHM=COPY, LOCK=EXCLUSIVE;
++
++# Cleanup
++DROP TABLE t;
++DROP SEQUENCE s;
++
++--echo # End of 10.6 tests
++
+ set @@default_storage_engine= @save_default_engine;

@@ -1,0 +1,20 @@
+diff --git a/sql/log_event.cc b/sql/log_event.cc
+index 5039c21c..4ce053bb 100644
+--- a/sql/log_event.cc
++++ b/sql/log_event.cc
+@@ -1114,6 +1114,7 @@ Log_event* Log_event::read_log_event(const uchar *buf, uint event_len,
+     if (force_opt)
+     {
+       event_len-= BINLOG_CHECKSUM_LEN;
++      *error= nullptr; // forced: substitute event, not an error
+       ev= new Unknown_log_event(buf, fdle);
+       goto exit;
+     }
+@@ -1358,6 +1359,7 @@ Log_event* Log_event::read_log_event(const uchar *buf, uint event_len,
+         *error= "Found invalid event in binary log";
+       DBUG_RETURN(0);
+     }
++    *error= nullptr; // --force-read: output Unknown event, not an error
+     ev= new Unknown_log_event(buf, fdle);
+ #else
+     if (!*error)

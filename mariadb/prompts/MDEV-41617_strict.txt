@@ -1,0 +1,67 @@
+You are a software engineer fixing an issue in MariaDB Server (C/C++). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot build MariaDB or run its test suite. Read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update mysql-test tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDEV-41617: Index corruption on UPDATE of table with long unique hash collision and indexed virtual blob
+
+h3. Reproduce
+{code:sql}
+--source include/have_debug.inc
+--source include/have_innodb.inc
+
+create table t1 (id int primary key, a text, v text as (concat('v-', a)) virtual,
+                 unique (a), key (v(10))) engine=innodb;
+set debug_dbug= 'd,same_long_unique_hash';
+insert t1 (id, a) values (1, 'a1'), (2, 'b1');
+update t1 set a= 'a2' where id = 1;
+check table t1 extended;
+select * from t1 force index (v) order by v;
+set debug_dbug= default;
+drop table t1;
+{code}
+
+h3. Result
+{code:sql}
+mysqltest: At line 11: query 'update t1 set a= 'a2' where id = 1' failed: <Unknown> (2013): Lost connection to server during query
+
+[ERROR] InnoDB: Record in index `v` of table `test`.`t1` was not found on update: TUPLE (info_bits=0, 2 fields): {[4]    (0x8F8F8F8F),[4]    (0x80000001)} at: COMPACT RECORD(info_bits=0, 2 fields): {[4]v-b1(0x762D6231),[4]    (0x80000002)}
+mariadbd: ../src/storage/innobase/row/row0upd.cc:1926: dberr_t row_upd_sec_index_entry(upd_node_t *, que_thr_t *): Assertion `0' failed.
+
+#13 __assert_fail (assertion=0x555555e50bcc "0", file=0x555555e7ce75 "../src/storage/innobase/row/row0upd.cc", line=<optimized out>, function=<optimized out>) at ./assert/assert.c:37
+#14 row_upd_sec_index_entry (node=0x77ffbc112e50, thr=0x77ffbc211198) at ../src/storage/innobase/row/row0upd.cc:1926
+#15 row_upd_sec_step (node=0x77ffbc112e50, thr=0x77ffbc211198) at ../src/storage/innobase/row/row0upd.cc:2054
+#16 row_upd (node=0x77ffbc112e50, thr=0x77ffbc211198) at ../src/storage/innobase/row/row0upd.cc:2801
+#17 row_upd_step (thr=0x77ffbc211198) at ../src/storage/innobase/row/row0upd.cc:2916
+#18 row_update_for_mysql (prebuilt=0x77ffbc1123a8) at ../src/storage/innobase/row/row0mysql.cc:1679
+#19 ha_innobase::update_row (this=0x77ffbc10f308, old_row=0x77ffbc10fb10 "\370\001", new_row=0x77ffbc10fae8 "\370\001") at ../src/storage/innobase/handler/ha_innodb.cc:8840
+#20 handler::ha_update_row (this=0x77ffbc10f308, old_data=0x77ffbc10fb10 "\370\001", new_data=0x77ffbc10fae8 "\370\001") at ../src/sql/handler.cc:7937
+#21 mysql_update (thd=0x77ffbc000d68, table_list=0x77ffbc014458, ...)
+#22 mysql_execute_command (thd=0x77ffbc000d68, is_called_from_prepared_stmt=false) at ../src/sql/sql_parse.cc:4502
+{code}
+
+h3. Expected
+{code:sql}
+check table t1 extended;
+Table	Op	Msg_type	Msg_text
+test.t1	check	status	OK
+select * from t1 force index (v) order by v;
+id	a	v
+1	a2	v-a2
+2	b1	v-b1
+{code}
+
+The old key of row 1 in index {{v}} is read from freed memory (0x8F8F8F8F is the debug fill of freed memory), so InnoDB does not find the record to update. {{v}} of the old row must stay {{'v-a1'}} until the update is done.
+
+h3. Notes
+
+{{handler::check_duplicate_long_entry_key()}} reads all rows with the same long unique hash. Each read ({{ha_index_read_map()}}, then every {{ha_index_next_same()}} hit) runs {{TABLE::update_virtual_fields(VCOL_UPDATE_FOR_READ)}}, which swaps {{Field_blob::value}} and {{read_value}} of virtual blob columns. The function swaps them back only once, after the first read. After an odd number of further hits, {{value}} holds the buffer of the row read by {{UPDATE}}, which {{record[1]}} points to, and {{TABLE::restore_blob_values()}} frees it. {{ha_update_row()}} then builds the old secondary index key from freed memory.
+
+The {{same_long_unique_hash}} debug keyword gives all rows the same hash. Without it, the bug needs a real hash collision between rows with different values.
+
+The code comes from MDEV-32012 (382c543f531). The fix is to swap back after each read, i.e. move the swap loop into the {{do ... while (ha_index_next_same())}} body.
+

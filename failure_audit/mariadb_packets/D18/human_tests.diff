@@ -1,0 +1,64 @@
+diff --git a/mysql-test/suite/compat/oracle/r/sp-package-security.result b/mysql-test/suite/compat/oracle/r/sp-package-security.result
+index c08b78cb8cf..c11589a0ea4 100644
+--- a/mysql-test/suite/compat/oracle/r/sp-package-security.result
++++ b/mysql-test/suite/compat/oracle/r/sp-package-security.result
+@@ -320,3 +320,26 @@ SESSION_USER()	CURRENT_USER()	msg
+ root@localhost	root@localhost	p1.p1
+ DROP PACKAGE p1;
+ DROP USER xxx@localhost;
++#
++# MDEV-40722 DROP PACKAGE leaves PACKAGE BODY grant in mysql.procs_priv
++#
++CREATE PACKAGE pkg1 AS
++FUNCTION f RETURN VARCHAR2(64);
++END
++$$
++CREATE PACKAGE BODY pkg1 AS
++FUNCTION f RETURN VARCHAR2(64) AS
++BEGIN RETURN 'f';
++END;
++END$$
++CREATE USER reader@localhost;
++GRANT EXECUTE ON PACKAGE test.pkg1 TO reader@localhost;
++GRANT EXECUTE ON PACKAGE BODY test.pkg1 TO reader@localhost;
++SELECT host,db,user,routine_name,routine_type,proc_priv FROM mysql.procs_priv ORDER BY routine_type;
++host	db	user	routine_name	routine_type	proc_priv
++localhost	test	reader	pkg1	PACKAGE	Execute
++localhost	test	reader	pkg1	PACKAGE BODY	Execute
++DROP PACKAGE pkg1;
++SELECT host,db,user,routine_name,routine_type,proc_priv FROM mysql.procs_priv ORDER BY routine_type;
++host	db	user	routine_name	routine_type	proc_priv
++DROP USER reader@localhost;
+diff --git a/mysql-test/suite/compat/oracle/t/sp-package-security.test b/mysql-test/suite/compat/oracle/t/sp-package-security.test
+index 583f70afe14..20a4fddb5b4 100644
+--- a/mysql-test/suite/compat/oracle/t/sp-package-security.test
++++ b/mysql-test/suite/compat/oracle/t/sp-package-security.test
+@@ -330,3 +330,28 @@ DELIMITER ;$$
+ CALL p1.p1;
+ DROP PACKAGE p1;
+ DROP USER xxx@localhost;
++
++
++--echo #
++--echo # MDEV-40722 DROP PACKAGE leaves PACKAGE BODY grant in mysql.procs_priv
++--echo #
++
++DELIMITER $$;
++CREATE PACKAGE pkg1 AS
++  FUNCTION f RETURN VARCHAR2(64);
++END
++$$
++CREATE PACKAGE BODY pkg1 AS
++  FUNCTION f RETURN VARCHAR2(64) AS
++    BEGIN RETURN 'f';
++  END;
++END$$
++DELIMITER ;$$
++
++CREATE USER reader@localhost;
++GRANT EXECUTE ON PACKAGE test.pkg1 TO reader@localhost;
++GRANT EXECUTE ON PACKAGE BODY test.pkg1 TO reader@localhost;
++SELECT host,db,user,routine_name,routine_type,proc_priv FROM mysql.procs_priv ORDER BY routine_type;
++DROP PACKAGE pkg1;
++SELECT host,db,user,routine_name,routine_type,proc_priv FROM mysql.procs_priv ORDER BY routine_type;
++DROP USER reader@localhost;

@@ -1,0 +1,123 @@
+diff --git a/public/lib/classes/output/requirements/import_map.php b/public/lib/classes/output/requirements/import_map.php
+index 7c1b1e5f69b..f480da934fb 100644
+--- a/public/lib/classes/output/requirements/import_map.php
++++ b/public/lib/classes/output/requirements/import_map.php
+@@ -123,6 +123,33 @@ class import_map implements \JsonSerializable {
+         return $importmap;
+     }
+ 
++    /**
++     * Get the list of import map specifiers which should be preloaded using `modulepreload`.
++     *
++     * Only concrete (non-prefix) specifiers are returned. Prefix specifiers, which end with a trailing slash
++     * (for example `react/` or `@moodle/lms/`), do not identify a single module and cannot be preloaded.
++     *
++     * For themable imports only the default specifier is returned. That entry already resolves to the
++     * active theme's version of the module, so the per-theme entries (e.g. `@moodlehq/design-system/theme-boost`)
++     * are not included.
++     *
++     * The returned specifiers are keys of the serialised import map.
++     *
++     * @return string[]
++     */
++    public function get_preload_specifiers(): array {
++        $specifiers = [];
++        foreach ($this->imports as $specifier => $importdata) {
++            if (str_ends_with($specifier, '/')) {
++                // Prefix entries cannot be preloaded as they do not refer to a single module.
++                continue;
++            }
++            $specifiers[] = $specifier;
++        }
++
++        return $specifiers;
++    }
++
+     /**
+      * Set the list of available themes by name.
+      *
+diff --git a/public/lib/classes/output/requirements/page_requirements_manager.php b/public/lib/classes/output/requirements/page_requirements_manager.php
+index f13039d2d28..47d4f264621 100644
+--- a/public/lib/classes/output/requirements/page_requirements_manager.php
++++ b/public/lib/classes/output/requirements/page_requirements_manager.php
+@@ -1063,14 +1063,32 @@ class page_requirements_manager {
+         $themes = core_component::get_all_plugins_list('theme');
+         $importmap->set_available_themes(array_keys($themes));
+ 
+-        return html_writer::tag(
++        $importmapdata = $importmap->jsonSerialize();
++
++        // The import map must be output before any module-related resource (including modulepreload links),
++        // otherwise browsers will not use it to resolve bare specifiers.
++        $output = html_writer::tag(
+             'script',
+             json_encode(
+-                $importmap,
++                $importmapdata,
+                 JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES
+             ),
+             ['type' => 'importmap'],
+         );
++
++        // Preload the concrete, active-theme entries so that the browser can fetch these foundational
++        // dependencies in parallel with page parsing, rather than discovering them one import level at a time.
++        foreach ($importmap->get_preload_specifiers() as $specifier) {
++            if (!isset($importmapdata['imports'][$specifier])) {
++                continue;
++            }
++            $output .= "\n" . html_writer::empty_tag('link', [
++                'rel' => 'modulepreload',
++                'href' => $importmapdata['imports'][$specifier],
++            ]);
++        }
++
++        return $output;
+     }
+ 
+     /**
+diff --git a/public/lib/tests/output/requirements/import_map_test.php b/public/lib/tests/output/requirements/import_map_test.php
+index a69e8d0abd6..97b5521d540 100644
+--- a/public/lib/tests/output/requirements/import_map_test.php
++++ b/public/lib/tests/output/requirements/import_map_test.php
+@@ -40,6 +40,41 @@ final class import_map_test extends \advanced_testcase {
+         $this->assertArrayHasKey('react/', $data['imports']);
+     }
+ 
++    /**
++     * get_preload_specifiers() returns only concrete specifiers which exist in the serialised import map.
++     */
++    public function test_get_preload_specifiers(): void {
++        $map = \core\di::get(import_map::class);
++        $map->set_default_loader(new \core\url('https://example.com/'));
++        $map->set_current_theme('boost');
++        $map->set_available_themes(['boost', 'classic']);
++
++        $specifiers = $map->get_preload_specifiers();
++
++        $this->assertContains('react', $specifiers);
++        $this->assertContains('react-dom', $specifiers);
++        $this->assertContains('tabbable', $specifiers);
++        $this->assertContains('bootstrap', $specifiers);
++        $this->assertContains('@moodlehq/design-system', $specifiers);
++
++        // Prefix entries and theme-specific entries are not preloaded.
++        $this->assertNotContains('react/', $specifiers);
++        $this->assertNotContains('@moodle/lms/', $specifiers);
++        $this->assertNotContains('@moodlehq/design-system/theme-boost', $specifiers);
++        foreach ($specifiers as $specifier) {
++            $this->assertStringEndsNotWith('/', $specifier);
++        }
++
++        $data = $map->jsonSerialize();
++        foreach ($specifiers as $specifier) {
++            $this->assertArrayHasKey($specifier, $data['imports']);
++        }
++        $this->assertEquals(
++            'https://example.com/@moodlehq/design-system/theme-boost/index.js',
++            $data['imports']['@moodlehq/design-system'],
++        );
++    }
++
+     /**
+      * jsonSerialize() throws a coding_exception when no default loader has been set.
+      */

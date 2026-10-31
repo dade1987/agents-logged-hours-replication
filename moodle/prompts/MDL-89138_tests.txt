@@ -1,0 +1,40 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You CAN run Moodle's existing PHPUnit tests: `cd {WS} && vendor/bin/phpunit <path/to/some_test.php>` (the test environment is already initialised). You may also run `php -l <file>` and read code with grep/find/cat. Use absolute paths starting with {WS} in every command.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-89138: Remove token fields from Amazon Bedrock image processor 
+
+*Note:* This ticket was created by an AI agent (GitHub Copilot)
+
+h2. Problem
+
+In {{aiprovider_awsbedrock}}'s {{process_generate_image::handle_api_success()}} ({{ai/provider/awsbedrock/classes/process_generate_image.php:156-157}}), the response array copies AWS Bedrock's token-count response headers into {{prompttokens}}/{{completiontokens}}:
+
+{code:php}'prompttokens' => (string)($responseheaders['x-amzn-bedrock-input-token-count'] ?? '0'),
+'completiontokens' => (string)($responseheaders['x-amzn-bedrock-output-token-count'] ?? '0'),{code}
+
+This appears to be copy-pasted from the text-generation processor ({{process_generate_text.php:276-277}}) and is incorrect in the image-generation context:
+
+* {{\\core_ai\\aiactions\\responses\\response_generate_image::set_response_data()}} never reads {{prompttokens}}/{{completiontokens}} — it only reads {{draftfile}}, {{revisedprompt}}, {{sourceurl}}, {{model}}. The values are silently discarded.
+* {{ai_action_generate_image}} (the DB table backing this action) has no {{prompttokens}}/{{completiontoken}} columns, confirming token tracking was never intended for image generation.
+* Even if the values were wired up, they'd be meaningless: Bedrock's {{x-amzn-bedrock-input-token-count}}/{{x-amzn-bedrock-output-token-count}} headers are emitted for text/embedding models, not image models (Titan Image, Nova Canvas, Stability). For image requests these headers are absent, so the code always falls back to the literal string {{'0'}}.
+* No other provider ({{openai}}, {{gemini}}, {{azureai}}, {{ollama}}, {{deepseek}}) includes these keys in their {{process_generate_image.php}} {{handle_api_success()}}, confirming this is a provider-specific error rather than an intentional cross-provider convention.
+
+The dead code is harmless today (values are dropped), but it's misleading to maintainers, wastes a header lookup, and risks being "fixed" the wrong way in the future (e.g. wired up to persist fake {{'0'}} token counts) if not removed.
+
+h2. What to implement
+
+* Remove the {{'prompttokens'}} and {{'completiontokens'}} entries from the {{$response}} array built in {{\\aiprovider_awsbedrock\\process_generate_image::handle_api_success()}}.
+* Check for and remove any related test assertions in {{ai/provider/awsbedrock/tests/process_generate_image_test.php}} that assert on {{prompttokens}}/{{completiontokens}} for image generation responses, since these fields should not be part of that response's contract.
+
+h2. Acceptance criteria
+
+* {{\\aiprovider_awsbedrock\\process_generate_image::handle_api_success()}} no longer sets {{prompttokens}}/{{completiontokens}} in its returned array.
+* {{response_generate_image}}'s handling of the AWS Bedrock generate-image response is unaffected (draft file, revised prompt, source URL, model still populate correctly).
+* No other provider or core code relies on {{prompttokens}}/{{completiontokens}} being present in the AWS Bedrock generate-image response.
+* {{aiprovider_awsbedrock}} unit tests pass, including {{process_generate_image_test.php}}, with any obsolete token-related assertions removed.

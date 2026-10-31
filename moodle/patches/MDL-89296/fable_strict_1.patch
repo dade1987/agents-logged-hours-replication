@@ -1,0 +1,746 @@
+diff --git a/public/blocks/timeline/UPGRADING.md b/public/blocks/timeline/UPGRADING.md
+new file mode 100644
+index 00000000000..852b4f2033d
+--- /dev/null
++++ b/public/blocks/timeline/UPGRADING.md
+@@ -0,0 +1,9 @@
++# block_timeline Upgrade notes
++
++## 5.3dev
++
++### Added
++
++- The block content is now rendered through a new `\block_timeline\output\main` renderable, which implements `\core\output\react_renderable` and mounts the Timeline React component via the standard PHP React mounting API. A `\block_timeline\output\renderer` class has been added so that themes may override the rendering by providing a `render_main` method.
++
++  For more information see [MDL-89296](https://tracker.moodle.org/browse/MDL-89296)
+diff --git a/public/blocks/timeline/block_timeline.php b/public/blocks/timeline/block_timeline.php
+index 9ebb50580c0..3f5a58e5786 100644
+--- a/public/blocks/timeline/block_timeline.php
++++ b/public/blocks/timeline/block_timeline.php
+@@ -36,7 +36,7 @@ class block_timeline extends block_base {
+      * @return stdClass contents of block
+      */
+     public function get_content() {
+-        global $CFG, $OUTPUT;
++        global $CFG;
+ 
+         if (isset($this->content)) {
+             return $this->content;
+@@ -50,25 +50,12 @@ class block_timeline extends block_base {
+         $order = get_user_preferences('block_timeline_user_sort_preference') ?: BLOCK_TIMELINE_SORT_BY_DATES;
+         $limit = get_user_preferences('block_timeline_user_limit_preference') ?: BLOCK_TIMELINE_ACTIVITIES_LIMIT_DEFAULT;
+ 
+-        $props = json_encode([
+-            'midnight'           => usergetmidnight(time()),
+-            'filter'             => $filter,
+-            'order'              => $order,
+-            'limit'              => (int) $limit,
+-            'nocoursesurl'       => $OUTPUT->image_url('courses', 'block_timeline')->out(false),
+-            'noeventsurl'        => $OUTPUT->image_url('activities', 'block_timeline')->out(false),
+-            'hasenrolledcourses' => !empty($courses),
+-        ], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG);
+-
+-        // Mount the React Timeline component directly — no renderer, no template.
+-        // core/react_autoinit mounts any element carrying these two attributes.
+-        $mount = \html_writer::div('', '', [
+-            'data-react-component' => '@moodle/lms/block_timeline/Timeline',
+-            'data-react-props'     => $props,
+-        ]);
++        // The main renderable mounts the Timeline React component via the react_renderable interface.
++        $renderable = new \block_timeline\output\main($order, $filter, (int) $limit, !empty($courses));
++        $renderer = $this->page->get_renderer('block_timeline');
+ 
+         $this->content = (object) [
+-            'text' => $mount,
++            'text' => $renderer->render($renderable),
+             'footer' => '',
+         ];
+ 
+diff --git a/public/blocks/timeline/classes/output/main.php b/public/blocks/timeline/classes/output/main.php
+new file mode 100644
+index 00000000000..960a8b6ac0f
+--- /dev/null
++++ b/public/blocks/timeline/classes/output/main.php
+@@ -0,0 +1,69 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace block_timeline\output;
++
++use core\output\react_renderable;
++use core\output\renderer_base;
++
++/**
++ * The main content of the Timeline block.
++ *
++ * This renderable mounts the Timeline React component.
++ *
++ * @package    block_timeline
++ * @copyright  2026 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class main implements react_renderable {
++    /**
++     * Constructor.
++     *
++     * @param string $order The sort order to use (one of the BLOCK_TIMELINE_SORT_BY_* constants)
++     * @param string $filter The filter to use (one of the BLOCK_TIMELINE_FILTER_BY_* constants)
++     * @param int $limit The number of items to show
++     * @param bool $hasenrolledcourses Whether the current user has any enrolled courses
++     */
++    public function __construct(
++        /** @var string The sort order to use */
++        protected readonly string $order,
++        /** @var string The filter to use */
++        protected readonly string $filter,
++        /** @var int The number of items to show */
++        protected readonly int $limit,
++        /** @var bool Whether the current user has any enrolled courses */
++        protected readonly bool $hasenrolledcourses,
++    ) {
++    }
++
++    #[\Override]
++    public function get_react_component(renderer_base $renderer): string {
++        return '@moodle/lms/block_timeline/Timeline';
++    }
++
++    #[\Override]
++    public function export_for_react(renderer_base $renderer): array {
++        return [
++            'midnight'           => usergetmidnight(time()),
++            'filter'             => $this->filter,
++            'order'              => $this->order,
++            'limit'              => $this->limit,
++            'nocoursesurl'       => $renderer->image_url('courses', 'block_timeline')->out(false),
++            'noeventsurl'        => $renderer->image_url('activities', 'block_timeline')->out(false),
++            'hasenrolledcourses' => $this->hasenrolledcourses,
++        ];
++    }
++}
+diff --git a/public/blocks/timeline/classes/output/renderer.php b/public/blocks/timeline/classes/output/renderer.php
+new file mode 100644
+index 00000000000..c58cf0bf052
+--- /dev/null
++++ b/public/blocks/timeline/classes/output/renderer.php
+@@ -0,0 +1,32 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace block_timeline\output;
++
++use core\output\plugin_renderer_base;
++
++/**
++ * Timeline block renderer.
++ *
++ * The block content is a {@see \core\output\react_renderable}, so no render methods are required here.
++ * A theme may override the rendering by providing a `render_main` method in its own block_timeline renderer.
++ *
++ * @package    block_timeline
++ * @copyright  2026 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class renderer extends plugin_renderer_base {
++}
+diff --git a/public/lib/UPGRADING.md b/public/lib/UPGRADING.md
+index aad02bc1da4..91e8576814a 100644
+--- a/public/lib/UPGRADING.md
++++ b/public/lib/UPGRADING.md
+@@ -94,6 +94,19 @@
+ - New `flexible_table::set_columnheadersattributes(...)` method for tables to define additional attributes ('class', 'data-X', etc.) for column headers
+ 
+   For more information see [MDL-89384](https://tracker.moodle.org/browse/MDL-89384)
++- A standard PHP API is now available for mounting React components. Feature code should only specify the component and its props; prop serialisation, escaping, and the DOM contract used by `core/react_autoinit` are handled internally.
++
++  ```php
++  // Via the renderer.
++  echo $OUTPUT->render_react_component('@moodle/lms/mod_book/viewer', ['title' => 'My Book']);
++
++  // Or via html_writer.
++  echo \core\output\html_writer::react_component('@moodle/lms/mod_book/viewer', ['title' => 'My Book']);
++  ```
++
++  A new `\core\output\react_renderable` interface has also been added. It works in a similar way to `named_templatable` and provides a migration path from templates to React. When a renderable implementing it is passed to `render()`, the renderer generates the React mount point using the component returned by `get_react_component()` and the props returned by `export_for_react()`. A `render_[renderable]` method on the renderer takes precedence over this interface, which in turn takes precedence over `named_templatable` and `templatable`.
++
++  For more information see [MDL-89296](https://tracker.moodle.org/browse/MDL-89296)
+ 
+ ### Changed
+ 
+diff --git a/public/lib/classes/output/html_writer.php b/public/lib/classes/output/html_writer.php
+index 30b7b303ad7..7e04855e572 100644
+--- a/public/lib/classes/output/html_writer.php
++++ b/public/lib/classes/output/html_writer.php
+@@ -846,6 +846,64 @@ class html_writer {
+         return self::tag('div', $content, self::add_class($class, $attributes));
+     }
+ 
++    /**
++     * Creates a mount point for a React component.
++     *
++     * The generated element is picked up automatically by the `core/react_autoinit` module, which imports the
++     * specified component and renders it into the element with the supplied props.
++     *
++     * Feature code should only need to supply the component specifier and its props. The serialisation of the props,
++     * the escaping of the generated markup, and the DOM contract used by the React autoinit system are all handled
++     * here and should not be relied upon by consumers.
++     *
++     * @param string $component The fully-qualified component specifier, in the form `@moodle/lms/<component>/<module>`
++     * @param array|\stdClass $props The props to pass to the component. Must only contain JSON serialisable simple types.
++     * @param string $content Optional fallback content to display until the component has been mounted
++     * @param null|array $attributes Optional other attributes to add to the mount element (for example id, or class)
++     * @return string HTML code for the React mount point
++     * @throws coding_exception If the component specifier is not valid
++     */
++    public static function react_component(
++        string $component,
++        array|\stdClass $props = [],
++        string $content = '',
++        ?array $attributes = null,
++    ): string {
++        if (!str_starts_with($component, '@moodle/lms/')) {
++            throw new coding_exception(
++                "Invalid React component '{$component}'. Expected a specifier in the form @moodle/lms/<component>/<module>.",
++            );
++        }
++
++        $attributes = $attributes ?? [];
++        $attributes['data-react-component'] = $component;
++        $attributes['data-react-props'] = self::encode_react_props($props);
++
++        return self::tag('div', $content, $attributes);
++    }
++
++    /**
++     * Serialise the props for a React component.
++     *
++     * The props are always encoded as a JSON object so that they can be spread onto the React component.
++     *
++     * @param array|\stdClass $props
++     * @return string The JSON-encoded props
++     * @throws coding_exception If the props cannot be encoded
++     */
++    protected static function encode_react_props(array|\stdClass $props): string {
++        // An empty array would be encoded as a JSON list. Always encode props as an object.
++        if (is_array($props) && empty($props)) {
++            $props = new \stdClass();
++        }
++
++        try {
++            return json_encode($props, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_THROW_ON_ERROR);
++        } catch (\JsonException $e) {
++            throw new coding_exception('Unable to serialise React component props: ' . $e->getMessage());
++        }
++    }
++
+     /**
+      * Starts a <div> tag. (Shortcut function.)
+      *
+diff --git a/public/lib/classes/output/plugin_renderer_base.php b/public/lib/classes/output/plugin_renderer_base.php
+index 8d1be78b0f2..9a340823756 100644
+--- a/public/lib/classes/output/plugin_renderer_base.php
++++ b/public/lib/classes/output/plugin_renderer_base.php
+@@ -78,6 +78,15 @@ class plugin_renderer_base extends renderer_base {
+             return $this->$rendermethod($widget);
+         }
+ 
++        if ($widget instanceof react_renderable) {
++            // This is a React renderable.
++            // Note: This has a higher priority than the named_templatable to provide a migration path from templates.
++            return $this->render_react_component(
++                $widget->get_react_component($this),
++                $widget->export_for_react($this),
++            );
++        }
++
+         if ($widget instanceof named_templatable) {
+             // This is a named templatable.
+             // Fetch the template name from the get_template_name function instead.
+diff --git a/public/lib/classes/output/react_renderable.php b/public/lib/classes/output/react_renderable.php
+new file mode 100644
+index 00000000000..97d3a940a15
+--- /dev/null
++++ b/public/lib/classes/output/react_renderable.php
+@@ -0,0 +1,73 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\output;
++
++/**
++ * A renderable which is rendered by mounting a React component.
++ *
++ * This interface behaves in a similar way to {@see named_templatable} and provides a simple migration path from
++ * mustache templates to React components. When a renderable implementing this interface is passed to
++ * {@see renderer_base::render()}, the renderer will generate the React mount point for the component returned by
++ * {@see get_react_component()} using the props returned by {@see export_for_react()}.
++ *
++ * Precedence within {@see renderer_base::render()}:
++ * - a `render_[renderable_name]` method on the renderer always takes precedence;
++ * - this interface takes precedence over {@see named_templatable} and {@see templatable}.
++ *
++ * Example:
++ *
++ * ```
++ * class main implements \core\output\react_renderable {
++ *     public function get_react_component(\core\output\renderer_base $renderer): string {
++ *         return '@moodle/lms/block_timeline/Timeline';
++ *     }
++ *
++ *     public function export_for_react(\core\output\renderer_base $renderer): array {
++ *         return ['filter' => $this->filter];
++ *     }
++ * }
++ *
++ * echo $OUTPUT->render(new main());
++ * ```
++ *
++ * @package   core
++ * @copyright 2026 Moodle Pty Ltd
++ * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++interface react_renderable extends renderable {
++    /**
++     * Get the fully-qualified React component specifier to mount.
++     *
++     * The specifier must be in the form `@moodle/lms/<component>/<module>`, for example
++     * `@moodle/lms/block_timeline/Timeline`.
++     *
++     * @param renderer_base $renderer The renderer requesting the component
++     * @return string
++     */
++    public function get_react_component(renderer_base $renderer): string;
++
++    /**
++     * Export the props which will be passed to the React component.
++     *
++     * The returned data must be made up of only simple types which can be serialised to JSON:
++     * array, stdClass, bool, int, float, string and null.
++     *
++     * @param renderer_base $renderer Used to do a final render of any components that need to be rendered for export.
++     * @return array|\stdClass
++     */
++    public function export_for_react(renderer_base $renderer): array|\stdClass;
++}
+diff --git a/public/lib/classes/output/renderer_base.php b/public/lib/classes/output/renderer_base.php
+index 7b840780785..84682fc37d5 100644
+--- a/public/lib/classes/output/renderer_base.php
++++ b/public/lib/classes/output/renderer_base.php
+@@ -200,6 +200,28 @@ class renderer_base {
+     }
+ 
+ 
++    /**
++     * Renders a mount point for a React component.
++     *
++     * The React component is mounted automatically by the `core/react_autoinit` module once the page has loaded.
++     * Feature code only needs to specify the component and its props; prop serialisation, escaping, and the DOM
++     * contract used by the React autoinit system are handled internally.
++     *
++     * @param string $component The fully-qualified component specifier, in the form `@moodle/lms/<component>/<module>`
++     * @param array|stdClass $props The props to pass to the component. Must only contain JSON serialisable simple types.
++     * @param string $content Optional fallback content to display until the component has been mounted
++     * @param null|array $attributes Optional other attributes to add to the mount element (for example id, or class)
++     * @return string
++     */
++    public function render_react_component(
++        string $component,
++        array|stdClass $props = [],
++        string $content = '',
++        ?array $attributes = null,
++    ): string {
++        return html_writer::react_component($component, $props, $content, $attributes);
++    }
++
+     /**
+      * Returns rendered widget.
+      *
+@@ -208,6 +230,8 @@ class renderer_base {
+      * If will then be rendered by a method based upon the classname for the widget.
+      * For instance a widget of class `crazywidget` will be rendered by a protected
+      * render_crazywidget method of this renderer.
++     * If no render_crazywidget method exists and crazywidget implements react_renderable,
++     * a mount point for the React component it describes is rendered.
+      * If no render_crazywidget method exists and crazywidget implements templatable,
+      * look for the 'crazywidget' template in the same component and render that.
+      *
+@@ -242,6 +266,15 @@ class renderer_base {
+             }
+         }
+ 
++        if ($widget instanceof react_renderable) {
++            // This is a React renderable.
++            // Note: This has a higher priority than the named_templatable to provide a migration path from templates.
++            return $this->render_react_component(
++                $widget->get_react_component($this),
++                $widget->export_for_react($this),
++            );
++        }
++
+         if ($widget instanceof named_templatable) {
+             // This is a named templatable.
+             // Fetch the template name from the get_template_name function instead.
+diff --git a/public/lib/tests/fixtures/output/react_renderable_fixtures.php b/public/lib/tests/fixtures/output/react_renderable_fixtures.php
+new file mode 100644
+index 00000000000..ac381b758eb
+--- /dev/null
++++ b/public/lib/tests/fixtures/output/react_renderable_fixtures.php
+@@ -0,0 +1,92 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\output\fixtures;
++
++use core\output\core_renderer;
++use core\output\named_templatable;
++use core\output\react_renderable;
++use core\output\renderer_base;
++
++// phpcs:disable moodle.Files.MoodleInternal.MoodleInternalGlobalState
++// phpcs:disable moodle.Commenting.DocblockDescription.Missing
++
++/**
++ * A react renderable fixture.
++ *
++ * @package    core
++ * @copyright  2026 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class react_widget implements react_renderable {
++    #[\Override]
++    public function get_react_component(renderer_base $renderer): string {
++        return '@moodle/lms/core/fixtures/react_widget';
++    }
++
++    #[\Override]
++    public function export_for_react(renderer_base $renderer): array {
++        return ['title' => 'Hello <World>', 'count' => 3];
++    }
++}
++
++/**
++ * A react renderable fixture which also implements named_templatable.
++ *
++ * @package    core
++ * @copyright  2026 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class react_named_templatable_widget extends react_widget implements named_templatable {
++    #[\Override]
++    public function get_template_name(renderer_base $renderer): string {
++        return 'core/this_template_must_not_exist';
++    }
++
++    #[\Override]
++    public function export_for_template(renderer_base $output) {
++        return [];
++    }
++}
++
++/**
++ * A react renderable fixture for which the renderer has a specific render method.
++ *
++ * @package    core
++ * @copyright  2026 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class react_overridden_widget extends react_widget {
++}
++
++/**
++ * A renderer which overrides the rendering of react_overridden_widget.
++ *
++ * @package    core
++ * @copyright  2026 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class react_renderer extends core_renderer {
++    /**
++     * Render the react_overridden_widget using a render method.
++     *
++     * @param react_overridden_widget $widget
++     * @return string
++     */
++    protected function render_react_overridden_widget(react_overridden_widget $widget): string {
++        return 'Rendered by render_react_overridden_widget';
++    }
++}
+diff --git a/public/lib/tests/output/html_writer_test.php b/public/lib/tests/output/html_writer_test.php
+index e44b31d355e..3d47e250066 100644
+--- a/public/lib/tests/output/html_writer_test.php
++++ b/public/lib/tests/output/html_writer_test.php
+@@ -363,4 +363,65 @@ EOF;
+ EOF;
+         $this->assertSame($expected, $output);
+     }
++    /**
++     * @covers ::react_component
++     */
++    public function test_react_component(): void {
++        $html = html_writer::react_component(
++            '@moodle/lms/mod_book/viewer',
++            ['title' => 'My <Book> & "friends"', 'count' => 2, 'tags' => ['a', 'b'], 'unicode' => 'ü'],
++        );
++
++        $this->assertStringStartsWith('<div ', $html);
++        $this->assertStringEndsWith('></div>', $html);
++        $this->assertStringContainsString('data-react-component="@moodle/lms/mod_book/viewer"', $html);
++        $this->assertMatchesRegularExpression('/data-react-props="([^"]*)"/', $html);
++
++        // The props must round-trip through HTML attribute decoding and JSON decoding.
++        preg_match('/data-react-props="([^"]*)"/', $html, $matches);
++        $props = json_decode(htmlspecialchars_decode($matches[1]), true);
++        $this->assertSame(
++            ['title' => 'My <Book> & "friends"', 'count' => 2, 'tags' => ['a', 'b'], 'unicode' => 'ü'],
++            $props,
++        );
++
++        // No unescaped angle brackets should be present within the attribute.
++        $this->assertStringNotContainsString('<Book>', $html);
++    }
++
++    /**
++     * @covers ::react_component
++     */
++    public function test_react_component_empty_props(): void {
++        $html = html_writer::react_component('@moodle/lms/mod_book/viewer');
++        $this->assertStringContainsString('data-react-props="{}"', $html);
++
++        $html = html_writer::react_component('@moodle/lms/mod_book/viewer', new \stdClass());
++        $this->assertStringContainsString('data-react-props="{}"', $html);
++    }
++
++    /**
++     * @covers ::react_component
++     */
++    public function test_react_component_content_and_attributes(): void {
++        $html = html_writer::react_component(
++            '@moodle/lms/mod_book/viewer',
++            ['title' => 'Book'],
++            '<p>Loading...</p>',
++            ['id' => 'book-viewer', 'class' => 'viewer'],
++        );
++
++        $this->assertStringContainsString('id="book-viewer"', $html);
++        $this->assertStringContainsString('class="viewer"', $html);
++        $this->assertStringContainsString('data-react-component="@moodle/lms/mod_book/viewer"', $html);
++        $this->assertStringEndsWith('><p>Loading...</p></div>', $html);
++    }
++
++    /**
++     * @covers ::react_component
++     */
++    public function test_react_component_invalid_component(): void {
++        $this->expectException(\core\exception\coding_exception::class);
++        html_writer::react_component('mod_book/viewer');
++    }
+ }
+diff --git a/public/lib/tests/output/react_renderable_test.php b/public/lib/tests/output/react_renderable_test.php
+new file mode 100644
+index 00000000000..9d2186d0a71
+--- /dev/null
++++ b/public/lib/tests/output/react_renderable_test.php
+@@ -0,0 +1,151 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++declare(strict_types=1);
++
++namespace core\output;
++
++use core\output\fixtures\react_named_templatable_widget;
++use core\output\fixtures\react_overridden_widget;
++use core\output\fixtures\react_renderer;
++use core\output\fixtures\react_widget;
++
++/**
++ * Unit tests for rendering of react_renderable instances.
++ *
++ * @package    core
++ * @copyright  2026 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++#[\PHPUnit\Framework\Attributes\CoversClass(renderer_base::class)]
++#[\PHPUnit\Framework\Attributes\CoversClass(plugin_renderer_base::class)]
++#[\PHPUnit\Framework\Attributes\CoversClass(html_writer::class)]
++final class react_renderable_test extends \advanced_testcase {
++    #[\Override]
++    public static function setUpBeforeClass(): void {
++        global $CFG;
++        parent::setUpBeforeClass();
++        require_once($CFG->libdir . '/tests/fixtures/output/react_renderable_fixtures.php');
++    }
++
++    /**
++     * Get a page suitable for rendering.
++     *
++     * @return \moodle_page
++     */
++    private function get_page(): \moodle_page {
++        $page = new \moodle_page();
++        $page->set_url('/');
++        $page->set_context(\core\context\system::instance());
++        return $page;
++    }
++
++    /**
++     * Extract and decode the props from a React mount point.
++     *
++     * @param string $html
++     * @return array
++     */
++    private function decode_props(string $html): array {
++        preg_match('/data-react-props="([^"]*)"/', $html, $matches);
++        $this->assertNotEmpty($matches, 'data-react-props attribute not found');
++        return json_decode(htmlspecialchars_decode($matches[1]), true);
++    }
++
++    /**
++     * The render_react_component method generates a mount point.
++     */
++    public function test_render_react_component(): void {
++        $renderer = new core_renderer($this->get_page(), RENDERER_TARGET_GENERAL);
++
++        $html = $renderer->render_react_component('@moodle/lms/mod_book/viewer', ['title' => 'Book & "Co"']);
++
++        $this->assertStringContainsString('data-react-component="@moodle/lms/mod_book/viewer"', $html);
++        $this->assertSame(['title' => 'Book & "Co"'], $this->decode_props($html));
++        $this->assertSame(
++            html_writer::react_component('@moodle/lms/mod_book/viewer', ['title' => 'Book & "Co"']),
++            $html,
++        );
++    }
++
++    /**
++     * A react_renderable is rendered as a React mount point by render().
++     */
++    public function test_render_react_renderable(): void {
++        $renderer = new core_renderer($this->get_page(), RENDERER_TARGET_GENERAL);
++
++        $html = $renderer->render(new react_widget());
++
++        $this->assertStringContainsString('data-react-component="@moodle/lms/core/fixtures/react_widget"', $html);
++        $this->assertSame(['title' => 'Hello <World>', 'count' => 3], $this->decode_props($html));
++    }
++
++    /**
++     * A react_renderable takes precedence over named_templatable.
++     */
++    public function test_render_react_renderable_precedence_over_named_templatable(): void {
++        $renderer = new core_renderer($this->get_page(), RENDERER_TARGET_GENERAL);
++
++        // If the named_templatable path were taken, the non-existent template would throw.
++        $html = $renderer->render(new react_named_templatable_widget());
++
++        $this->assertStringContainsString('data-react-component="@moodle/lms/core/fixtures/react_widget"', $html);
++        $this->assertSame(['title' => 'Hello <World>', 'count' => 3], $this->decode_props($html));
++    }
++
++    /**
++     * A render_[renderable] method takes precedence over react_renderable.
++     */
++    public function test_render_method_precedence_over_react_renderable(): void {
++        $renderer = new react_renderer($this->get_page(), RENDERER_TARGET_GENERAL);
++
++        $this->assertSame(
++            'Rendered by render_react_overridden_widget',
++            $renderer->render(new react_overridden_widget()),
++        );
++
++        // Other react renderables are still rendered as React mount points by the same renderer.
++        $html = $renderer->render(new react_widget());
++        $this->assertStringContainsString('data-react-component="@moodle/lms/core/fixtures/react_widget"', $html);
++    }
++
++    /**
++     * Plugin renderers also render react_renderable instances, with the same precedence rules.
++     */
++    public function test_plugin_renderer_render_react_renderable(): void {
++        $page = $this->get_page();
++        $renderer = new class ($page, RENDERER_TARGET_GENERAL) extends plugin_renderer_base {
++            /**
++             * Render the react_overridden_widget using a render method.
++             *
++             * @param react_overridden_widget $widget
++             * @return string
++             */
++            protected function render_react_overridden_widget(react_overridden_widget $widget): string {
++                return 'Rendered by plugin render_react_overridden_widget';
++            }
++        };
++
++        $html = $renderer->render(new react_named_templatable_widget());
++        $this->assertStringContainsString('data-react-component="@moodle/lms/core/fixtures/react_widget"', $html);
++        $this->assertSame(['title' => 'Hello <World>', 'count' => 3], $this->decode_props($html));
++
++        $this->assertSame(
++            'Rendered by plugin render_react_overridden_widget',
++            $renderer->render(new react_overridden_widget()),
++        );
++    }
++}

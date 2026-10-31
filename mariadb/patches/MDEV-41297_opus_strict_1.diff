@@ -1,0 +1,161 @@
+diff --git a/mysql-test/suite/heap/blob_empty_pad.result b/mysql-test/suite/heap/blob_empty_pad.result
+new file mode 100644
+index 00000000..8113634f
+--- /dev/null
++++ b/mysql-test/suite/heap/blob_empty_pad.result
+@@ -0,0 +1,45 @@
++#
++# MDEV-41297 Wrong result upon DISTINCT/GROUP BY/UNION on TEXT with
++# empty and all-space values
++#
++CREATE TABLE t1 (a TEXT);
++INSERT INTO t1 VALUES (''),('   ');
++SELECT COUNT(*) FROM (SELECT DISTINCT a FROM t1) AS d;
++COUNT(*)
++1
++SELECT COUNT(DISTINCT a) FROM t1;
++COUNT(DISTINCT a)
++1
++SELECT COUNT(*) FROM (SELECT a FROM t1 GROUP BY a) AS g;
++COUNT(*)
++1
++SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE LENGTH(a)=0 UNION SELECT a FROM t1 WHERE LENGTH(a)=3) AS u;
++COUNT(*)
++1
++DROP TABLE t1;
++CREATE TABLE t1 (a TEXT CHARACTER SET latin1);
++INSERT INTO t1 VALUES (''),('   ');
++SELECT COUNT(*) FROM (SELECT DISTINCT a FROM t1) AS d;
++COUNT(*)
++1
++SELECT COUNT(DISTINCT a) FROM t1;
++COUNT(DISTINCT a)
++1
++SELECT COUNT(*) FROM (SELECT a FROM t1 GROUP BY a) AS g;
++COUNT(*)
++1
++SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE LENGTH(a)=0 UNION SELECT a FROM t1 WHERE LENGTH(a)=3) AS u;
++COUNT(*)
++1
++DROP TABLE t1;
++# NO PAD collation: the values stay different
++CREATE TABLE t1 (a TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_nopad_bin);
++INSERT INTO t1 VALUES (''),('   ');
++SELECT COUNT(*) FROM (SELECT DISTINCT a FROM t1) AS d;
++COUNT(*)
++2
++SELECT COUNT(DISTINCT a) FROM t1;
++COUNT(DISTINCT a)
++2
++DROP TABLE t1;
++# End of tests
+diff --git a/mysql-test/suite/heap/blob_empty_pad.test b/mysql-test/suite/heap/blob_empty_pad.test
+new file mode 100644
+index 00000000..debde908
+--- /dev/null
++++ b/mysql-test/suite/heap/blob_empty_pad.test
+@@ -0,0 +1,29 @@
++--echo #
++--echo # MDEV-41297 Wrong result upon DISTINCT/GROUP BY/UNION on TEXT with
++--echo # empty and all-space values
++--echo #
++
++CREATE TABLE t1 (a TEXT);
++INSERT INTO t1 VALUES (''),('   ');
++SELECT COUNT(*) FROM (SELECT DISTINCT a FROM t1) AS d;
++SELECT COUNT(DISTINCT a) FROM t1;
++SELECT COUNT(*) FROM (SELECT a FROM t1 GROUP BY a) AS g;
++SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE LENGTH(a)=0 UNION SELECT a FROM t1 WHERE LENGTH(a)=3) AS u;
++DROP TABLE t1;
++
++CREATE TABLE t1 (a TEXT CHARACTER SET latin1);
++INSERT INTO t1 VALUES (''),('   ');
++SELECT COUNT(*) FROM (SELECT DISTINCT a FROM t1) AS d;
++SELECT COUNT(DISTINCT a) FROM t1;
++SELECT COUNT(*) FROM (SELECT a FROM t1 GROUP BY a) AS g;
++SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE LENGTH(a)=0 UNION SELECT a FROM t1 WHERE LENGTH(a)=3) AS u;
++DROP TABLE t1;
++
++--echo # NO PAD collation: the values stay different
++CREATE TABLE t1 (a TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_nopad_bin);
++INSERT INTO t1 VALUES (''),('   ');
++SELECT COUNT(*) FROM (SELECT DISTINCT a FROM t1) AS d;
++SELECT COUNT(DISTINCT a) FROM t1;
++DROP TABLE t1;
++
++--echo # End of tests
+diff --git a/storage/heap/hp_blob.c b/storage/heap/hp_blob.c
+index 3763b949..9995e383 100644
+--- a/storage/heap/hp_blob.c
++++ b/storage/heap/hp_blob.c
+@@ -930,7 +930,13 @@ const uchar *hp_materialize_one_blob(HP_INFO *info,
+   uint visible= share->visible;
+   uint recbuffer= share->block.recbuffer;
+ 
+-  if (data_len == 0 || !chain)
++  /*
++    An empty value is stored with a NULL chain pointer. Return a valid
++    empty string for it: NULL means an error to the callers.
++  */
++  if (data_len == 0)
++    return (const uchar*) "";
++  if (!chain)
+     return chain;
+ 
+   if (hp_is_single_rec(chain, visible))
+diff --git a/storage/heap/hp_hash.c b/storage/heap/hp_hash.c
+index 5cefff50..31f45156 100644
+--- a/storage/heap/hp_hash.c
++++ b/storage/heap/hp_hash.c
+@@ -521,11 +521,21 @@ int hp_rec_key_cmp(HP_KEYDEF *keydef, const uchar *rec1, const uchar *rec2,
+       if ((seg->charset->state & MY_CS_NOPAD) && len1 != len2)
+         return 1;
+ 
++      /*
++        A zero-length blob may have a NULL (stored empty value) or a stale
++        data pointer. Use a valid empty string so that a PAD SPACE collation
++        can compare '' against an all-space value as equal.
++      */
+       /* rec1: always input -- dereference pointer */
+-      memcpy(&data1, pos1 + packlength, HP_PTR_SIZE);
++      if (len1 == 0)
++        data1= (const uchar*) "";
++      else
++        memcpy(&data1, pos1 + packlength, HP_PTR_SIZE);
+ 
+       /* rec2: if info != NULL, it's stored -- materialize from chain */
+-      if (info)
++      if (len2 == 0)
++        data2= (const uchar*) "";
++      else if (info)
+       {
+         const uchar *chain2;
+         memcpy(&chain2, pos2 + packlength, HP_PTR_SIZE);
+@@ -683,14 +693,25 @@ int hp_key_cmp(HP_KEYDEF *keydef, const uchar *rec, const uchar *key,
+       const uchar *key_data;
+       const uchar *rec_data;
+ 
+-      memcpy(&key_data, key + 4, HP_PTR_SIZE);
+-
+       if (rec_blob_len == 0 && key_blob_len == 0)
+         continue;
+       if ((seg->charset->state & MY_CS_NOPAD) && rec_blob_len != key_blob_len)
+         return 1;
+ 
++      /*
++        A zero-length blob may have a NULL (stored empty value) or a stale
++        data pointer. Use a valid empty string so that a PAD SPACE collation
++        can compare '' against an all-space value as equal.
++      */
++      if (key_blob_len == 0)
++        key_data= (const uchar*) "";
++      else
++        memcpy(&key_data, key + 4, HP_PTR_SIZE);
++
+       /* rec is stored -- materialize from chain */
++      if (rec_blob_len == 0)
++        rec_data= (const uchar*) "";
++      else
+       {
+         const uchar *chain;
+         memcpy(&chain, pos + packlength, HP_PTR_SIZE);

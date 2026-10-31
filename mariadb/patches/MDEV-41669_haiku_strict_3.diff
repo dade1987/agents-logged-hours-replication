@@ -1,0 +1,27 @@
+diff --git a/storage/innobase/row/row0import.cc b/storage/innobase/row/row0import.cc
+index c589b8f2..c27cfab3 100644
+--- a/storage/innobase/row/row0import.cc
++++ b/storage/innobase/row/row0import.cc
+@@ -3728,7 +3728,7 @@ row_import_read_cfg(
+ dberr_t
+ row_import_update_index_root(trx_t* trx, dict_table_t* table, bool reset)
+ {
+-	const dict_index_t*	index;
++	dict_index_t*		index;
+ 	que_t*			graph = 0;
+ 	dberr_t			err = DB_SUCCESS;
+ 
+@@ -3750,6 +3750,13 @@ row_import_update_index_root(trx_t* trx, dict_table_t* table, bool reset)
+ 	     index != 0;
+ 	     index = dict_table_get_next_index(index)) {
+ 
++		/* The index contents (and the table data) were replaced
++		by this transaction. Make the indexes unusable for any
++		read view that predates this transaction, so that such
++		consistent reads fail instead of returning the contents
++		of the imported tablespace. See row_merge_is_index_usable(). */
++		index->trx_id = trx->id;
++
+ 		pars_info_t*	info;
+ 		ib_uint32_t	page;
+ 		ib_uint32_t	space;

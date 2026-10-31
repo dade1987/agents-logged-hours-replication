@@ -1,0 +1,42 @@
+diff --git a/sql/spatial.cc b/sql/spatial.cc
+index 5df5a555..aba56b96 100644
+--- a/sql/spatial.cc
++++ b/sql/spatial.cc
+@@ -2375,10 +2375,11 @@ int Gis_polygon::simplify(String *result, double max_distance) const
+   uint32 num_interior_ring= 0, num_invalid_ring= 0, num_points;
+   Geometry_buffer buffer;
+   Geometry *geometry= NULL;
+-  String exterior_ring= 0;
++  String exterior_ring;
+ 
+-  exterior_ring.q_append(SRID_PLACEHOLDER);
+-  if (this->num_interior_ring(&num_interior_ring) ||
++  if (exterior_ring.reserve(SRID_SIZE + WKB_HEADER_SIZE) ||
++      (exterior_ring.q_append(SRID_PLACEHOLDER), false) ||
++      this->num_interior_ring(&num_interior_ring) ||
+       this->exterior_ring(&exterior_ring) ||
+       !(geometry= Geometry::construct(&buffer, exterior_ring.ptr(),
+       exterior_ring.length())))
+@@ -2395,7 +2396,8 @@ int Gis_polygon::simplify(String *result, double max_distance) const
+     return 1;
+ 
+   result->length(0);
+-  result->reserve(SRID_SIZE + WKB_HEADER_SIZE);
++  if (result->reserve(SRID_SIZE + WKB_HEADER_SIZE + 4))
++    return 1;
+   result->q_append(SRID_PLACEHOLDER);
+   result->q_append((char) wkb_ndr);
+   result->q_append((uint32) wkb_polygon);
+@@ -2406,8 +2408,10 @@ int Gis_polygon::simplify(String *result, double max_distance) const
+ 
+   for (uint32 i = 1; i <= num_interior_ring; i++)
+   {
+-    String interior_ring= 0;
+-    interior_ring.q_append((uint) 0);
++    String interior_ring;
++    if (interior_ring.reserve(SRID_SIZE + WKB_HEADER_SIZE))
++      return 1;
++    interior_ring.q_append(SRID_PLACEHOLDER);
+     if (this->interior_ring_n(i, &interior_ring) ||
+         !(geometry= Geometry::construct(&buffer, interior_ring.ptr(),
+           interior_ring.length())))

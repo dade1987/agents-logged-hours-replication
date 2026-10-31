@@ -1,0 +1,358 @@
+diff --git a/public/course/format/classes/output/local/linearnavigation/footer_content.php b/public/course/format/classes/output/local/linearnavigation/footer_content.php
+index f90a7ff41c5..1ae25762d73 100644
+--- a/public/course/format/classes/output/local/linearnavigation/footer_content.php
++++ b/public/course/format/classes/output/local/linearnavigation/footer_content.php
+@@ -20,7 +20,10 @@ use core\output\named_templatable;
+ use core\output\renderable;
+ use core\output\renderer_base;
+ use core\router\util;
++use core\url;
++use core_course\modinfo;
+ use core_course\route\controller\course_navigation;
++use core_course\section_info;
+ use cm_info;
+ 
+ /**
+@@ -47,23 +50,124 @@ class footer_content implements named_templatable, renderable {
+ 
+     #[\Override]
+     public function export_for_template(renderer_base $output) {
+-        // Get previous and next URLs for the current course module.
+-        $previousurl = util::get_path_for_callable(
+-            [course_navigation::class, 'cm_previous_element'],
+-            ['cm' => $this->cminfo->id],
+-        );
+-        $nexturl = util::get_path_for_callable(
+-            [course_navigation::class, 'cm_next_element'],
+-            ['cm' => $this->cminfo->id],
+-        );
++        [$isfirst, $islast] = $this->get_course_position();
++
++        $previousurl = null;
++        if (!$isfirst) {
++            $previousurl = util::get_path_for_callable(
++                [course_navigation::class, 'cm_previous_element'],
++                ['cm' => $this->cminfo->id],
++            )->out(false);
++        }
++
++        $nexturl = null;
++        $courseurl = null;
++        if ($islast) {
++            // The last activity of the course links back to the course main page.
++            $courseurl = (new url('/course/view.php', ['id' => $this->cminfo->course]))->out(false);
++        } else {
++            $nexturl = util::get_path_for_callable(
++                [course_navigation::class, 'cm_next_element'],
++                ['cm' => $this->cminfo->id],
++            )->out(false);
++        }
+ 
+         return [
+-            'previousurl' => $previousurl->out(false),
+-            'nexturl' => $nexturl->out(false),
++            'previousurl' => $previousurl,
++            'nexturl' => $nexturl,
++            'courseurl' => $courseurl,
++            'isfirst' => $isfirst,
++            'islast' => $islast,
+             'completion' => $this->export_completion($output),
+         ];
+     }
+ 
++    /**
++     * Calculate whether the current course module is the first and/or the last navigable
++     * activity of the course for the current user.
++     *
++     * Only activities the user can navigate to are considered (hidden, stealth, or
++     * activities without a view page are ignored), following the same rules as the
++     * course navigation controller.
++     *
++     * @return bool[] An array with two booleans: [isfirst, islast].
++     */
++    private function get_course_position(): array {
++        $modinfo = $this->cminfo->get_modinfo();
++
++        $cms = [];
++        foreach ($modinfo->get_listed_section_info_all() as $section) {
++            if ($section->is_delegated()) {
++                continue;
++            }
++            $cms = array_merge($cms, $this->get_all_section_cms($section));
++        }
++
++        $hasprevious = false;
++        $hasnext = false;
++        $found = false;
++        foreach ($cms as $cm) {
++            if ($cm->id == $this->cminfo->id) {
++                $found = true;
++                continue;
++            }
++            if (!$this->is_valid_cm($cm)) {
++                continue;
++            }
++            if ($found) {
++                $hasnext = true;
++                break;
++            }
++            $hasprevious = true;
++        }
++
++        if (!$found) {
++            // The current activity is not part of the course structure (e.g. an orphaned activity).
++            // Keep the default navigation.
++            return [false, false];
++        }
++
++        return [!$hasprevious, !$hasnext];
++    }
++
++    /**
++     * Get all course modules in a section in order, including also activities inside sub-sections.
++     *
++     * @param section_info $section
++     * @return cm_info[]
++     */
++    private function get_all_section_cms(section_info $section): array {
++        $sectioncms = [];
++        foreach ($section->get_sequence_cm_infos() as $cm) {
++            $delegatedsection = $cm->get_delegated_section_info();
++            if ($delegatedsection) {
++                $sectioncms = array_merge(
++                    $sectioncms,
++                    $this->get_all_section_cms($delegatedsection),
++                );
++            } else {
++                $sectioncms[] = $cm;
++            }
++        }
++        return $sectioncms;
++    }
++
++    /**
++     * Check if a course module is a valid navigation target for the current user.
++     *
++     * @param cm_info $cm The course module to check.
++     * @return bool
++     */
++    private function is_valid_cm(cm_info $cm): bool {
++        return
++            // Skip modules that don't have a URL (like labels).
++            !empty($cm->get_navigation_url())
++            // Skip modules that are not visible to the user.
++            && $cm->is_visible_on_course_page()
++            // Skip modules that are not displayable.
++            && modinfo::is_mod_type_visible_on_course($cm->modname);
++    }
++
+     /**
+      * Export the activity completion control to display in the footer.
+      *
+diff --git a/public/course/format/templates/local/linearnavigation/footer_content.mustache b/public/course/format/templates/local/linearnavigation/footer_content.mustache
+index a916bc770f4..7ddd79792a1 100644
+--- a/public/course/format/templates/local/linearnavigation/footer_content.mustache
++++ b/public/course/format/templates/local/linearnavigation/footer_content.mustache
+@@ -23,6 +23,7 @@
+     {
+         "previousurl": "http://moodle.com/course/cms/42/previous",
+         "nexturl": "http://moodle.com/course/cms/42/next",
++        "courseurl": null,
+         "completion": "<span class=\"completion-status text-success\"><i class=\"fa fa-check\"></i> <span>Done</span></span>"
+     }
+ }}
+@@ -50,5 +51,10 @@
+             <span class="dir-ltr-hide" aria-hidden="true">{{#pix}} e/backward, core {{/pix}}</span>
+         </a>
+         {{/nexturl}}
++        {{#courseurl}}
++        <a href="{{.}}" class="course-linear-navigation-link text-decoration-none d-inline-flex align-items-center gap-1 ms-auto">
++            <span>{{#str}} gotocourse, core_courseformat {{/str}}</span>
++        </a>
++        {{/courseurl}}
+     </div>
+ </div>
+diff --git a/public/course/format/tests/behat/course_linear_navigation.feature b/public/course/format/tests/behat/course_linear_navigation.feature
+index bfbe871033d..85a24500058 100644
+--- a/public/course/format/tests/behat/course_linear_navigation.feature
++++ b/public/course/format/tests/behat/course_linear_navigation.feature
+@@ -53,8 +53,9 @@ Feature: Display the course linear navigation
+     When I am on the "Page1" "page activity" page logged in as "s1"
+     And I click on "Next" "link" in the "sticky-footer" "region"
+     Then I should see "Page2" in the "page-header" "region"
+-    # The last activity in the course should redirect to the course page.
+-    And I click on "Next" "link" in the "sticky-footer" "region"
++    # The last activity in the course should display a link to the course page instead of Next.
++    And "Next" "link" should not exist in the "sticky-footer" "region"
++    And I click on "Go to course" "link" in the "sticky-footer" "region"
+     And I should see "Course1" in the "page-header" "region"
+ 
+     Examples:
+@@ -135,3 +136,36 @@ Feature: Display the course linear navigation
+     When I am on the "Page1" "page activity" page logged in as "s1"
+     Then I should see "Done" in the "sticky-footer" "region"
+     And I should see "Done" in the "page-header" "region"
++
++  @javascript
++  Scenario Outline: Previous is hidden on the first activity and Next is replaced on the last activity
++    Given the following "courses" exist:
++      | fullname | shortname | format   | enablelinearnav | numsections |
++      | Course1  | C1        | <format> | 1               | 2           |
++    And the following "course enrolments" exist:
++      | user | course | role    |
++      | s1   | C1     | student |
++    And the following "activities" exist:
++      | activity | name  | course | section | visible |
++      | page     | Page1 | C1     | 1       | 1       |
++      | page     | Page2 | C1     | 1       | 1       |
++      | page     | Page3 | C1     | 2       | 1       |
++      | page     | Page4 | C1     | 2       | 0       |
++    When I am on the "Page1" "page activity" page logged in as "s1"
++    Then "Previous" "link" should not exist in the "sticky-footer" "region"
++    And "Next" "link" should exist in the "sticky-footer" "region"
++    And "Go to course" "link" should not exist in the "sticky-footer" "region"
++    And I am on the "Page2" "page activity" page
++    And "Previous" "link" should exist in the "sticky-footer" "region"
++    And "Next" "link" should exist in the "sticky-footer" "region"
++    # Page4 is hidden, so Page3 is the last activity the student can access.
++    And I am on the "Page3" "page activity" page
++    And "Previous" "link" should exist in the "sticky-footer" "region"
++    And "Next" "link" should not exist in the "sticky-footer" "region"
++    And I click on "Go to course" "link" in the "sticky-footer" "region"
++    And I should see "Course1" in the "page-header" "region"
++
++    Examples:
++      | format |
++      | topics |
++      | weeks  |
+diff --git a/public/course/format/tests/output/local/linearnavigation/footer_content_test.php b/public/course/format/tests/output/local/linearnavigation/footer_content_test.php
+new file mode 100644
+index 00000000000..94fe0aca047
+--- /dev/null
++++ b/public/course/format/tests/output/local/linearnavigation/footer_content_test.php
+@@ -0,0 +1,113 @@
++<?php
++// This file is part of Moodle - https://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
++
++namespace core_courseformat\output\local\linearnavigation;
++
++/**
++ * Tests for the linear navigation footer content.
++ *
++ * @package    core_courseformat
++ * @category   test
++ * @copyright  2026 Moodle Pty Ltd
++ * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++#[\PHPUnit\Framework\Attributes\CoversClass(footer_content::class)]
++final class footer_content_test extends \advanced_testcase {
++    /**
++     * Export the footer content data for a given activity and the current user.
++     *
++     * @param \stdClass $course
++     * @param int $cmid
++     * @return array
++     */
++    private function export(\stdClass $course, int $cmid): array {
++        global $PAGE;
++        $cm = get_fast_modinfo($course)->get_cm($cmid);
++        $footer = new footer_content($cm);
++        return $footer->export_for_template($PAGE->get_renderer('core'));
++    }
++
++    /**
++     * Test the previous and next links at the course boundaries.
++     */
++    public function test_export_for_template_boundaries(): void {
++        $this->resetAfterTest();
++
++        $course = $this->getDataGenerator()->create_course(['numsections' => 3, 'enablelinearnav' => 1]);
++        $student = $this->getDataGenerator()->create_and_enrol($course, 'student');
++
++        $label = $this->getDataGenerator()->create_module('label', ['course' => $course->id, 'section' => 0]);
++        $page1 = $this->getDataGenerator()->create_module('page', ['course' => $course->id, 'section' => 1]);
++        $page2 = $this->getDataGenerator()->create_module('page', ['course' => $course->id, 'section' => 1]);
++        $page3 = $this->getDataGenerator()->create_module('page', ['course' => $course->id, 'section' => 2]);
++        $hidden = $this->getDataGenerator()->create_module(
++            'page',
++            ['course' => $course->id, 'section' => 3, 'visible' => 0],
++        );
++
++        $this->setUser($student);
++        $courseurl = (new \core\url('/course/view.php', ['id' => $course->id]))->out(false);
++
++        // First activity: no previous link (labels are ignored).
++        $data = $this->export($course, $page1->cmid);
++        $this->assertEmpty($data['previousurl']);
++        $this->assertNotEmpty($data['nexturl']);
++        $this->assertEmpty($data['courseurl']);
++
++        // Middle activity: both links.
++        $data = $this->export($course, $page2->cmid);
++        $this->assertNotEmpty($data['previousurl']);
++        $this->assertNotEmpty($data['nexturl']);
++        $this->assertEmpty($data['courseurl']);
++
++        // Last accessible activity (the following one is hidden): go to course link.
++        $data = $this->export($course, $page3->cmid);
++        $this->assertNotEmpty($data['previousurl']);
++        $this->assertEmpty($data['nexturl']);
++        $this->assertEquals($courseurl, $data['courseurl']);
++
++        // A teacher can see the hidden activity, so page3 is not the last one.
++        $this->setAdminUser();
++        $data = $this->export($course, $page3->cmid);
++        $this->assertNotEmpty($data['nexturl']);
++        $this->assertEmpty($data['courseurl']);
++
++        $data = $this->export($course, $hidden->cmid);
++        $this->assertNotEmpty($data['previousurl']);
++        $this->assertEmpty($data['nexturl']);
++        $this->assertEquals($courseurl, $data['courseurl']);
++    }
++
++    /**
++     * Test a course with a single activity.
++     */
++    public function test_export_for_template_single_activity(): void {
++        $this->resetAfterTest();
++
++        $course = $this->getDataGenerator()->create_course(['numsections' => 1, 'enablelinearnav' => 1]);
++        $student = $this->getDataGenerator()->create_and_enrol($course, 'student');
++        $page = $this->getDataGenerator()->create_module('page', ['course' => $course->id, 'section' => 1]);
++
++        $this->setUser($student);
++        $data = $this->export($course, $page->cmid);
++        $this->assertEmpty($data['previousurl']);
++        $this->assertEmpty($data['nexturl']);
++        $this->assertEquals(
++            (new \core\url('/course/view.php', ['id' => $course->id]))->out(false),
++            $data['courseurl'],
++        );
++    }
++}
+diff --git a/public/lang/en/courseformat.php b/public/lang/en/courseformat.php
+index 7ea1bd1efb3..64a807b7a0a 100644
+--- a/public/lang/en/courseformat.php
++++ b/public/lang/en/courseformat.php
+@@ -70,6 +70,7 @@ $string['cmsmove_title'] = 'Move selected activities';
+ $string['cmsmove_info'] = 'Move {$a} activities after';
+ $string['courseindex'] = 'Course index';
+ $string['courseindexoptions'] = 'Course index options';
++$string['gotocourse'] = 'Go to course';
+ $string['linearnavigationsettings'] = 'Enable linear navigation';
+ $string['linearnavigationsettings_help'] = 'Display \'Previous\' and \'Next\' buttons on activity pages to help learners move sequentially through the course.';
+ $string['nobulkaction'] = 'No bulk actions available';

@@ -1,0 +1,73 @@
+diff --git a/sql/partition_info.h b/sql/partition_info.h
+index 3a8c3a37524..c3f03f3e057 100644
+--- a/sql/partition_info.h
++++ b/sql/partition_info.h
+@@ -54,15 +54,11 @@ struct Vers_part_info : public Sql_alloc
+     hist_part(NULL)
+   {
+   }
+-  Vers_part_info& operator= (const Vers_part_info &src)
+-  {
+-    interval= src.interval;
+-    limit= src.limit;
+-    auto_hist= src.auto_hist;
+-    now_part= src.now_part;
+-    hist_part= src.hist_part;
+-    return *this;
+-  }
++  /*
++    now_part and hist_part point to partition_element of a specific
++    partition_info, they must not be copied to another one.
++  */
++  Vers_part_info& operator= (const Vers_part_info &src)= delete;
+   bool initialized()
+   {
+     if (now_part)
+@@ -88,6 +84,10 @@ struct Vers_part_info : public Sql_alloc
+       /* TODO: equivalent intervals like 1 hour and 60 mins should be considered equal */
+       return start == rhs.start && type == rhs.type && !memcmp(&step, &rhs.step, sizeof(INTERVAL));
+     }
++    bool operator!=(const interval_t &rhs) const
++    {
++      return !(*this == rhs);
++    }
+   } interval;
+   ulonglong limit;
+   bool auto_hist;
+diff --git a/sql/sql_partition.cc b/sql/sql_partition.cc
+index 2d1ca5549ed..3365503edc1 100644
+--- a/sql/sql_partition.cc
++++ b/sql/sql_partition.cc
+@@ -6094,11 +6094,16 @@ the generated partition syntax in a correct manner.
+           tab_part_info != part_info && part_info->part_type == VERSIONING_PARTITION &&
+           part_info->num_parts == 0)
+       {
+-        if (part_info->vers_info->interval.is_set() && (
+-            !tab_part_info->vers_info->interval.is_set() ||
+-            part_info->vers_info->interval == tab_part_info->vers_info->interval))
++        if (alter_info->flags ||
++            (part_info->vers_info->interval.is_set() &&
++             (!tab_part_info->vers_info->interval.is_set() ||
++              part_info->vers_info->interval !=
++                tab_part_info->vers_info->interval)))
+         {
+-          /* If interval is changed we can not do fast alter */
++          /*
++            Fast alter changes only partitioning options. It cannot be done
++            if the interval is changed or the table definition is changed.
++          */
+           tab_part_info= tab_part_info->get_clone(thd);
+         }
+         else
+@@ -6107,7 +6112,10 @@ the generated partition syntax in a correct manner.
+           *fast_alter_table= true;
+           table->mark_table_for_reopen();
+         }
+-        *tab_part_info->vers_info= *part_info->vers_info;
++        /* Keep now_part and hist_part of the existing partitions */
++        tab_part_info->vers_info->interval= part_info->vers_info->interval;
++        tab_part_info->vers_info->limit= part_info->vers_info->limit;
++        tab_part_info->vers_info->auto_hist= part_info->vers_info->auto_hist;
+         thd->work_part_info= part_info= tab_part_info;
+         *partition_changed= true;
+       }

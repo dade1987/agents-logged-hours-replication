@@ -1,0 +1,43 @@
+diff --git a/public/lib/classes/task/tag_cron_task.php b/public/lib/classes/task/tag_cron_task.php
+index 5be4bb1a473..f3b5def5c10 100644
+--- a/public/lib/classes/task/tag_cron_task.php
++++ b/public/lib/classes/task/tag_cron_task.php
+@@ -200,13 +200,16 @@ class tag_cron_task extends scheduled_task {
+ 
+         // Get instances for each of the ids to be deleted.
+         if (count($tagarray) > 0) {
+-            list($sqlin, $params) = $DB->get_in_or_equal($tagarray);
+-            $sql = "SELECT ti.*, COALESCE(t.name, 'deleted') AS name, COALESCE(t.rawname, 'deleted') AS rawname
+-                      FROM {tag_instance} ti
+-                 LEFT JOIN {tag} t ON t.id = ti.tagid
+-                     WHERE ti.id $sqlin";
+-            $instances = $DB->get_records_sql($sql, $params);
+-            $this->bulk_delete_instances($instances);
++            // Process in chunks to avoid exceeding the database limit on query parameters.
++            foreach (array_chunk(array_unique($tagarray), 1000) as $chunk) {
++                list($sqlin, $params) = $DB->get_in_or_equal($chunk);
++                $sql = "SELECT ti.*, COALESCE(t.name, 'deleted') AS name, COALESCE(t.rawname, 'deleted') AS rawname
++                          FROM {tag_instance} ti
++                     LEFT JOIN {tag} t ON t.id = ti.tagid
++                         WHERE ti.id $sqlin";
++                $instances = $DB->get_records_sql($sql, $params);
++                $this->bulk_delete_instances($instances);
++            }
+         }
+ 
+         core_tag_collection::cleanup_unused_tags();
+@@ -257,9 +260,11 @@ class tag_cron_task extends scheduled_task {
+ 
+         // This is a multi db compatible method of creating the correct sql when using the 'IN' value.
+         // $insql is the sql statement, $params are the id numbers.
+-        list($insql, $params) = $DB->get_in_or_equal($instanceids);
+-        $sql = 'id ' . $insql;
+-        $DB->delete_records_select('tag_instance', $sql, $params);
++        foreach (array_chunk($instanceids, 1000) as $chunk) {
++            list($insql, $params) = $DB->get_in_or_equal($chunk);
++            $sql = 'id ' . $insql;
++            $DB->delete_records_select('tag_instance', $sql, $params);
++        }
+ 
+         // Now go through and record each tag individually with the event system.
+         foreach ($instances as $instance) {

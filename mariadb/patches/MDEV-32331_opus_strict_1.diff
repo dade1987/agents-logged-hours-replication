@@ -1,0 +1,204 @@
+diff --git a/mysql-test/main/func_json.result b/mysql-test/main/func_json.result
+index da78b027..900679b7 100644
+--- a/mysql-test/main/func_json.result
++++ b/mysql-test/main/func_json.result
+@@ -2959,4 +2959,31 @@ NULL
+ SELECT JSON_OVERLAPS(JSON_ARRAY_INSERT(NULL,'$[0]',1), '[]') AS x;
+ x
+ NULL
++#
++# MDEV-32331 JSON path functions with no charset on path crash server
++#
++SELECT ( WITH x ( x ) AS ( WITH x ( x ) AS ( SELECT json_array_append ( 'x' , ( 'x' % 'x' ) , 1 , 'x' , 1 ) ) SELECT CASE WHEN x * x THEN x END FROM x ) ( SELECT 1 FROM x WHERE x ) ) AS r;
++r
++NULL
++SELECT JSON_ARRAY_APPEND('[1]', NULL, 2) AS j;
++j
++NULL
++SELECT JSON_LENGTH('[1]', NULL) AS j;
++j
++NULL
++SELECT JSON_KEYS('{"a":1}', NULL) AS j;
++j
++NULL
++SELECT JSON_EXISTS('{"a":1}', NULL) AS j;
++j
++NULL
++SELECT JSON_VALUE('{"a":1}', NULL) AS j;
++j
++NULL
++SELECT JSON_CONTAINS('[1]', '1', NULL) AS j;
++j
++NULL
++SELECT JSON_REMOVE('[1]', NULL) AS j;
++j
++NULL
+ # End of 10.11 Test
+diff --git a/mysql-test/main/func_json.test b/mysql-test/main/func_json.test
+index c9a65929..396f9a9e 100644
+--- a/mysql-test/main/func_json.test
++++ b/mysql-test/main/func_json.test
+@@ -2130,4 +2130,19 @@ SELECT JSON_ARRAY_INSERT (0,NULL,1) as j;
+ SELECT JSON_EQUALS('[]', JSON_ARRAY_INSERT(NULL,'$[0]',1)) AS x;
+ SELECT JSON_OVERLAPS(JSON_ARRAY_INSERT(NULL,'$[0]',1), '[]') AS x;
+ 
++--echo #
++--echo # MDEV-32331 JSON path functions with no charset on path crash server
++--echo #
++
++--disable_warnings
++SELECT ( WITH x ( x ) AS ( WITH x ( x ) AS ( SELECT json_array_append ( 'x' , ( 'x' % 'x' ) , 1 , 'x' , 1 ) ) SELECT CASE WHEN x * x THEN x END FROM x ) ( SELECT 1 FROM x WHERE x ) ) AS r;
++--enable_warnings
++SELECT JSON_ARRAY_APPEND('[1]', NULL, 2) AS j;
++SELECT JSON_LENGTH('[1]', NULL) AS j;
++SELECT JSON_KEYS('{"a":1}', NULL) AS j;
++SELECT JSON_EXISTS('{"a":1}', NULL) AS j;
++SELECT JSON_VALUE('{"a":1}', NULL) AS j;
++SELECT JSON_CONTAINS('[1]', '1', NULL) AS j;
++SELECT JSON_REMOVE('[1]', NULL) AS j;
++
+ --echo # End of 10.11 Test
+diff --git a/sql/item_jsonfunc.cc b/sql/item_jsonfunc.cc
+index cfe244dc..4703924c 100644
+--- a/sql/item_jsonfunc.cc
++++ b/sql/item_jsonfunc.cc
+@@ -704,8 +704,9 @@ bool Item_func_json_exists::val_bool()
+   if (!path.parsed)
+   {
+     String *s_p= args[1]->val_str(&tmp_path);
+-    if (s_p &&
+-        json_path_setup(&path.p, s_p->charset(), (const uchar *) s_p->ptr(),
++    if (!s_p)
++      goto err_return;
++    if (json_path_setup(&path.p, s_p->charset(), (const uchar *) s_p->ptr(),
+                         (const uchar *) s_p->ptr() + s_p->length()))
+       goto err_return;
+     path.parsed= path.constant;
+@@ -772,18 +773,19 @@ bool Json_path_extractor::extract(String *str, Item *item_js, Item *item_jp,
+   {
+     String *s_p= item_jp->val_str(&tmp_path);
+ 
++    if (!s_p)
++      return true;
++
+     if (allow_wildcard)
+     {
+-      if (s_p &&
+-        json_path_setup(&p, s_p->charset(), (const uchar *) s_p->ptr(),
+-                       (const uchar *) s_p->ptr() + s_p->length()))
++      if (json_path_setup(&p, s_p->charset(), (const uchar *) s_p->ptr(),
++                          (const uchar *) s_p->ptr() + s_p->length()))
+         error= true;
+     }
+     else
+     {
+-      if (s_p &&
+-        path_setup_nwc(&p, s_p->charset(), (const uchar *) s_p->ptr(),
+-                       (const uchar *) s_p->ptr() + s_p->length()))
++      if (path_setup_nwc(&p, s_p->charset(), (const uchar *) s_p->ptr(),
++                         (const uchar *) s_p->ptr() + s_p->length()))
+         error= true;
+     }
+ 
+@@ -1175,6 +1177,8 @@ String *Item_func_json_extract::read_json(String *str,
+        c_path->parsed= c_path->constant;
+        has_negative_path|= c_path->p.types_used & JSON_PATH_NEGATIVE_INDEX;
+       }
++      else
++        goto return_null;
+     }
+ 
+     if (args[n_arg]->null_value)
+@@ -1603,8 +1607,9 @@ bool Item_func_json_contains::val_bool()
+     if (!path.parsed)
+     {
+       String *s_p= args[2]->val_str(&tmp_path);
+-      if (s_p &&
+-          path_setup_nwc(&path.p,s_p->charset(),(const uchar *) s_p->ptr(),
++      if (!s_p)
++        goto return_null;
++      if (path_setup_nwc(&path.p,s_p->charset(),(const uchar *) s_p->ptr(),
+                          (const uchar *) s_p->end()))
+       {
+         report_path_error(s_p, &path.p, 2);
+@@ -1757,6 +1762,8 @@ longlong Item_func_json_contains_path::val_int()
+        c_path->parsed= c_path->constant;
+        has_negative_path|= c_path->p.types_used & JSON_PATH_NEGATIVE_INDEX;
+       }
++      else
++        goto return_null;
+     }
+ 
+     if (args[n_arg]->null_value)
+@@ -1841,6 +1848,8 @@ bool Item_func_json_contains_path::val_bool()
+        c_path->parsed= c_path->constant;
+        has_negative_path|= c_path->p.types_used & JSON_PATH_NEGATIVE_INDEX;
+       }
++      else
++        goto null_return;
+     }
+     if (args[n_arg]->null_value)
+       goto null_return;
+@@ -2164,8 +2173,9 @@ String *Item_func_json_array_append::val_str(String *str)
+     if (!c_path->parsed)
+     {
+       String *s_p= args[n_arg]->val_str(tmp_paths+n_path);
+-      if (s_p &&
+-          path_setup_nwc(&c_path->p,s_p->charset(),(const uchar *) s_p->ptr(),
++      if (!s_p)
++        goto return_null;
++      if (path_setup_nwc(&c_path->p,s_p->charset(),(const uchar *) s_p->ptr(),
+                          (const uchar *) s_p->ptr() + s_p->length()))
+       {
+         report_path_error(s_p, &c_path->p, n_arg);
+@@ -3165,8 +3175,9 @@ longlong Item_func_json_length::val_int()
+     if (!path.parsed)
+     {
+       String *s_p= args[1]->val_str(&tmp_path);
+-      if (s_p &&
+-          path_setup_nwc(&path.p, s_p->charset(), (const uchar *) s_p->ptr(),
++      if (!s_p)
++        goto null_return;
++      if (path_setup_nwc(&path.p, s_p->charset(), (const uchar *) s_p->ptr(),
+                          (const uchar *) s_p->ptr() + s_p->length()))
+       {
+         report_path_error(s_p, &path.p, 1);
+@@ -3421,6 +3432,8 @@ String *Item_func_json_insert::val_str(String *str)
+         /* We search to the last step. */
+         c_path->p.last_step--;
+       }
++      else
++        goto return_null;
+       c_path->parsed= c_path->constant;
+     }
+     if (args[n_arg]->null_value)
+@@ -3692,6 +3705,8 @@ String *Item_func_json_remove::val_str(String *str)
+           goto null_return;
+         }
+       }
++      else
++        goto null_return;
+       c_path->parsed= c_path->constant;
+     }
+     if (args[n_arg]->null_value)
+@@ -3905,8 +3920,9 @@ String *Item_func_json_keys::val_str(String *str)
+   if (!path.parsed)
+   {
+     String *s_p= args[1]->val_str(&tmp_path);
+-    if (s_p &&
+-        path_setup_nwc(&path.p, s_p->charset(), (const uchar *) s_p->ptr(),
++    if (!s_p)
++      goto null_return;
++    if (path_setup_nwc(&path.p, s_p->charset(), (const uchar *) s_p->ptr(),
+                        (const uchar *) s_p->ptr() + s_p->length()))
+       {
+         report_path_error(s_p, &path.p, 1);
+@@ -4144,6 +4160,8 @@ String *Item_func_json_search::val_str(String *str)
+        c_path->parsed= c_path->constant;
+        has_negative_path|= c_path->p.types_used & JSON_PATH_NEGATIVE_INDEX;
+       }
++      else
++        goto null_return;
+     }
+     if (args[n_arg]->null_value)
+       goto null_return;

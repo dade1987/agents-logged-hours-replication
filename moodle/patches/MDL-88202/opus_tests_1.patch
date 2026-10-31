@@ -1,0 +1,91 @@
+diff --git a/public/lib/questionlib.php b/public/lib/questionlib.php
+index ac5ffd7384c..80642e6f295 100644
+--- a/public/lib/questionlib.php
++++ b/public/lib/questionlib.php
+@@ -268,6 +268,9 @@ function question_category_delete_safe($category, bool $coursedeletion = false):
+         }
+         if (!empty($questionids)) {
+             $name = get_string('unknown', 'question');
++            // If the original context no longer exists (e.g. orphaned categories being fixed by
++            // admin/cli/fix_orphaned_question_categories.php), rescue the questions to the site course.
++            $course = get_site();
+             if ($context !== false) {
+                 $name = $context->get_context_name();
+                 $parentcontext = $context->get_course_context(false);
+@@ -592,6 +595,7 @@ function question_move_questions_to_category($questionids, $newcategoryid): bool
+     if (!$newcategorydata) {
+         return false;
+     }
++    $newcontext = context::instance_by_id($newcategorydata->contextid);
+     list($questionidcondition, $params) = $DB->get_in_or_equal($questionids);
+ 
+     $sql = "SELECT qv.id as versionid,
+@@ -641,13 +645,14 @@ function question_move_questions_to_category($questionids, $newcategoryid): bool
+         $entry->questioncategoryid = $newcategorydata->id;
+         $DB->update_record('question_bank_entries', $entry);
+ 
+-        // Log this question move.
+-        $event = \core\event\question_moved::create_from_question_instance($question, context::instance_by_id($question->contextid),
++        // Log this question move. If the old context no longer exists (e.g. the question is being
++        // rescued from an orphaned category), log the event in the new context instead.
++        $eventcontext = context::instance_by_id($question->contextid, IGNORE_MISSING) ?: $newcontext;
++        $event = \core\event\question_moved::create_from_question_instance($question, $eventcontext,
+                 ['oldcategoryid' => $question->category, 'newcategoryid' => $newcategorydata->id]);
+         $event->trigger();
+     }
+ 
+-    $newcontext = context::instance_by_id($newcategorydata->contextid);
+     question_move_question_tags_to_new_context($questions, $newcontext);
+ 
+     // TODO Deal with datasets.
+diff --git a/public/lib/tests/questionlib_test.php b/public/lib/tests/questionlib_test.php
+index 72631d613ef..9c11d66aec8 100644
+--- a/public/lib/tests/questionlib_test.php
++++ b/public/lib/tests/questionlib_test.php
+@@ -403,6 +403,46 @@ final class questionlib_test extends \advanced_testcase {
+         $this->assertEquals($targetcourseid, $newcourse->id);
+     }
+ 
++    /**
++     * Test question_category_delete_safe on an orphaned category whose context no longer exists.
++     *
++     * @covers ::question_category_delete_safe
++     */
++    public function test_question_category_delete_safe_orphaned_context(): void {
++        global $DB;
++        $this->resetAfterTest(true);
++        $this->setAdminUser();
++
++        [, , , $qcat, $questions] = $this->setup_quiz_and_questions();
++
++        // Delete the context to simulate an orphaned category.
++        $DB->delete_records('context', ['id' => $qcat->contextid]);
++        \core\context_helper::reset_caches();
++
++        question_category_delete_safe($qcat);
++
++        // Verify category deleted.
++        $this->assertEquals(0, $DB->count_records('question_categories', ['id' => $qcat->id]));
++        $this->assert_category_contains_questions($qcat->id, 0);
++
++        // The used question was kept and moved to a system qbank in the site course.
++        $savedcategoryid = $DB->get_field_sql(
++            "SELECT qbe.questioncategoryid
++               FROM {question_versions} qv
++               JOIN {question_bank_entries} qbe ON qv.questionbankentryid = qbe.id
++              WHERE qv.questionid = ?",
++            [$questions[0]->id],
++        );
++        $this->assertNotEmpty($savedcategoryid);
++        $newcategory = $DB->get_record('question_categories', ['id' => $savedcategoryid], strictness: MUST_EXIST);
++        $newcategorycontext = context::instance_by_id($newcategory->contextid);
++        $this->assertEquals(\context_module::LEVEL, $newcategorycontext->contextlevel);
++        [$newcourse, $newcm] = get_course_and_cm_from_cmid($newcategorycontext->instanceid);
++        $this->assertEquals('qbank', $newcm->modname);
++        $this->assertEquals(question_bank_helper::TYPE_SYSTEM, $DB->get_field('qbank', 'type', ['id' => $newcm->instance]));
++        $this->assertEquals(SITEID, $newcourse->id);
++    }
++
+     /**
+      * This function tests the question_delete_activity function.
+      */

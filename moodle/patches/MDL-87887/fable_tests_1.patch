@@ -1,0 +1,412 @@
+diff --git a/public/mod/forum/UPGRADING.md b/public/mod/forum/UPGRADING.md
+index a75ff7e03c2..13cb07fc289 100644
+--- a/public/mod/forum/UPGRADING.md
++++ b/public/mod/forum/UPGRADING.md
+@@ -2,6 +2,12 @@
+ 
+ ## 5.2
+ 
++### Added
++
++- A new web service `mod_forum_set_read_state` has been added to allow users to manually mark a forum post as read or unread (when the `forum_usermarksread` site setting is enabled and the forum is tracked by the user).
++
++  For more information see [MDL-87887](https://tracker.moodle.org/browse/MDL-87887)
++
+ ### Deprecated
+ 
+ - The forum report entity `->get_context_joins()` method is deprecated, replaced with `->get_course_modules_joins(...)`
+diff --git a/public/mod/forum/classes/external/set_read_state.php b/public/mod/forum/classes/external/set_read_state.php
+new file mode 100644
+index 00000000000..096a2eeabe9
+--- /dev/null
++++ b/public/mod/forum/classes/external/set_read_state.php
+@@ -0,0 +1,130 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace mod_forum\external;
++
++use core_external\external_api;
++use core_external\external_function_parameters;
++use core_external\external_single_structure;
++use core_external\external_value;
++use mod_forum\local\exporters\post as post_exporter;
++
++/**
++ * Web Service to manually set the read state of a forum post.
++ *
++ * This is only possible when the site setting "forum_usermarksread" is enabled and
++ * the forum is being tracked by the user.
++ *
++ * @package   mod_forum
++ * @category  external
++ * @copyright 2025 Moodle
++ * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class set_read_state extends external_api {
++    /**
++     * Returns description of method parameters
++     *
++     * @return external_function_parameters
++     */
++    public static function execute_parameters(): external_function_parameters {
++        return new external_function_parameters(
++            [
++                'postid' => new external_value(PARAM_INT, 'The post id'),
++                'targetstate' => new external_value(PARAM_BOOL, 'The target state: true to mark as read, false as unread'),
++            ]
++        );
++    }
++
++    /**
++     * Set the read state of a post for the current user.
++     *
++     * @param int $postid The post identifier.
++     * @param bool $targetstate Whether to mark the post as read (true) or unread (false).
++     * @return \stdClass The exported post.
++     */
++    public static function execute(
++        int $postid,
++        bool $targetstate,
++    ): \stdClass {
++        global $CFG, $USER;
++
++        require_once($CFG->dirroot . '/mod/forum/lib.php');
++
++        $params = self::validate_parameters(self::execute_parameters(), [
++            'postid' => $postid,
++            'targetstate' => $targetstate,
++        ]);
++
++        $vaultfactory = \mod_forum\local\container::get_vault_factory();
++        $forumvault = $vaultfactory->get_forum_vault();
++        $discussionvault = $vaultfactory->get_discussion_vault();
++        $postvault = $vaultfactory->get_post_vault();
++
++        $post = $postvault->get_from_id($params['postid']);
++        if (empty($post)) {
++            throw new \moodle_exception('invalidpostid', 'mod_forum', '', $params['postid']);
++        }
++        $discussion = $discussionvault->get_from_id($post->get_discussion_id());
++        if (empty($discussion)) {
++            throw new \moodle_exception('notpartofdiscussion', 'mod_forum');
++        }
++        $forum = $forumvault->get_from_id($discussion->get_forum_id());
++        if (empty($forum)) {
++            throw new \moodle_exception('invalidforumid', 'mod_forum');
++        }
++
++        self::validate_context($forum->get_context());
++
++        $managerfactory = \mod_forum\local\container::get_manager_factory();
++        $capabilitymanager = $managerfactory->get_capability_manager($forum);
++
++        if (!$capabilitymanager->can_view_post($USER, $discussion, $post)) {
++            throw new \moodle_exception('noviewdiscussionspermission', 'mod_forum');
++        }
++
++        $legacydatamapperfactory = \mod_forum\local\container::get_legacy_data_mapper_factory();
++        $forumrecord = $legacydatamapperfactory->get_forum_data_mapper()->to_legacy_object($forum);
++
++        if (
++            !$capabilitymanager->can_manually_control_post_read_status($USER)
++            || !forum_tp_can_track_forums($forumrecord, $USER)
++        ) {
++            // The user is not allowed to manually control the read status of the posts in this forum.
++            throw new \moodle_exception('cannotmanuallymarkread', 'mod_forum');
++        }
++
++        if ($params['targetstate']) {
++            forum_tp_add_read_record($USER->id, $post->get_id());
++        } else {
++            forum_tp_delete_read_records($USER->id, $post->get_id());
++        }
++
++        $builderfactory = \mod_forum\local\container::get_builder_factory();
++        $postbuilder = $builderfactory->get_exported_posts_builder();
++        $exportedposts = $postbuilder->build($USER, [$forum], [$discussion], [$post]);
++
++        return reset($exportedposts);
++    }
++
++    /**
++     * Describe the return structure of the external service.
++     *
++     * @return external_single_structure
++     */
++    public static function execute_returns(): external_single_structure {
++        return post_exporter::get_read_structure();
++    }
++}
+diff --git a/public/mod/forum/db/services.php b/public/mod/forum/db/services.php
+index a4a016cbe81..fbe5ae181b8 100644
+--- a/public/mod/forum/db/services.php
++++ b/public/mod/forum/db/services.php
+@@ -214,6 +214,15 @@ $functions = array(
+         'ajax' => true,
+         'services' => [MOODLE_OFFICIAL_MOBILE_SERVICE],
+     ],
++    'mod_forum_set_read_state' => [
++        'classname' => 'mod_forum\external\set_read_state',
++        'methodname' => 'execute',
++        'description' => 'Manually set the read state (read or unread) of a forum post for the current user.',
++        'type' => 'write',
++        'ajax' => true,
++        'capabilities' => 'mod/forum:viewdiscussion',
++        'services' => [MOODLE_OFFICIAL_MOBILE_SERVICE],
++    ],
+     'mod_forum_mark_posts_read' => [
+         'classname' => 'mod_forum_external',
+         'methodname' => 'mark_posts_read',
+diff --git a/public/mod/forum/lang/en/forum.php b/public/mod/forum/lang/en/forum.php
+index 4dec813a006..2e309c42bb0 100644
+--- a/public/mod/forum/lang/en/forum.php
++++ b/public/mod/forum/lang/en/forum.php
+@@ -97,6 +97,7 @@ $string['cannotsplit'] = 'Discussions from this forum cannot be split';
+ $string['cannotsubscribe'] = 'Sorry, but you must be a group member to subscribe.';
+ $string['cannotfavourite'] = 'Sorry, but you do not have the permission to star discussions.';
+ $string['cannottrack'] = 'Could not stop tracking that forum';
++$string['cannotmanuallymarkread'] = 'You cannot manually mark posts as read or unread in this forum';
+ $string['cannotunsubscribe'] = 'Could not unsubscribe you from that forum';
+ $string['cannotupdatepost'] = 'You can not update this post';
+ $string['cannotuseseperategroupsandsingletopic'] = 'Separate groups can\'t be used with a single simple discussion.';
+diff --git a/public/mod/forum/tests/external/set_read_state_test.php b/public/mod/forum/tests/external/set_read_state_test.php
+new file mode 100644
+index 00000000000..3f4fd8319cc
+--- /dev/null
++++ b/public/mod/forum/tests/external/set_read_state_test.php
+@@ -0,0 +1,209 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace mod_forum\external;
++
++defined('MOODLE_INTERNAL') || die();
++
++global $CFG;
++require_once($CFG->dirroot . '/mod/forum/lib.php');
++
++use core_external\external_api;
++
++/**
++ * Tests for the set_read_state external function.
++ *
++ * @package    mod_forum
++ * @category   test
++ * @copyright  2025 Moodle
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ * @covers     \mod_forum\external\set_read_state
++ */
++final class set_read_state_test extends \core_external\tests\externallib_testcase {
++    /**
++     * Create a course, a tracked forum, a discussion and a post, and return the relevant records.
++     *
++     * @param bool $usermarksread Value for the forum_usermarksread site setting.
++     * @param int $trackforums Whether the user tracks forums.
++     * @param int $trackingtype Tracking type for the forum.
++     * @return array The user, forum, discussion and post records.
++     */
++    private function setup_scenario(
++        bool $usermarksread = true,
++        int $trackforums = 1,
++        int $trackingtype = FORUM_TRACKING_FORCED,
++    ): array {
++        global $CFG, $DB;
++
++        $CFG->forum_usermarksread = $usermarksread;
++        $CFG->forum_allowforcedreadtracking = 1;
++
++        $course = self::getDataGenerator()->create_course();
++        $forum = self::getDataGenerator()->create_module('forum', [
++            'course' => $course->id,
++            'trackingtype' => $trackingtype,
++        ]);
++        $user = self::getDataGenerator()->create_user(['trackforums' => $trackforums]);
++        self::getDataGenerator()->enrol_user($user->id, $course->id, 'student');
++
++        $generator = self::getDataGenerator()->get_plugin_generator('mod_forum');
++        $record = new \stdClass();
++        $record->course = $course->id;
++        $record->userid = $user->id;
++        $record->forum = $forum->id;
++        $discussion = $generator->create_discussion($record);
++        $parentpost = $DB->get_record('forum_posts', ['discussion' => $discussion->id]);
++
++        $record = new \stdClass();
++        $record->course = $course->id;
++        $record->userid = $user->id;
++        $record->forum = $forum->id;
++        $record->discussion = $discussion->id;
++        $record->parent = $parentpost->id;
++        $post = $generator->create_post($record);
++
++        $this->setUser($user);
++
++        return [$user, $forum, $discussion, $post];
++    }
++
++    /**
++     * Test execute method.
++     *
++     * @dataProvider execute_provider
++     * @covers ::execute
++     *
++     * @param bool|null $initialstate Initial read state, null means no initial state (unread).
++     * @param bool $targetstate Expected target read state.
++     */
++    public function test_execute(?bool $initialstate, bool $targetstate): void {
++        $this->resetAfterTest();
++
++        [$user, $forum, $discussion, $post] = $this->setup_scenario();
++
++        if ($initialstate !== null) {
++            if ($initialstate) {
++                forum_tp_add_read_record($user->id, $post->id);
++            } else {
++                forum_tp_delete_read_records($user->id, $post->id);
++            }
++            $this->assertEquals($initialstate, forum_tp_is_post_read($user->id, $post));
++        }
++
++        $return = external_api::clean_returnvalue(
++            set_read_state::execute_returns(),
++            set_read_state::execute($post->id, $targetstate),
++        );
++
++        $this->assertEquals($post->id, $return['id']);
++        $this->assertEquals(!$targetstate, $return['unread']);
++        $this->assertTrue($return['capabilities']['controlreadstatus']);
++        $this->assertEquals($targetstate, forum_tp_is_post_read($user->id, $post));
++    }
++
++    /**
++     * Data provider for test_execute.
++     *
++     * @return array The data provider array.
++     */
++    public static function execute_provider(): array {
++        return [
++            'No initial state, set to read' => [
++                'initialstate' => null,
++                'targetstate' => true,
++            ],
++            'No initial state, set to unread' => [
++                'initialstate' => null,
++                'targetstate' => false,
++            ],
++            'Initially unread, set to read' => [
++                'initialstate' => false,
++                'targetstate' => true,
++            ],
++            'Initially read, set to unread' => [
++                'initialstate' => true,
++                'targetstate' => false,
++            ],
++            'Initially read, set to read' => [
++                'initialstate' => true,
++                'targetstate' => true,
++            ],
++        ];
++    }
++
++    /**
++     * Test execute method when the user is not allowed to manually mark posts as read.
++     *
++     * @covers ::execute
++     */
++    public function test_execute_usermarksread_disabled(): void {
++        $this->resetAfterTest();
++
++        [, , , $post] = $this->setup_scenario(usermarksread: false);
++
++        $this->expectException(\moodle_exception::class);
++        $this->expectExceptionMessage(get_string('cannotmanuallymarkread', 'mod_forum'));
++        set_read_state::execute($post->id, true);
++    }
++
++    /**
++     * Test execute method when the forum is not tracked by the user.
++     *
++     * @covers ::execute
++     */
++    public function test_execute_not_tracked(): void {
++        $this->resetAfterTest();
++
++        [$user, $forum, , $post] = $this->setup_scenario(trackforums: 0, trackingtype: FORUM_TRACKING_OPTIONAL);
++        $this->assertFalse(forum_tp_is_tracked($forum, $user));
++
++        $this->expectException(\moodle_exception::class);
++        $this->expectExceptionMessage(get_string('cannotmanuallymarkread', 'mod_forum'));
++        set_read_state::execute($post->id, true);
++    }
++
++    /**
++     * Test execute method with an invalid post id.
++     *
++     * @covers ::execute
++     */
++    public function test_execute_invalid_post(): void {
++        $this->resetAfterTest();
++
++        $this->setup_scenario();
++
++        $this->expectException(\moodle_exception::class);
++        set_read_state::execute(-1, true);
++    }
++
++    /**
++     * Test execute method when the user cannot view the post.
++     *
++     * @covers ::execute
++     */
++    public function test_execute_cannot_view_post(): void {
++        $this->resetAfterTest();
++
++        [, , , $post] = $this->setup_scenario();
++
++        // A user not enrolled in the course cannot view the post.
++        $otheruser = self::getDataGenerator()->create_user(['trackforums' => 1]);
++        $this->setUser($otheruser);
++
++        $this->expectException(\moodle_exception::class);
++        set_read_state::execute($post->id, true);
++    }
++}
+diff --git a/public/mod/forum/version.php b/public/mod/forum/version.php
+index a83b5a8c214..a597ac49166 100644
+--- a/public/mod/forum/version.php
++++ b/public/mod/forum/version.php
+@@ -24,6 +24,6 @@
+ 
+ defined('MOODLE_INTERNAL') || die();
+ 
+-$plugin->version   = 2026042000;       // The current module version (Date: YYYYMMDDXX).
++$plugin->version   = 2026042001;       // The current module version (Date: YYYYMMDDXX).
+ $plugin->requires  = 2026041000;       // Requires this Moodle version.
+ $plugin->component = 'mod_forum';      // Full name of the plugin (used for diagnostics)

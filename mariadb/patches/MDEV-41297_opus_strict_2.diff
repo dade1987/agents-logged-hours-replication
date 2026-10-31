@@ -1,0 +1,105 @@
+diff --git a/mysql-test/suite/heap/blob_dedup.result b/mysql-test/suite/heap/blob_dedup.result
+index 293b050b..1eb86a52 100644
+--- a/mysql-test/suite/heap/blob_dedup.result
++++ b/mysql-test/suite/heap/blob_dedup.result
+@@ -17,3 +17,22 @@ b
+ c
+ d
+ DROP TABLE t1, t2;
++#
++# MDEV-41297 Wrong result upon DISTINCT/GROUP BY/UNION on TEXT
++# with empty and all-space values
++#
++CREATE TABLE t1 (a TEXT);
++INSERT INTO t1 VALUES (''),('   ');
++SELECT COUNT(*) FROM (SELECT DISTINCT a FROM t1) AS d;
++COUNT(*)
++1
++SELECT COUNT(DISTINCT a) FROM t1;
++COUNT(DISTINCT a)
++1
++SELECT COUNT(*) FROM (SELECT a FROM t1 GROUP BY a) AS g;
++COUNT(*)
++1
++SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE LENGTH(a)=0 UNION SELECT a FROM t1 WHERE LENGTH(a)=3) AS u;
++COUNT(*)
++1
++DROP TABLE t1;
+diff --git a/mysql-test/suite/heap/blob_dedup.test b/mysql-test/suite/heap/blob_dedup.test
+index 810501db..f3c8f075 100644
+--- a/mysql-test/suite/heap/blob_dedup.test
++++ b/mysql-test/suite/heap/blob_dedup.test
+@@ -18,3 +18,15 @@ INSERT INTO t2 VALUES ('b'),('d');
+ --sorted_result
+ SELECT left(a,100000000) FROM t1 UNION SELECT b FROM t2;
+ DROP TABLE t1, t2;
++
++--echo #
++--echo # MDEV-41297 Wrong result upon DISTINCT/GROUP BY/UNION on TEXT
++--echo # with empty and all-space values
++--echo #
++CREATE TABLE t1 (a TEXT);
++INSERT INTO t1 VALUES (''),('   ');
++SELECT COUNT(*) FROM (SELECT DISTINCT a FROM t1) AS d;
++SELECT COUNT(DISTINCT a) FROM t1;
++SELECT COUNT(*) FROM (SELECT a FROM t1 GROUP BY a) AS g;
++SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE LENGTH(a)=0 UNION SELECT a FROM t1 WHERE LENGTH(a)=3) AS u;
++DROP TABLE t1;
+diff --git a/storage/heap/hp_blob.c b/storage/heap/hp_blob.c
+index 3763b949..eaa3b9dd 100644
+--- a/storage/heap/hp_blob.c
++++ b/storage/heap/hp_blob.c
+@@ -918,7 +918,8 @@ int hp_read_blobs(HP_INFO *info, uchar *record, const uchar *pos)
+   @param chain     Pointer to first run of the continuation chain
+   @param data_len  Total blob data length (from record's packlength bytes)
+ 
+-  @return Pointer into info->blob_buff with contiguous blob data,
++  @return Pointer into info->blob_buff with contiguous blob data
++          (a pointer to an empty string for a zero-length blob),
+           or NULL on allocation failure.
+ */
+ 
+@@ -930,8 +931,16 @@ const uchar *hp_materialize_one_blob(HP_INFO *info,
+   uint visible= share->visible;
+   uint recbuffer= share->block.recbuffer;
+ 
+-  if (data_len == 0 || !chain)
+-    return chain;
++  /*
++    An empty blob is stored with a NULL chain pointer. Return a valid
++    (non-NULL) pointer for it: NULL means allocation failure to the callers,
++    which would then treat '' as different from e.g. '   ' before the
++    collation (PAD SPACE) gets a chance to compare them.
++  */
++  if (data_len == 0)
++    return (const uchar*) "";
++  if (!chain)
++    return NULL;
+ 
+   if (hp_is_single_rec(chain, visible))
+     return chain;                         /* Case A: no header, data at offset 0 */
+diff --git a/storage/heap/hp_hash.c b/storage/heap/hp_hash.c
+index 5cefff50..ce77b9eb 100644
+--- a/storage/heap/hp_hash.c
++++ b/storage/heap/hp_hash.c
+@@ -537,6 +537,11 @@ int hp_rec_key_cmp(HP_KEYDEF *keydef, const uchar *rec1, const uchar *rec2,
+       {
+         memcpy(&data2, pos2 + packlength, HP_PTR_SIZE);
+       }
++      /* An empty value may carry a NULL data pointer */
++      if (!len1)
++        data1= (const uchar*) "";
++      if (!len2)
++        data2= (const uchar*) "";
+ 
+       if (my_ci_strnncollsp(seg->charset, data1, len1, data2, len2))
+         return 1;
+@@ -684,6 +689,8 @@ int hp_key_cmp(HP_KEYDEF *keydef, const uchar *rec, const uchar *key,
+       const uchar *rec_data;
+ 
+       memcpy(&key_data, key + 4, HP_PTR_SIZE);
++      if (!key_blob_len)
++        key_data= (const uchar*) "";        /* may be NULL for empty value */
+ 
+       if (rec_blob_len == 0 && key_blob_len == 0)
+         continue;

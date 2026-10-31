@@ -1,0 +1,39 @@
+diff --git a/public/grade/report/user/classes/report/user.php b/public/grade/report/user/classes/report/user.php
+index 7b9420628d3..a6fee940083 100644
+--- a/public/grade/report/user/classes/report/user.php
++++ b/public/grade/report/user/classes/report/user.php
+@@ -609,7 +609,13 @@ class user extends grade_report {
+ 
+                 // Basic grade item information.
+                 $gradeitemdata['id'] = $gradeobject->id;
+-                $gradeitemdata['itemname'] = $gradeobject->itemname;
++                if ($gradeobject->is_category_item() || $gradeobject->is_course_item()) {
++                    // Category and course total items do not store an itemname, so return
++                    // the full name of the total (e.g. "Category name total" or "Course total").
++                    $gradeitemdata['itemname'] = $gradeobject->get_name(true, false);
++                } else {
++                    $gradeitemdata['itemname'] = $gradeobject->itemname;
++                }
+                 $gradeitemdata['itemtype'] = $gradeobject->itemtype;
+                 $gradeitemdata['itemmodule'] = $gradeobject->itemmodule;
+                 $gradeitemdata['iteminstance'] = $gradeobject->iteminstance;
+diff --git a/public/grade/report/user/tests/externallib_test.php b/public/grade/report/user/tests/externallib_test.php
+index 2c7ddc0d240..0dc1dd3778f 100644
+--- a/public/grade/report/user/tests/externallib_test.php
++++ b/public/grade/report/user/tests/externallib_test.php
+@@ -302,6 +302,7 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+             $studentgrades['usergrades'][0]['gradeitems'][0]['averageformatted']);
+ 
+         // Course grades.
++        $this->assertEquals(get_string('coursetotal', 'grades'), $studentgrades['usergrades'][0]['gradeitems'][1]['itemname']);
+         $this->assertEquals('course', $studentgrades['usergrades'][0]['gradeitems'][1]['itemtype']);
+         $this->assertEquals(80, $studentgrades['usergrades'][0]['gradeitems'][1]['graderaw']);
+         $this->assertEquals('80.00', $studentgrades['usergrades'][0]['gradeitems'][1]['gradeformatted']);
+@@ -420,6 +421,7 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+         $this->assertCount(1, $studentgrades['usergrades']);
+         $this->assertCount(1, $studentgrades['usergrades'][0]['gradeitems']);
+         $this->assertEquals('course', $studentgrades['usergrades'][0]['gradeitems'][0]['itemtype']);
++        $this->assertEquals(get_string('coursetotal', 'grades'), $studentgrades['usergrades'][0]['gradeitems'][0]['itemname']);
+     }
+ 
+ }

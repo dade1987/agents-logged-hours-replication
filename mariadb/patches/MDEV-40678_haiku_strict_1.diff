@@ -1,0 +1,96 @@
+diff --git a/plugin/type_mysql_json/mysql_json.cc b/plugin/type_mysql_json/mysql_json.cc
+index c28a403a..25cc1b84 100644
+--- a/plugin/type_mysql_json/mysql_json.cc
++++ b/plugin/type_mysql_json/mysql_json.cc
+@@ -281,6 +281,10 @@ static bool parse_mysql_scalar(String *buffer, size_t value_json_type,
+   }
+   case JSONB_TYPE_OPAQUE:
+   {
++    /* At least the one byte field type must be present. */
++    if (len < 1)
++      return true;
++
+     /* The field_type maps directly to enum_field_types. */
+     const uchar type_value= *data;
+     const enum_field_types field_type= static_cast<enum_field_types>(type_value);
+@@ -288,10 +292,14 @@ static bool parse_mysql_scalar(String *buffer, size_t value_json_type,
+     size_t UNINIT_VAR(blob_length), length_bytes;
+     const uchar *blob_start;
+ 
+-    if (read_variable_length(data + 1, len, &blob_length, &length_bytes) ||
+-        len < length_bytes + blob_length)
++    /*
++      The length and the value come after the field type byte, so only
++      len - 1 bytes are available for them.
++    */
++    if (read_variable_length(data + 1, len - 1, &blob_length, &length_bytes) ||
++        len - 1 < length_bytes + blob_length)
+       return true;
+-    blob_start= data + length_bytes + 1;
++    blob_start= data + 1 + length_bytes;
+ 
+     switch (field_type) {
+     case MYSQL_TYPE_TIME:
+@@ -309,6 +317,11 @@ static bool parse_mysql_scalar(String *buffer, size_t value_json_type,
+       const int precision= blob_start[0];
+       const int scale= blob_start[1];
+ 
++      /* Reject precision / scale values that a valid decimal can't have. */
++      if (precision < 1 || precision > DECIMAL_MAX_PRECISION ||
++          scale < 0 || scale > DECIMAL_MAX_SCALE || scale > precision)
++        return true;
++
+       my_decimal d;
+ 
+       /* The decimal value is encoded after the two prec/scale bytes. */
+@@ -366,6 +379,11 @@ static bool parse_mysql_scalar_or_value(String *buffer, const uchar *data,
+                                         size_t len, size_t value_type_offset,
+                                         bool large, size_t depth)
+ {
++  /* The whole value entry (type and offset / inlined value) must fit. */
++  if (value_type_offset >= len ||
++      len - value_type_offset < value_size(large))
++    return true;
++
+   /* Get the type of the value stored at the key. */
+   const JSONB_TYPES value_type=
+     static_cast<JSONB_TYPES>(data[value_type_offset]);
+@@ -383,6 +401,8 @@ static bool parse_mysql_scalar_or_value(String *buffer, const uchar *data,
+        of the Object / Array */
+     const size_t value_start= read_offset_or_size(
+                                       data + value_type_offset + 1, large);
++    if (value_start >= len)
++      return true;
+     if (parse_mysql_json_value(buffer, value_type, data + value_start,
+                                len - value_start, depth))
+       return true;
+@@ -419,7 +439,17 @@ static bool parse_array_or_object(String *buffer, const uchar *data, size_t len,
+   const size_t bytes= read_offset_or_size(data + offset_size, large);
+ 
+   /* The value can't have more bytes than what's available in the buffer. */
+-  if (bytes > len)
++  if (bytes > len || bytes < 2 * offset_size)
++    return true;
++
++  /*
++    The header (the key entries for objects and the value entries) must fit
++    inside the bytes of this Object / Array. Check it before reading any
++    entries, so a corrupted element_count can't cause reads past the end.
++  */
++  const size_t entry_size= handle_as_object ?
++    key_size(large) + value_size(large) : value_size(large);
++  if ((bytes - 2 * offset_size) / entry_size < element_count)
+     return true;
+ 
+   if (buffer->append(handle_as_object ? '{' : '['))
+@@ -452,6 +482,10 @@ static bool parse_array_or_object(String *buffer, const uchar *data, size_t len,
+                                       element_count * key_size(large) +
+                                       i * value_size(large));
+ 
++      /* The key data must lie within this Object. */
++      if (key_start > bytes || key_len > bytes - key_start)
++        return true;
++
+       /* First print the key. */
+       if (buffer->append('"') ||
+           append_string_json(buffer, data + key_start, key_len) ||

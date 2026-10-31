@@ -1,0 +1,72 @@
+diff --git a/public/admin/tool/mobile/classes/api.php b/public/admin/tool/mobile/classes/api.php
+index 6e77938c5bd..648eb572c2e 100644
+--- a/public/admin/tool/mobile/classes/api.php
++++ b/public/admin/tool/mobile/classes/api.php
+@@ -342,6 +342,7 @@ class api {
+             $settings->tool_mobile_autologinmintimebetweenreq = $mintimereq;
+             $settings->tool_mobile_autologout = get_config('tool_mobile', 'autologout');
+             $settings->tool_mobile_autologouttime = get_config('tool_mobile', 'autologouttime');
++            $settings->tool_mobile_showlogoinappheader = get_config('tool_mobile', 'showlogoinappheader');
+         }
+ 
+         if (empty($section) or $section == 'calendar') {
+diff --git a/public/admin/tool/mobile/lang/en/tool_mobile.php b/public/admin/tool/mobile/lang/en/tool_mobile.php
+index ac256a847f2..7c84f23391f 100644
+--- a/public/admin/tool/mobile/lang/en/tool_mobile.php
++++ b/public/admin/tool/mobile/lang/en/tool_mobile.php
+@@ -201,6 +201,8 @@ $string['setuplink'] = 'App download page';
+ $string['setuplink_desc'] = 'URL of page with options to download the mobile app from the App Store and Google Play. The app download page link is displayed in the page footer and in a user\'s profile. Leave blank to not display a link.';
+ $string['showingcacheddata'] = 'Last synced: {$a->since} days ago ({$a->date}).';
+ $string['showinglivedata'] = 'View live data in the <a href="{$a}" target="_blank">Moodle Apps Portal</a>.';
++$string['showlogoinappheader'] = 'Show site logo in app header';
++$string['showlogoinappheader_desc'] = 'Display the site logo in the app\'s home and dashboard header instead of the site name. Requires a site logo to be configured in <em>Site administration > Appearance</em>.';
+ $string['siteplugins'] = 'Site plugins';
+ $string['smartappbanners'] = 'App Banners';
+ $string['subscription'] = 'Subscription';
+diff --git a/public/admin/tool/mobile/settings.php b/public/admin/tool/mobile/settings.php
+index d405e714dfe..f84dc154d90 100644
+--- a/public/admin/tool/mobile/settings.php
++++ b/public/admin/tool/mobile/settings.php
+@@ -241,6 +241,13 @@ if ($hassiteconfig || has_capability('moodle/site:configview', context_system::i
+         PARAM_URL
+     ));
+ 
++    $temp->add(new admin_setting_configcheckbox(
++        'tool_mobile/showlogoinappheader',
++        new lang_string('showlogoinappheader', 'tool_mobile'),
++        new lang_string('showlogoinappheader_desc', 'tool_mobile'),
++        0
++    ));
++
+     $temp->add(new admin_setting_heading(
+         'tool_mobile/customisation',
+         new lang_string('customisation', 'tool_mobile'),
+diff --git a/public/admin/tool/mobile/tests/externallib_test.php b/public/admin/tool/mobile/tests/externallib_test.php
+index 2e5e913a342..25434494ef0 100644
+--- a/public/admin/tool/mobile/tests/externallib_test.php
++++ b/public/admin/tool/mobile/tests/externallib_test.php
+@@ -221,6 +221,7 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+             [ 'name' => 'tool_mobile_autologinmintimebetweenreq', 'value' => 6 * MINSECS ],
+             [ 'name' => 'tool_mobile_autologout', 'value' => get_config('tool_mobile', 'autologout') ],
+             [ 'name' => 'tool_mobile_autologouttime', 'value' => get_config('tool_mobile', 'autologouttime') ],
++            [ 'name' => 'tool_mobile_showlogoinappheader', 'value' => get_config('tool_mobile', 'showlogoinappheader') ],
+             [ 'name' => 'calendartype', 'value' => $CFG->calendartype ],
+             [ 'name' => 'calendar_site_timeformat', 'value' => $CFG->calendar_site_timeformat ],
+             [ 'name' => 'calendar_startwday', 'value' => $CFG->calendar_startwday ],
+@@ -291,6 +292,16 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+         $result = external_api::clean_returnvalue(external::get_config_returns(), $result);
+         $this->assertCount(0, $result['warnings']);
+         $this->assertEquals($expected, $result['settings']);
++
++        // Show logo in app header setting, disabled and enabled.
++        foreach ([0, 1] as $value) {
++            set_config('showlogoinappheader', $value, 'tool_mobile');
++            $result = external::get_config('mobileapp');
++            $result = external_api::clean_returnvalue(external::get_config_returns(), $result);
++            $settings = array_column($result['settings'], 'value', 'name');
++            $this->assertArrayHasKey('tool_mobile_showlogoinappheader', $settings);
++            $this->assertEquals($value, $settings['tool_mobile_showlogoinappheader']);
++        }
+     }
+ 
+     /*

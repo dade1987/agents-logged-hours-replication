@@ -1,0 +1,96 @@
+diff --git a/public/admin/tool/installaddon/classes/installer.php b/public/admin/tool/installaddon/classes/installer.php
+index 80f04bc9b4e..adedf839400 100644
+--- a/public/admin/tool/installaddon/classes/installer.php
++++ b/public/admin/tool/installaddon/classes/installer.php
+@@ -56,6 +56,21 @@ class tool_installaddon_installer {
+         return new moodle_url('/admin/tool/installaddon/index.php', $params);
+     }
+ 
++    /**
++     * Returns true if the site has an alternative addons repository configured.
++     *
++     * Direct installation from the Moodle plugins directory is no longer possible, so the
++     * default repository cannot complete an installation. Only an explicitly configured
++     * alternative repository is considered usable for the direct installation route.
++     *
++     * @return bool
++     */
++    public function has_alternative_addons_repository(): bool {
++        global $CFG;
++
++        return !empty($CFG->config_php_settings['alternativeaddonsrepositoryurl']);
++    }
++
+     /**
+      * Returns URL to the repository that addons can be searched in and installed from
+      *
+@@ -64,7 +79,7 @@ class tool_installaddon_installer {
+     public function get_addons_repository_url() {
+         global $CFG;
+ 
+-        if (!empty($CFG->config_php_settings['alternativeaddonsrepositoryurl'])) {
++        if ($this->has_alternative_addons_repository()) {
+             $url = $CFG->config_php_settings['alternativeaddonsrepositoryurl'];
+         } else {
+             $url = 'https://moodle.org/plugins/get.php';
+diff --git a/public/admin/tool/installaddon/lang/en/tool_installaddon.php b/public/admin/tool/installaddon/lang/en/tool_installaddon.php
+index c104eb0b723..80995f5ebcc 100644
+--- a/public/admin/tool/installaddon/lang/en/tool_installaddon.php
++++ b/public/admin/tool/installaddon/lang/en/tool_installaddon.php
+@@ -33,7 +33,8 @@ $string['featuredisabled'] = 'The plugin installer is disabled on this site.';
+ $string['installaddon'] = 'Install plugin!';
+ $string['installaddons'] = 'Install plugins';
+ $string['installfromrepo'] = 'Install plugins from the Moodle plugins directory';
+-$string['installfromrepo_help'] = 'You will be redirected to the Moodle plugins directory to search for and install a plugin. Note that your site full name, URL and Moodle version will be sent as well, to make the installation process easier for you.';
++$string['installfromrepo_unavailable'] = 'Installing plugins directly from the Moodle plugins directory is currently unavailable. You can install a plugin by uploading its ZIP package below.';
++$string['installfromrepo_help'] ='You will be redirected to the Moodle plugins directory to search for and install a plugin. Note that your site full name, URL and Moodle version will be sent as well, to make the installation process easier for you.';
+ $string['installfromzip'] = 'Install plugin from ZIP file';
+ $string['installfromzip_help'] = 'An alternative to installing a plugin directly from the Moodle plugins directory is to upload a ZIP package of the plugin. The ZIP package should have the same structure as a package downloaded from the Moodle plugins directory.';
+ $string['installfromzipfile'] = 'ZIP package';
+diff --git a/public/admin/tool/installaddon/renderer.php b/public/admin/tool/installaddon/renderer.php
+index e69aa6789d5..784fe6c4796 100644
+--- a/public/admin/tool/installaddon/renderer.php
++++ b/public/admin/tool/installaddon/renderer.php
+@@ -205,6 +205,14 @@ class tool_installaddon_renderer extends plugin_renderer_base {
+      */
+     protected function index_page_repository() {
+ 
++        if (!$this->installer->has_alternative_addons_repository()) {
++            // Installing from the default plugins directory is not possible, so do not offer a dead-end button.
++            return $this->box(
++                $this->output->notification(get_string('installfromrepo_unavailable', 'tool_installaddon'), 'info'),
++                'generalbox', 'installfromrepobox'
++            );
++        }
++
+         $url = $this->installer->get_addons_repository_url();
+ 
+         $out = $this->box(
+diff --git a/public/admin/tool/installaddon/tests/installer_test.php b/public/admin/tool/installaddon/tests/installer_test.php
+index ac2645c0f14..b470a81d998 100644
+--- a/public/admin/tool/installaddon/tests/installer_test.php
++++ b/public/admin/tool/installaddon/tests/installer_test.php
+@@ -49,6 +49,23 @@ final class installer_test extends \advanced_testcase {
+         $this->assertSame("2.5'; DROP TABLE mdl_user; --", $site['majorversion']);
+     }
+ 
++    /**
++     * Tests that an alternative addons repository is detected only when configured.
++     */
++    public function test_has_alternative_addons_repository(): void {
++        global $CFG;
++
++        $this->resetAfterTest();
++        $installer = testable_tool_installaddon_installer::instance();
++
++        $CFG->config_php_settings = array();
++        $this->assertFalse($installer->has_alternative_addons_repository());
++
++        $CFG->config_php_settings = array('alternativeaddonsrepositoryurl' => 'https://example.com/plugins/get.php');
++        $this->assertTrue($installer->has_alternative_addons_repository());
++        $this->assertStringStartsWith('https://example.com/plugins/get.php', $installer->get_addons_repository_url()->out(false));
++    }
++
+     /**
+      * Tests that marketplace URL includes expected host, scheme and site payload.
+      */

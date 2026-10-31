@@ -1,0 +1,80 @@
+diff --git a/mysql-test/suite/plugins/r/qc_info.result b/mysql-test/suite/plugins/r/qc_info.result
+index afab7671..787d8eb1 100644
+--- a/mysql-test/suite/plugins/r/qc_info.result
++++ b/mysql-test/suite/plugins/r/qc_info.result
+@@ -44,6 +44,21 @@ a
+ select hits, statement_text from information_schema.query_cache_info;
+ hits	statement_text
+ 1	select * from t1
++#
++# MDEV-40670 qc_info OOB read if query contains \0
++#
++reset query cache;
++set @q= concat("select * from t1 where 'a' <> 'a", char(0), "'");
++prepare stmt from @q;
++execute stmt;
++a
++1
++2
++3
++deallocate prepare stmt;
++select hex(statement_schema), statement_text from information_schema.query_cache_info;
++hex(statement_schema)	statement_text
++040074657374	select * from t1 where 'a' <> 'a
+ drop table t1;
+ select statement_schema, statement_text, result_blocks_count, result_blocks_size from information_schema.query_cache_info;
+ statement_schema	statement_text	result_blocks_count	result_blocks_size
+diff --git a/mysql-test/suite/plugins/t/qc_info.test b/mysql-test/suite/plugins/t/qc_info.test
+index 5345bac1..2e0482f0 100644
+--- a/mysql-test/suite/plugins/t/qc_info.test
++++ b/mysql-test/suite/plugins/t/qc_info.test
+@@ -12,6 +12,23 @@ select * from t1;
+ --enable_cursor_protocol
+ select hits, statement_text from information_schema.query_cache_info;
+ 
++--echo #
++--echo # MDEV-40670 qc_info OOB read if query contains \0
++--echo #
++reset query cache;
++set @q= concat("select * from t1 where 'a' <> 'a", char(0), "'");
++prepare stmt from @q;
++--disable_cursor_protocol
++--disable_ps2_protocol
++execute stmt;
++--enable_ps2_protocol
++--enable_cursor_protocol
++deallocate prepare stmt;
++# the key cannot be parsed unambiguously, but the plugin must not read
++# beyond the end of the db name
++--sorted_result
++select hex(statement_schema), statement_text from information_schema.query_cache_info;
++
+ drop table t1;
+ # the query was invalidated
+ select statement_schema, statement_text, result_blocks_count, result_blocks_size from information_schema.query_cache_info;
+diff --git a/plugin/qc_info/qc_info.cc b/plugin/qc_info/qc_info.cc
+index a46e2d9f..64800443 100644
+--- a/plugin/qc_info/qc_info.cc
++++ b/plugin/qc_info/qc_info.cc
+@@ -230,10 +230,20 @@ static int qc_info_fill_table(THD *thd, TABLE_LIST *tables,
+     /* The database against which the statement is executed is part of the
+        query cache query key
+      */
+-    compile_time_assert(QUERY_CACHE_DB_LENGTH_SIZE == 2); 
++    compile_time_assert(QUERY_CACHE_DB_LENGTH_SIZE == 2);
+     db= key + statement_text_length + 1 + QUERY_CACHE_DB_LENGTH_SIZE;
+     db_length= uint2korr(db - QUERY_CACHE_DB_LENGTH_SIZE);
+ 
++    /*
++      The key format is [query]\0[db length][db][flags]. If the query text
++      contains a \0 byte, strlen() above stops early and db/db_length point
++      into the middle of the query text, so db_length can be garbage.
++      This cannot be parsed unambiguously; make sure that we never read
++      beyond the end of the db name (that is, the start of the flags).
++    */
++    if (db_length > (size_t) (key + flags_length - db))
++      db_length= (size_t) (key + flags_length - db);
++
+     table->field[COLUMN_STATEMENT_SCHEMA]->store(db, db_length, scs);
+ 
+     /* If we have result blocks, process them */

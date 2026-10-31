@@ -1,0 +1,34 @@
+diff --git a/public/lib/classes/output/requirements/page_requirements_manager.php b/public/lib/classes/output/requirements/page_requirements_manager.php
+index f13039d2d28..6abaacd092e 100644
+--- a/public/lib/classes/output/requirements/page_requirements_manager.php
++++ b/public/lib/classes/output/requirements/page_requirements_manager.php
+@@ -1063,7 +1063,7 @@ class page_requirements_manager {
+         $themes = core_component::get_all_plugins_list('theme');
+         $importmap->set_available_themes(array_keys($themes));
+ 
+-        return html_writer::tag(
++        $output = html_writer::tag(
+             'script',
+             json_encode(
+                 $importmap,
+@@ -1071,6 +1071,20 @@ class page_requirements_manager {
+             ),
+             ['type' => 'importmap'],
+         );
++
++        // The modulepreload links must come after the import map, otherwise the browser will not apply the map.
++        $resolved = $importmap->jsonSerialize()['imports'];
++        foreach (['react', 'react-dom', 'tabbable', 'bootstrap', '@moodlehq/design-system'] as $specifier) {
++            if (empty($resolved[$specifier])) {
++                continue;
++            }
++            $output .= html_writer::empty_tag('link', [
++                'rel' => 'modulepreload',
++                'href' => $resolved[$specifier],
++            ]);
++        }
++
++        return $output;
+     }
+ 
+     /**

@@ -1,0 +1,18 @@
+diff --git a/public/grade/classes/penalty_manager.php b/public/grade/classes/penalty_manager.php
+index c4c7fb904b8..b75da7a4f9d 100644
+--- a/public/grade/classes/penalty_manager.php
++++ b/public/grade/classes/penalty_manager.php
+@@ -231,8 +231,11 @@ class penalty_manager {
+ 
+         // Update the grade if not in preview mode.
+         if (!$previewonly) {
+-            // Update the raw grade and store the deducted mark.
+-            $gradeitem->update_raw_grade($userid, $container->get_grade_after_penalties(), 'gradepenalty');
++            // The grade before penalties is the final grade, which already has the grade item's multfactor and
++            // plusfactor applied. Write it back as the final grade, not the raw grade, otherwise the factors
++            // would be applied a second time when the raw grade is converted to a final grade.
++            $gradeitem->update_final_grade($userid, $container->get_grade_after_penalties(), 'gradepenalty');
++            // Store the deducted mark.
+             $gradeitem->update_deducted_mark($userid, $container->get_penalty());
+         }
+ 

@@ -1,0 +1,47 @@
+diff --git a/public/mod/quiz/report/statistics/classes/task/recalculate.php b/public/mod/quiz/report/statistics/classes/task/recalculate.php
+index efd36e50155..033cc84830b 100644
+--- a/public/mod/quiz/report/statistics/classes/task/recalculate.php
++++ b/public/mod/quiz/report/statistics/classes/task/recalculate.php
+@@ -135,12 +135,14 @@ class recalculate extends \core\task\adhoc_task {
+     /**
+      * Check if there is a pending task for a given quiz.
+      *
++     * Tasks that have exhausted their retries will not run again, so they are not considered pending.
++     *
+      * @param int $quizid
+      * @return ?int Null for no task, or number of seconds until the task is scheduled to run.
+      */
+     public static function task_due_in(int $quizid): ?int {
+         $task = self::instance($quizid);
+-        $scheduledtask = manager::get_queued_adhoc_task_record($task);
++        $scheduledtask = manager::get_queued_adhoc_task_record($task, false);
+         if (!$scheduledtask) {
+             return null;
+         }
+diff --git a/public/mod/quiz/report/statistics/tests/recalculate_test.php b/public/mod/quiz/report/statistics/tests/recalculate_test.php
+index 62de45e5f8d..676c9c04cd3 100644
+--- a/public/mod/quiz/report/statistics/tests/recalculate_test.php
++++ b/public/mod/quiz/report/statistics/tests/recalculate_test.php
+@@ -262,4 +262,22 @@ final class recalculate_test extends \advanced_testcase {
+         $this->assertNotNull(recalculate::task_due_in($quizid1));
+         $this->assertNull(recalculate::task_due_in($quizid2));
+     }
++
++    /**
++     * task_due_in should return null when the only queued task has exhausted its retries, as it will never run.
++     */
++    public function test_task_due_in_is_null_when_task_has_exhausted_retries(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $this->mock_clock_with_frozen();
++        $quizid = $this->create_quiz_id();
++
++        recalculate::queue_future_run($quizid, true);
++        $queued = manager::get_queued_adhoc_task_record(recalculate::instance($quizid));
++        $this->assertNotEmpty($queued);
++        $DB->set_field('task_adhoc', 'attemptsavailable', 0, ['id' => $queued->id]);
++
++        $this->assertNull(recalculate::task_due_in($quizid));
++    }
+ }

@@ -1,0 +1,75 @@
+diff --git a/public/question/type/multichoice/renderer.php b/public/question/type/multichoice/renderer.php
+index cccaf774db8..cfa35efe884 100644
+--- a/public/question/type/multichoice/renderer.php
++++ b/public/question/type/multichoice/renderer.php
+@@ -143,11 +143,21 @@ abstract class qtype_multichoice_renderer_base extends qtype_with_combined_feedb
+             $classes[] = $class;
+         }
+ 
+-        $result = '';
+-        $result .= html_writer::tag('div', $question->format_questiontext($qa),
+-                array('class' => 'qtext'));
++        $questiontextid = $qa->get_qt_field_name('qtext');
++        $legendid = $qa->get_qt_field_name('legend');
+ 
+-        $result .= html_writer::start_tag('fieldset', array('class' => 'ablock no-overflow visual-scroll-x'));
++        $result = '';
++        $result .= html_writer::tag('div', $question->format_questiontext($qa), [
++            'class' => 'qtext',
++            'id' => $questiontextid,
++        ]);
++
++        // The accessible name of the group of choices includes the question identifier/prompt
++        // (from the legend) and the actual question text, so that screen readers announce it.
++        $result .= html_writer::start_tag('fieldset', [
++            'class' => 'ablock no-overflow visual-scroll-x',
++            'aria-labelledby' => $legendid . ' ' . $questiontextid,
++        ]);
+         if ($question->showstandardinstruction == 1) {
+             $legendclass = '';
+             $questionnumber = $options->add_question_identifier_to_label($this->prompt(), true, true);
+@@ -157,6 +167,7 @@ abstract class qtype_multichoice_renderer_base extends qtype_with_combined_feedb
+         }
+         $legendattrs = [
+             'class' => 'prompt h6 fw-normal ' . $legendclass,
++            'id' => $legendid,
+         ];
+         $result .= html_writer::tag('legend', $questionnumber, $legendattrs);
+ 
+diff --git a/public/question/type/multichoice/tests/walkthrough_test.php b/public/question/type/multichoice/tests/walkthrough_test.php
+index c09e39dd3e3..e95410409e7 100644
+--- a/public/question/type/multichoice/tests/walkthrough_test.php
++++ b/public/question/type/multichoice/tests/walkthrough_test.php
+@@ -302,10 +302,32 @@ final class walkthrough_test extends \qbehaviour_walkthrough_test_base {
+         $this->render();
+ 
+         // Check for 'Show standard instruction'.
++        $qa = $this->quba->get_question_attempt($this->slot);
+         $standardinstruction = \html_writer::tag('legend', get_string('answer'), [
+             'class' => 'prompt h6 fw-normal visually-hidden',
++            'id' => $qa->get_qt_field_name('legend'),
+         ]);
+         $this->assertStringContainsString($standardinstruction, $this->currentoutput);
+     }
+ 
++    public function test_choices_group_is_labelled_by_question_text(): void {
++        $mc = \test_question_maker::make_a_multichoice_single_question();
++        $mc->showstandardinstruction = false;
++
++        $this->start_attempt_at_question($mc, 'deferredfeedback', 3);
++        $this->render();
++
++        $qa = $this->quba->get_question_attempt($this->slot);
++        $questiontextid = $qa->get_qt_field_name('qtext');
++        $legendid = $qa->get_qt_field_name('legend');
++
++        // The question text has an id.
++        $this->assertStringContainsString('<div class="qtext" id="' . $questiontextid . '">', $this->currentoutput);
++        // The fieldset is labelled by both the legend and the question text.
++        $this->assertStringContainsString('<fieldset class="ablock no-overflow visual-scroll-x" aria-labelledby="' .
++            $legendid . ' ' . $questiontextid . '">', $this->currentoutput);
++        $this->assertStringContainsString('<legend class="prompt h6 fw-normal visually-hidden" id="' . $legendid . '">',
++            $this->currentoutput);
++    }
++
+ }

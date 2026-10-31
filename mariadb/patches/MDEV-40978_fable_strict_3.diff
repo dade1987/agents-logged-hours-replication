@@ -1,0 +1,130 @@
+diff --git a/mysql-test/main/partition_range_interval.result b/mysql-test/main/partition_range_interval.result
+index 6f7abf6d..72803ce2 100644
+--- a/mysql-test/main/partition_range_interval.result
++++ b/mysql-test/main/partition_range_interval.result
+@@ -2557,3 +2557,15 @@ INTERVAL "hello" DAY
+ PARTITION p0 VALUES LESS THAN ('2026-04-20')
+ );
+ ERROR HY000: Wrong parameters for partitioned `t1`: wrong value for 'INTERVAL'
++#
++# MDEV-40978 PREPARE with INTERVAL ? in Partition DDL Crashes the Server
++#
++PREPARE s FROM 'CREATE TABLE t1 (c DATE) PARTITION BY RANGE COLUMNS(c)
++  INTERVAL ? DAY (PARTITION p0 VALUES LESS THAN (?))';
++ERROR HY000: Wrong parameters for partitioned `t1`: wrong value for 'INTERVAL'
++PREPARE s FROM 'CREATE TABLE t1 (c DATE) PARTITION BY RANGE COLUMNS(c)
++  INTERVAL (? + 1) DAY (PARTITION p0 VALUES LESS THAN (?))';
++ERROR HY000: Wrong parameters for partitioned `t1`: wrong value for 'INTERVAL'
++PREPARE s FROM 'CREATE TABLE t1 (c DATE) PARTITION BY RANGE COLUMNS(c)
++  INTERVAL ? DAY AUTO (PARTITION p0 VALUES LESS THAN ("2026-04-20"))';
++ERROR HY000: Wrong parameters for partitioned `t1`: wrong value for 'INTERVAL'
+diff --git a/mysql-test/main/partition_range_interval.test b/mysql-test/main/partition_range_interval.test
+index df2e0b49..af88d476 100644
+--- a/mysql-test/main/partition_range_interval.test
++++ b/mysql-test/main/partition_range_interval.test
+@@ -1041,3 +1041,16 @@ INTERVAL "hello" DAY
+ (
+ PARTITION p0 VALUES LESS THAN ('2026-04-20')
+ );
++
++--echo #
++--echo # MDEV-40978 PREPARE with INTERVAL ? in Partition DDL Crashes the Server
++--echo #
++--error ER_PART_WRONG_VALUE
++PREPARE s FROM 'CREATE TABLE t1 (c DATE) PARTITION BY RANGE COLUMNS(c)
++  INTERVAL ? DAY (PARTITION p0 VALUES LESS THAN (?))';
++--error ER_PART_WRONG_VALUE
++PREPARE s FROM 'CREATE TABLE t1 (c DATE) PARTITION BY RANGE COLUMNS(c)
++  INTERVAL (? + 1) DAY (PARTITION p0 VALUES LESS THAN (?))';
++--error ER_PART_WRONG_VALUE
++PREPARE s FROM 'CREATE TABLE t1 (c DATE) PARTITION BY RANGE COLUMNS(c)
++  INTERVAL ? DAY AUTO (PARTITION p0 VALUES LESS THAN ("2026-04-20"))';
+diff --git a/mysql-test/suite/versioning/r/partition.result b/mysql-test/suite/versioning/r/partition.result
+index 7b9cd01c..d2efb7ab 100644
+--- a/mysql-test/suite/versioning/r/partition.result
++++ b/mysql-test/suite/versioning/r/partition.result
+@@ -3626,5 +3626,14 @@ Table	Op	Msg_type	Msg_text
+ test.t	repair	status	OK
+ drop table t;
+ set timestamp=default;
++#
++# MDEV-40978 PREPARE with INTERVAL ? in Partition DDL Crashes the Server
++#
++prepare stmt from 'create table t (x int) with system versioning
++  partition by system_time interval ? hour';
++ERROR HY000: Wrong parameters for partitioned `t`: wrong value for 'INTERVAL'
++prepare stmt from 'create table t (x int) with system versioning
++  partition by system_time interval ? hour auto';
++ERROR HY000: Wrong parameters for partitioned `t`: wrong value for 'INTERVAL'
+ # End of 10.11 tests
+ set global innodb_stats_persistent= @save_persistent;
+diff --git a/mysql-test/suite/versioning/t/partition.test b/mysql-test/suite/versioning/t/partition.test
+index 6ce769d4..db2e2ddb 100644
+--- a/mysql-test/suite/versioning/t/partition.test
++++ b/mysql-test/suite/versioning/t/partition.test
+@@ -2871,6 +2871,16 @@ repair table t;
+ drop table t;
+ set timestamp=default;
+ 
++--echo #
++--echo # MDEV-40978 PREPARE with INTERVAL ? in Partition DDL Crashes the Server
++--echo #
++--error ER_PART_WRONG_VALUE
++prepare stmt from 'create table t (x int) with system versioning
++  partition by system_time interval ? hour';
++--error ER_PART_WRONG_VALUE
++prepare stmt from 'create table t (x int) with system versioning
++  partition by system_time interval ? hour auto';
++
+ --echo # End of 10.11 tests
+ 
+ set global innodb_stats_persistent= @save_persistent;
+diff --git a/sql/partition_info.cc b/sql/partition_info.cc
+index d1f85e26..6675dcb4 100644
+--- a/sql/partition_info.cc
++++ b/sql/partition_info.cc
+@@ -2826,8 +2826,18 @@ bool partition_info::vers_set_interval(THD* thd, Item* interval,
+   vers_info->auto_hist= auto_hist;
+ 
+   /* 1. assign INTERVAL to interval.step */
+-  if (interval->fix_fields_if_needed_for_scalar(thd, &interval))
++  /*
++    The interval is evaluated at parse time, so it must be a constant
++    known at parse time: prepared statement placeholders are not bound yet.
++  */
++  if (interval->with_param() ||
++      interval->fix_fields_if_needed_for_scalar(thd, &interval) ||
++      !interval->const_item())
++  {
++    if (!thd->is_error())
++      my_error(ER_PART_WRONG_VALUE, MYF(0), table_name, "INTERVAL");
+     return true;
++  }
+   bool error= get_interval_value(thd, interval, int_type, &vers_info->interval.step) ||
+           vers_info->interval.step.neg || vers_info->interval.step.second_part ||
+         !(vers_info->interval.step.year || vers_info->interval.step.month ||
+diff --git a/sql/sql_partition_auto_interval.cc b/sql/sql_partition_auto_interval.cc
+index 2f599e64..6ddc2f01 100644
+--- a/sql/sql_partition_auto_interval.cc
++++ b/sql/sql_partition_auto_interval.cc
+@@ -402,8 +402,19 @@ bool partition_info::set_range_interval(THD* thd, Item* ival,
+                                         interval_type type,
+                                         const char *table_name)
+ {
+-  if (ival->fix_fields_if_needed_for_scalar(thd, &ival))
++  /*
++    The interval value is evaluated right here, at parse time, so it must
++    be a constant known at parse time. Placeholders of a prepared statement
++    (INTERVAL ? DAY) are not bound yet at this point and evaluating them
++    would read an unassigned Item_param.
++  */
++  if (ival->with_param() || ival->fix_fields_if_needed_for_scalar(thd, &ival) ||
++      !ival->const_item())
++  {
++    if (!thd->is_error())
++      my_error(ER_PART_WRONG_VALUE, MYF(0), table_name, "INTERVAL");
+     return true;
++  }
+   bool error= get_interval_value(thd, ival, type, &interval) ||
+     interval.neg || interval.second_part ||
+     !(interval.year || interval.month || interval.day || interval.hour ||

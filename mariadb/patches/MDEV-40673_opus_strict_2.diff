@@ -1,0 +1,89 @@
+diff --git a/mysql-test/main/func_concat.result b/mysql-test/main/func_concat.result
+index 4b91fb97..6a372f4f 100644
+--- a/mysql-test/main/func_concat.result
++++ b/mysql-test/main/func_concat.result
+@@ -304,3 +304,35 @@ f
+ NULL
+ DROP TABLE t1;
+ # End of 10.5 tests
++#
++# MDEV-40673 CONCAT drops its first argument's value when that
++# argument is JSON_TYPE() or GET_FORMAT()
++#
++SELECT CONCAT(JSON_TYPE('{"a":1}'), 'X');
++CONCAT(JSON_TYPE('{"a":1}'), 'X')
++OBJECTX
++SELECT CONCAT(JSON_TYPE('{"a":1}'), '');
++CONCAT(JSON_TYPE('{"a":1}'), '')
++OBJECT
++SELECT CONCAT(JSON_TYPE('{"a":1}'), JSON_TYPE('[1]'));
++CONCAT(JSON_TYPE('{"a":1}'), JSON_TYPE('[1]'))
++OBJECTARRAY
++SELECT LENGTH(CONCAT(JSON_TYPE('{"a":1}'), 'X'));
++LENGTH(CONCAT(JSON_TYPE('{"a":1}'), 'X'))
++7
++SELECT CONCAT(GET_FORMAT(DATE, 'USA'), 'X');
++CONCAT(GET_FORMAT(DATE, 'USA'), 'X')
++%m.%d.%YX
++CREATE TABLE t1 (j JSON);
++INSERT INTO t1 VALUES ('{"a":1}'), ('[1,2]');
++SELECT CONCAT(JSON_TYPE(j), '.') AS c FROM t1;
++c
++OBJECT.
++ARRAY.
++DROP TABLE t1;
++SET sql_mode=ORACLE;
++SELECT JSON_TYPE('{"a":1}') || 'X' AS c;
++c
++OBJECTX
++SET sql_mode=DEFAULT;
++# End of 10.11 tests
+diff --git a/mysql-test/main/func_concat.test b/mysql-test/main/func_concat.test
+index f93b150f..2f6a8491 100644
+--- a/mysql-test/main/func_concat.test
++++ b/mysql-test/main/func_concat.test
+@@ -281,3 +281,23 @@ SELECT CONCAT_WS(' ', a, b, PASSWORD(c)) AS f FROM t1 GROUP BY f WITH ROLLUP;
+ DROP TABLE t1;
+ 
+ --echo # End of 10.5 tests
++
++--echo #
++--echo # MDEV-40673 CONCAT drops its first argument's value when that
++--echo # argument is JSON_TYPE() or GET_FORMAT()
++--echo #
++
++SELECT CONCAT(JSON_TYPE('{"a":1}'), 'X');
++SELECT CONCAT(JSON_TYPE('{"a":1}'), '');
++SELECT CONCAT(JSON_TYPE('{"a":1}'), JSON_TYPE('[1]'));
++SELECT LENGTH(CONCAT(JSON_TYPE('{"a":1}'), 'X'));
++SELECT CONCAT(GET_FORMAT(DATE, 'USA'), 'X');
++CREATE TABLE t1 (j JSON);
++INSERT INTO t1 VALUES ('{"a":1}'), ('[1,2]');
++SELECT CONCAT(JSON_TYPE(j), '.') AS c FROM t1;
++DROP TABLE t1;
++SET sql_mode=ORACLE;
++SELECT JSON_TYPE('{"a":1}') || 'X' AS c;
++SET sql_mode=DEFAULT;
++
++--echo # End of 10.11 tests
+diff --git a/sql/item_strfunc.cc b/sql/item_strfunc.cc
+index b4388f12..90b6d6db 100644
+--- a/sql/item_strfunc.cc
++++ b/sql/item_strfunc.cc
+@@ -642,7 +642,15 @@ bool Item_func_concat::realloc_result(String *str, uint length) const
+   if (str->alloced_length() >= length)
+     return false; // Alloced space is big enough, nothing to do.
+ 
+-  if (str->alloced_length() == 0)
++  /*
++    An alloced_length of 0 does not necessarily mean that str is empty:
++    args[0]->val_str(str) could have pointed str to a constant buffer
++    it does not own (e.g. using String::set()), leaving
++    alloced_length()==0 but length()>0. alloc() would discard such
++    content, so use it only when str is really empty. realloc() copies
++    the existing content into a newly allocated buffer.
++  */
++  if (str->alloced_length() == 0 && str->length() == 0)
+     return str->alloc(length);
+ 
+   /*

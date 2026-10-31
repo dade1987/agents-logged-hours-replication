@@ -1,0 +1,121 @@
+diff --git a/public/mod/assign/locallib.php b/public/mod/assign/locallib.php
+index 2901a49b29a..373ed240fae 100644
+--- a/public/mod/assign/locallib.php
++++ b/public/mod/assign/locallib.php
+@@ -6659,8 +6659,23 @@ class assign {
+         $time = \core\di::get(\core\clock::class)->time();
+         $dateopen = true;
+         $finaldate = false;
+-        if ($this->get_instance()->cutoffdate) {
+-            $finaldate = $this->get_instance()->cutoffdate;
++
++        // Work out the effective dates for this user, taking any user or group overrides into account.
++        $instance = $this->get_instance($userid);
++        $cutoffdate = $instance->cutoffdate;
++        $allowsubmissionsfromdate = $instance->allowsubmissionsfromdate;
++        if ($this->has_overrides()) {
++            $override = $this->override_exists($userid);
++            if (isset($override->cutoffdate)) {
++                $cutoffdate = $override->cutoffdate;
++            }
++            if (isset($override->allowsubmissionsfromdate)) {
++                $allowsubmissionsfromdate = $override->allowsubmissionsfromdate;
++            }
++        }
++
++        if ($cutoffdate) {
++            $finaldate = $cutoffdate;
+         }
+ 
+         if ($flags === false) {
+@@ -6681,9 +6696,9 @@ class assign {
+         }
+ 
+         if ($finaldate) {
+-            $dateopen = ($this->get_instance()->allowsubmissionsfromdate <= $time && $time <= $finaldate);
++            $dateopen = ($allowsubmissionsfromdate <= $time && $time <= $finaldate);
+         } else {
+-            $dateopen = ($this->get_instance()->allowsubmissionsfromdate <= $time);
++            $dateopen = ($allowsubmissionsfromdate <= $time);
+         }
+ 
+         if (!$dateopen) {
+diff --git a/public/mod/assign/tests/locallib_test.php b/public/mod/assign/tests/locallib_test.php
+index 39dd09e146c..2870a551ddb 100644
+--- a/public/mod/assign/tests/locallib_test.php
++++ b/public/mod/assign/tests/locallib_test.php
+@@ -2593,6 +2593,74 @@ You can see it appended to your <a href="' . $assignurl .
+         $this->assertEquals(false, $assign->testable_submissions_open($student->id));
+     }
+ 
++    /**
++     * Test that user and group overrides are taken into account by submissions_open().
++     *
++     * @covers \assign::submissions_open
++     */
++    public function test_submissions_open_with_overrides(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++
++        $course = $this->getDataGenerator()->create_course();
++        $teacher = $this->getDataGenerator()->create_and_enrol($course, 'editingteacher');
++        $student = $this->getDataGenerator()->create_and_enrol($course, 'student');
++        $otherstudent = $this->getDataGenerator()->create_and_enrol($course, 'student');
++        $groupstudent = $this->getDataGenerator()->create_and_enrol($course, 'student');
++        $group = $this->getDataGenerator()->create_group(['courseid' => $course->id]);
++        $this->getDataGenerator()->create_group_member(['groupid' => $group->id, 'userid' => $groupstudent->id]);
++
++        $now = time();
++        $tomorrow = $now + DAYSECS;
++        $yesterday = $now - DAYSECS;
++        $lastweek = $now - WEEKSECS;
++
++        // Cut off date in the past.
++        $assign = $this->create_instance($course, ['duedate' => $lastweek, 'cutoffdate' => $yesterday]);
++        $this->setUser($teacher);
++        $this->assertFalse($assign->testable_submissions_open($student->id));
++        $this->assertFalse($assign->testable_submissions_open($groupstudent->id));
++
++        // User override removing the cut off date.
++        $DB->insert_record('assign_overrides', (object) [
++            'assignid' => $assign->get_instance()->id,
++            'userid' => $student->id,
++            'cutoffdate' => 0,
++        ]);
++        // Group override with a future cut off date.
++        $DB->insert_record('assign_overrides', (object) [
++            'assignid' => $assign->get_instance()->id,
++            'groupid' => $group->id,
++            'sortorder' => 1,
++            'cutoffdate' => $tomorrow,
++        ]);
++        $this->assertTrue($assign->testable_submissions_open($student->id));
++        $this->assertTrue($assign->testable_submissions_open($groupstudent->id));
++        $this->assertFalse($assign->testable_submissions_open($otherstudent->id));
++
++        // Cut off date in the future, overridden to the past for one user.
++        $assign = $this->create_instance($course, ['duedate' => $lastweek, 'cutoffdate' => $tomorrow]);
++        $this->assertTrue($assign->testable_submissions_open($student->id));
++        $DB->insert_record('assign_overrides', (object) [
++            'assignid' => $assign->get_instance()->id,
++            'userid' => $student->id,
++            'cutoffdate' => $yesterday,
++        ]);
++        $this->assertFalse($assign->testable_submissions_open($student->id));
++        $this->assertTrue($assign->testable_submissions_open($otherstudent->id));
++
++        // Allow submissions from date overridden to the future.
++        $assign = $this->create_instance($course, ['allowsubmissionsfromdate' => $yesterday]);
++        $DB->insert_record('assign_overrides', (object) [
++            'assignid' => $assign->get_instance()->id,
++            'userid' => $student->id,
++            'allowsubmissionsfromdate' => $tomorrow,
++        ]);
++        $this->assertFalse($assign->testable_submissions_open($student->id));
++        $this->assertTrue($assign->testable_submissions_open($otherstudent->id));
++    }
++
+     public function test_get_graders(): void {
+         global $DB;
+ 

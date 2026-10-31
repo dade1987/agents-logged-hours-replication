@@ -1,0 +1,168 @@
+diff --git a/UPGRADING.md b/UPGRADING.md
+index 2edfb2c4eb8..8afe02b115e 100644
+--- a/UPGRADING.md
++++ b/UPGRADING.md
+@@ -12,6 +12,12 @@ The format of this change log follows the advice given at [Keep a CHANGELOG](htt
+ 
+ #### Added
+ 
++- `csv_export_writer` has a new method `set_escape_formulas(bool)` and `csv_export_writer::print_array()` a new optional
++  `$escapeformulas` parameter (default `true`) to control whether values that could be interpreted as spreadsheet formulas
++  are escaped. `csv_import_reader::load_csv_content()` no longer escapes formulas when storing imported data, so values
++  such as passwords starting with `@`, `=`, `+` or `-` are imported unchanged.
++
++  For more information see [MDL-87794](https://tracker.moodle.org/browse/MDL-87794)
+ - `email_to_user()` now emits a hook `before_email_to_user`. This hook allows any subscriber to modify the email contents, add additional headers, or add reasons to block the email. If any block reasons are added, the email is stopped from being sent and the reasons are output.
+ 
+   For more information see [MDL-69724](https://tracker.moodle.org/browse/MDL-69724)
+diff --git a/public/lib/csvlib.class.php b/public/lib/csvlib.class.php
+index 15f972cd350..2e7ce6b4c9d 100644
+--- a/public/lib/csvlib.class.php
++++ b/public/lib/csvlib.class.php
+@@ -175,8 +175,10 @@ class csv_import_reader {
+         $filename = $CFG->tempdir.'/csvimport/'.$this->_type.'/'.$USER->id.'/'.$this->_iid;
+         $filepointer = fopen($filename, "w");
+         // The information has been stored in csv format, as serialized data has issues
+-        // with special characters and line returns.
+-        $storedata = csv_export_writer::print_array($columns, ',', '"', true);
++        // with special characters and line returns. This is an internal temporary file that is never
++        // opened in a spreadsheet application, so formula escaping must not be applied or the imported
++        // data (e.g. passwords starting with '@', '=', '+' or '-') would be altered.
++        $storedata = csv_export_writer::print_array($columns, ',', '"', true, false);
+         fwrite($filepointer, $storedata);
+ 
+         fclose($fp);
+@@ -398,6 +400,10 @@ class csv_export_writer {
+      * @var resource $fp  File pointer for the csv file.
+      */
+     protected $fp;
++    /**
++     * @var bool $escapeformulas  If true, values that could be interpreted as spreadsheet formulas are escaped.
++     */
++    protected bool $escapeformulas = true;
+ 
+     /**
+      * Constructor for the csv export reader
+@@ -420,6 +426,20 @@ class csv_export_writer {
+         $this->bom = $bom;
+     }
+ 
++    /**
++     * Set whether values that could be interpreted as spreadsheet formulas should be escaped.
++     *
++     * Escaping should be kept enabled (the default) for any file that is going to be downloaded and opened
++     * in a spreadsheet application. It should be disabled when the CSV data is only used internally, for
++     * example when storing imported data for later processing, where escaping would alter the data.
++     *
++     * @param bool $escapeformulas
++     * @return void
++     */
++    public function set_escape_formulas(bool $escapeformulas): void {
++        $this->escapeformulas = $escapeformulas;
++    }
++
+     /**
+      * Set the file path to the temporary file.
+      */
+@@ -449,8 +469,10 @@ class csv_export_writer {
+             }
+         }
+         $delimiter = csv_import_reader::get_delimiter($this->delimiter);
+-        foreach ($row as $key => $value) {
+-            $row[$key] = \core\dataformat::escape_spreadsheet_formula($value);
++        if ($this->escapeformulas) {
++            foreach ($row as $key => $value) {
++                $row[$key] = \core\dataformat::escape_spreadsheet_formula($value);
++            }
+         }
+         fputcsv($this->fp, $row, $delimiter, $this->csvenclosure, '\\');
+     }
+@@ -551,10 +573,14 @@ class csv_export_writer {
+      * @param string $delimiter  The name of the delimiter. Supported types(comma, tab, semicolon, colon, cfg)
+      * @param string $enclosure  How speical fields are enclosed.
+      * @param bool $return       If true will return a string with the csv data.
++     * @param bool $escapeformulas If true (default), values that could be interpreted as spreadsheet formulas are
++     *                           escaped. Set to false when the data is not meant to be opened in a spreadsheet.
+      * @return ?string           csv data.
+      */
+-    public static function print_array(array &$records, $delimiter = 'comma', $enclosure = '"', $return = false) {
++    public static function print_array(array &$records, $delimiter = 'comma', $enclosure = '"', $return = false,
++            bool $escapeformulas = true) {
+         $csvdata = new csv_export_writer($delimiter, $enclosure);
++        $csvdata->set_escape_formulas($escapeformulas);
+         foreach ($records as $row) {
+             $csvdata->add_data($row);
+         }
+diff --git a/public/lib/tests/csvclass_test.php b/public/lib/tests/csvclass_test.php
+index fa45977d193..7b59f4f2e12 100644
+--- a/public/lib/tests/csvclass_test.php
++++ b/public/lib/tests/csvclass_test.php
+@@ -150,4 +150,68 @@ final class csvclass_test extends \advanced_testcase {
+         // Five lines including the headings should be imported.
+         $this->assertEquals($contentcount, 5);
+     }
++
++    /**
++     * Test that values which look like spreadsheet formulas are escaped on export, but not altered on import.
++     *
++     * @covers \csv_export_writer::add_data
++     * @covers \csv_export_writer::set_escape_formulas
++     * @covers \csv_export_writer::print_array
++     * @covers \csv_import_reader::load_csv_content
++     */
++    public function test_csv_formula_escaping(): void {
++        $data = [
++            ['username', 'password', 'note'],
++            ['test25@example.com', '@ChangeMe!', '=SUM(A1:A2)'],
++            ['other', '+1234', '-'],
++        ];
++
++        // Export (download) escapes formula-like values by default.
++        $exported = csv_export_writer::print_array($data, 'comma', '"', true);
++        $expected = "username,password,note\n" .
++            "test25@example.com,'@ChangeMe!,'=SUM(A1:A2)\n" .
++            "other,'+1234,-\n";
++        $this->assertSame($expected, $exported);
++
++        // Escaping can be explicitly disabled.
++        $unescaped = csv_export_writer::print_array($data, 'comma', '"', true, false);
++        $expectedunescaped = "username,password,note\n" .
++            "test25@example.com,@ChangeMe!,=SUM(A1:A2)\n" .
++            "other,+1234,-\n";
++        $this->assertSame($expectedunescaped, $unescaped);
++
++        $writer = new csv_export_writer();
++        $writer->set_escape_formulas(false);
++        foreach ($data as $row) {
++            $writer->add_data($row);
++        }
++        $this->assertSame($expectedunescaped, $writer->print_csv_data(true));
++
++        // Import must return the data exactly as it was in the uploaded file.
++        $iid = csv_import_reader::get_new_iid('lib');
++        $csvimport = new csv_import_reader($iid, 'lib');
++        $csvimport->load_csv_content($unescaped, 'utf-8', 'comma');
++        $this->assertNull($csvimport->get_error());
++        $csvimport->init();
++        $dataset = [];
++        $dataset[] = $csvimport->get_columns();
++        while ($record = $csvimport->next()) {
++            $dataset[] = $record;
++        }
++        $csvimport->cleanup();
++        $csvimport->close();
++        $this->assertSame($data, $dataset);
++
++        // Also when using the semicolon delimiter as in the reported scenario.
++        $content = "lastname;firstname;username;email;password\n" .
++            "Testy;Testx;test25@example.com;test25@example.com;@ChangeMe!\n";
++        $iid = csv_import_reader::get_new_iid('lib');
++        $csvimport = new csv_import_reader($iid, 'lib');
++        $csvimport->load_csv_content($content, 'utf-8', 'semicolon');
++        $csvimport->init();
++        $record = $csvimport->next();
++        $csvimport->cleanup();
++        $csvimport->close();
++        $this->assertSame(['Testy', 'Testx', 'test25@example.com', 'test25@example.com', '@ChangeMe!'], $record);
++    }
+ }

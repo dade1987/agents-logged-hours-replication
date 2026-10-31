@@ -1,0 +1,17 @@
+diff --git a/sql/item_strfunc.cc b/sql/item_strfunc.cc
+index 34e47988..3e75e76e 100644
+--- a/sql/item_strfunc.cc
++++ b/sql/item_strfunc.cc
+@@ -572,7 +572,11 @@ String *Item_func_kdf::val_str(String *buf)
+   else
+   {
+     longlong iter= arg_count > 2 ? args[2]->val_int() : 1000;
+-    if (iter <= 0)
++    /*
++      OpenSSL takes the iteration count as a 32-bit int, so values outside
++      [1, INT_MAX32] must be rejected here rather than silently truncated.
++    */
++    if (iter <= 0 || iter > INT_MAX32)
+     {
+       if (!args[2]->null_value)
+         invalid_argument_error(func_name(),

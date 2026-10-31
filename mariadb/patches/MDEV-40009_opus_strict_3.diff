@@ -1,0 +1,84 @@
+diff --git a/mysql-test/suite/sys_vars/r/path_basic.result b/mysql-test/suite/sys_vars/r/path_basic.result
+index ce70edf2..d93f86e6 100644
+--- a/mysql-test/suite/sys_vars/r/path_basic.result
++++ b/mysql-test/suite/sys_vars/r/path_basic.result
+@@ -571,4 +571,18 @@ function f1() returns int return 1;
+ set path 'test';
+ end//
+ drop package pkg;
++#
++# MDEV-40009 SIGSEGV in Sql_path::from_text
++#
++SET NAMES swe7;
++SET PATH '`';
++SET NAMES utf8mb4;
++SELECT @@path;
++@@path
++`é`
++SET PATH 'é, `ü`';
++SELECT @@path;
++@@path
++`é`,`ü`
++SET PATH DEFAULT;
+ SET @@global.path = @start_global_value;
+diff --git a/mysql-test/suite/sys_vars/t/path_basic.test b/mysql-test/suite/sys_vars/t/path_basic.test
+index 83050d78..b1c86c26 100644
+--- a/mysql-test/suite/sys_vars/t/path_basic.test
++++ b/mysql-test/suite/sys_vars/t/path_basic.test
+@@ -420,4 +420,15 @@ end//
+ delimiter ;//
+ drop package pkg;
+ 
++--echo #
++--echo # MDEV-40009 SIGSEGV in Sql_path::from_text
++--echo #
++SET NAMES swe7;
++SET PATH '`';
++SET NAMES utf8mb4;
++SELECT @@path;
++SET PATH 'é, `ü`';
++SELECT @@path;
++SET PATH DEFAULT;
++
+ SET @@global.path = @start_global_value;
+diff --git a/sql/sql_path.cc b/sql/sql_path.cc
+index 982fbffa..dd3e1029 100644
+--- a/sql/sql_path.cc
++++ b/sql/sql_path.cc
+@@ -282,7 +282,9 @@ bool Sql_path::from_text(const system_variables &sv, String *str)
+   free();
+   while (curr < end)
+   {
+-    auto len = cs->charlen(curr, end);
++    int len= cs->charlen(curr, end);
++    if (len <= 0)
++      goto err_bad_val;                         // Broken byte sequence
+ 
+     switch (state)
+     {
+diff --git a/sql/sys_vars.inl b/sql/sys_vars.inl
+index 0f8aa1eb..1d1bae47 100644
+--- a/sql/sys_vars.inl
++++ b/sql/sys_vars.inl
+@@ -3100,8 +3100,20 @@ class Sys_var_path: public sys_var
+   static bool from_item(THD *thd, Sql_path *path, Item *item)
+   {
+     String *value, buffer;
+-    if (!(value= item->val_str_ascii(&buffer)))
++    if (!(value= item->val_str(&buffer)))
+       return true;
++    /*
++      Sql_path::from_text() parses the value as utf8mb3,
++      convert it from the item's character set if needed.
++    */
++    StringBuffer<MAX_FIELD_WIDTH> converted;
++    if (!my_charset_same(value->charset(), system_charset_info))
++    {
++      uint errors;
++      if (converted.copy(value, system_charset_info, &errors))
++        return true;
++      value= &converted;
++    }
+     return path->from_text(thd->variables, value);
+   }
+ 

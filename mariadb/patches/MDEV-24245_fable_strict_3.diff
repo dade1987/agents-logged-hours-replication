@@ -1,0 +1,104 @@
+diff --git a/mysql-test/suite/archive/archive.result b/mysql-test/suite/archive/archive.result
+index fa2b4f7e..af1f84e9 100644
+--- a/mysql-test/suite/archive/archive.result
++++ b/mysql-test/suite/archive/archive.result
+@@ -12906,3 +12906,34 @@ t1	CREATE TEMPORARY TABLE `t1` (
+   `b` varchar(10) DEFAULT NULL
+ ) ENGINE=ARCHIVE DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+ drop table t1;
++#
++# MDEV-24245 REPAIR on ARCHIVE table destroys TEXT data
++#
++CREATE TABLE t1 (a INT, t TEXT, b BLOB) ENGINE=ARCHIVE;
++INSERT INTO t1 VALUES (1,'Testtext','blobdata'),(2,REPEAT('x',300),NULL),
++(3,NULL,REPEAT('y',1000));
++SELECT a, t, LENGTH(t), LENGTH(b), b=REPEAT('y',1000) FROM t1;
++a	t	LENGTH(t)	LENGTH(b)	b=REPEAT('y',1000)
++1	Testtext	8	8	0
++2	xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx	300	NULL	NULL
++3	NULL	NULL	1000	1
++REPAIR TABLE t1;
++Table	Op	Msg_type	Msg_text
++test.t1	repair	status	OK
++SELECT a, t, LENGTH(t), LENGTH(b), b=REPEAT('y',1000) FROM t1;
++a	t	LENGTH(t)	LENGTH(b)	b=REPEAT('y',1000)
++1	Testtext	8	8	0
++2	xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx	300	NULL	NULL
++3	NULL	NULL	1000	1
++OPTIMIZE TABLE t1;
++Table	Op	Msg_type	Msg_text
++test.t1	optimize	status	OK
++SELECT a, t, LENGTH(t), LENGTH(b), b=REPEAT('y',1000) FROM t1;
++a	t	LENGTH(t)	LENGTH(b)	b=REPEAT('y',1000)
++1	Testtext	8	8	0
++2	xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx	300	NULL	NULL
++3	NULL	NULL	1000	1
++CHECK TABLE t1;
++Table	Op	Msg_type	Msg_text
++test.t1	check	status	OK
++DROP TABLE t1;
+diff --git a/mysql-test/suite/archive/archive.test b/mysql-test/suite/archive/archive.test
+index 94a6e0c4..029c7000 100644
+--- a/mysql-test/suite/archive/archive.test
++++ b/mysql-test/suite/archive/archive.test
+@@ -1784,3 +1784,17 @@ select * from t1;
+ show create table t1;
+ drop table t1;
+ 
++
++--echo #
++--echo # MDEV-24245 REPAIR on ARCHIVE table destroys TEXT data
++--echo #
++CREATE TABLE t1 (a INT, t TEXT, b BLOB) ENGINE=ARCHIVE;
++INSERT INTO t1 VALUES (1,'Testtext','blobdata'),(2,REPEAT('x',300),NULL),
++                      (3,NULL,REPEAT('y',1000));
++SELECT a, t, LENGTH(t), LENGTH(b), b=REPEAT('y',1000) FROM t1;
++REPAIR TABLE t1;
++SELECT a, t, LENGTH(t), LENGTH(b), b=REPEAT('y',1000) FROM t1;
++OPTIMIZE TABLE t1;
++SELECT a, t, LENGTH(t), LENGTH(b), b=REPEAT('y',1000) FROM t1;
++CHECK TABLE t1;
++DROP TABLE t1;
+diff --git a/storage/archive/ha_archive.cc b/storage/archive/ha_archive.cc
+index 2d623507..8bf951e8 100644
+--- a/storage/archive/ha_archive.cc
++++ b/storage/archive/ha_archive.cc
+@@ -1578,9 +1578,28 @@ int ha_archive::optimize(THD* thd, HA_CHECK_OPT* check_opt)
+       share->archive_write.auto_increment= 0;
+       MY_BITMAP *org_bitmap= tmp_use_all_columns(table, &table->read_set);
+ 
++      /*
++        get_row() unpacks the row into record_buffer and leaves blob
++        fields pointing into it. pack_row() packs the row into the same
++        record_buffer, which would overwrite the blob data while it is
++        still being read. Use a separate buffer for writing to avoid this.
++      */
++      archive_record_buffer *read_buffer= record_buffer;
++      archive_record_buffer *write_buffer=
++        create_record_buffer(read_buffer->length);
++      if (!write_buffer)
++      {
++        tmp_restore_column_map(&table->read_set, org_bitmap);
++        rc= HA_ERR_OUT_OF_MEM;
++        goto error;
++      }
++
+       while (!(rc= get_row(&archive, table->record[0])))
+       {
++        record_buffer= write_buffer;
+         real_write_row(table->record[0], &writer);
++        write_buffer= record_buffer;
++        record_buffer= read_buffer;
+         /*
+           Long term it should be possible to optimize this so that
+           it is not called on each row.
+@@ -1597,6 +1616,9 @@ int ha_archive::optimize(THD* thd, HA_CHECK_OPT* check_opt)
+         }
+       }
+ 
++      destroy_record_buffer(write_buffer);
++      record_buffer= read_buffer;
++
+       tmp_restore_column_map(&table->read_set, org_bitmap);
+       share->rows_recorded= (ha_rows)writer.rows;
+     }

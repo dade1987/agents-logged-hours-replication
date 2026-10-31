@@ -1,0 +1,143 @@
+diff --git a/public/lib/classes/oauth2/api.php b/public/lib/classes/oauth2/api.php
+index 260ea355305..a23a04e36ae 100644
+--- a/public/lib/classes/oauth2/api.php
++++ b/public/lib/classes/oauth2/api.php
+@@ -56,6 +56,17 @@ class api {
+         throw new moodle_exception('OAuth 2 service type not recognised: ' . $type);
+     }
+ 
++    /**
++     * Record an OAuth 2 change in the config log.
++     *
++     * @param string $name Action name, e.g. issuer_created.
++     * @param string|null $oldvalue Previous value (null if none).
++     * @param string|null $newvalue New value (null if none).
++     */
++    protected static function log_change(string $name, ?string $oldvalue, ?string $newvalue): void {
++        add_to_config_log($name, $oldvalue, $newvalue, 'core_oauth2');
++    }
++
+     /**
+      * Create endpoints for standard issuers, based on the issuer created from submitted data.
+      * @param string $type One of google, facebook, microsoft, nextcloud, imsobv2p1
+@@ -101,6 +112,7 @@ class api {
+                     $issuer->set('baseurl', $baseurl);
+                 }
+                 $issuer->create();
++                self::log_change('issuer_created', null, $issuer->get('name'));
+                 return self::create_endpoints_for_standard_issuer($type, $issuer);
+         }
+ 
+@@ -334,13 +346,16 @@ class api {
+         // Will throw exceptions on validation failures.
+         if ($create) {
+             $issuer->create();
++            self::log_change('issuer_created', null, $issuer->get('name'));
+ 
+             // Perform service discovery.
+             $classname = self::get_service_classname($issuer->get('servicetype'));
+             $classname::discover_endpoints($issuer);
+             self::guess_image($issuer);
+         } else {
++            $oldname = (new issuer($issuer->get('id')))->get('name');
+             $issuer->update();
++            self::log_change('issuer_updated', $oldname, $issuer->get('name'));
+         }
+ 
+         return $issuer;
+@@ -380,6 +395,7 @@ class api {
+ 
+         // Will throw exceptions on validation failures.
+         $endpoint->update();
++        self::log_change('endpoint_updated', null, $endpoint->get('name'));
+ 
+         return $endpoint;
+     }
+@@ -396,6 +412,7 @@ class api {
+ 
+         // Will throw exceptions on validation failures.
+         $endpoint->create();
++        self::log_change('endpoint_created', null, $endpoint->get('name'));
+         return $endpoint;
+     }
+ 
+@@ -411,6 +428,7 @@ class api {
+ 
+         // Will throw exceptions on validation failures.
+         $userfieldmapping->update();
++        self::log_change('user_field_mapping_updated', null, $userfieldmapping->get('externalfield'));
+ 
+         return $userfieldmapping;
+     }
+@@ -427,6 +445,7 @@ class api {
+ 
+         // Will throw exceptions on validation failures.
+         $userfieldmapping->create();
++        self::log_change('user_field_mapping_created', null, $userfieldmapping->get('externalfield'));
+         return $userfieldmapping;
+     }
+ 
+@@ -513,7 +532,9 @@ class api {
+         $issuer = new issuer($id);
+ 
+         $issuer->set('enabled', 0);
+-        return $issuer->update();
++        $result = $issuer->update();
++        self::log_change('issuer_disabled', $issuer->get('name'), null);
++        return $result;
+     }
+ 
+ 
+@@ -530,7 +551,9 @@ class api {
+         $issuer = new issuer($id);
+ 
+         $issuer->set('enabled', 1);
+-        return $issuer->update();
++        $result = $issuer->update();
++        self::log_change('issuer_enabled', null, $issuer->get('name'));
++        return $result;
+     }
+ 
+     /**
+@@ -556,8 +579,12 @@ class api {
+             }
+         }
+ 
++        $name = $issuer->get('name');
++
+         // Will throw exceptions on validation failures.
+-        return $issuer->delete();
++        $result = $issuer->delete();
++        self::log_change('issuer_deleted', $name, null);
++        return $result;
+     }
+ 
+     /**
+@@ -572,8 +599,12 @@ class api {
+         require_capability('moodle/site:config', context_system::instance());
+         $endpoint = new endpoint($id);
+ 
++        $name = $endpoint->get('name');
++
+         // Will throw exceptions on validation failures.
+-        return $endpoint->delete();
++        $result = $endpoint->delete();
++        self::log_change('endpoint_deleted', $name, null);
++        return $result;
+     }
+ 
+     /**
+@@ -588,8 +619,12 @@ class api {
+         require_capability('moodle/site:config', context_system::instance());
+         $userfieldmapping = new user_field_mapping($id);
+ 
++        $field = $userfieldmapping->get('externalfield');
++
+         // Will throw exceptions on validation failures.
+-        return $userfieldmapping->delete();
++        $result = $userfieldmapping->delete();
++        self::log_change('user_field_mapping_deleted', $field, null);
++        return $result;
+     }
+ 
+     /**

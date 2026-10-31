@@ -1,0 +1,44 @@
+diff --git a/sql/opt_range.cc b/sql/opt_range.cc
+index c8d1d8da..2f21158e 100644
+--- a/sql/opt_range.cc
++++ b/sql/opt_range.cc
+@@ -14826,6 +14826,13 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
+   SEL_ARG *best_index_tree= NULL;
+   ha_rows best_quick_prefix_records= 0;
+   uint best_param_idx= 0;
++  /*
++    The MIN/MAX argument key part of the best index. min_max_arg_part is
++    recomputed for every candidate index, so it must not be used to build
++    the plan after the loop: it may refer to a different index (possibly
++    with a different sort order) than index_info.
++  */
++  KEY_PART_INFO *best_min_max_arg_part= NULL;
+ 
+   const uint pk= param->table->s->primary_key;
+   uint max_key_part;  
+@@ -14842,6 +14849,8 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
+ 
+     Json_writer_object trace_idx(thd);
+     trace_idx.add("index", cur_index_info->name);
++    /* Reset the MIN/MAX argument key part; it is set below for this index. */
++    min_max_arg_part= NULL;
+ 
+     KEY_PART_INFO *cur_part;
+     KEY_PART_INFO *end_part; /* Last part for loops. */
+@@ -15209,6 +15218,7 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
+       best_index_tree= cur_index_tree;
+       best_quick_prefix_records= cur_quick_prefix_records;
+       best_param_idx= cur_param_idx;
++      best_min_max_arg_part= min_max_arg_part;
+       group_key_parts= cur_group_key_parts;
+       group_prefix_len= cur_group_prefix_len;
+       key_infix_len= cur_key_infix_len;
+@@ -15259,7 +15269,7 @@ get_best_group_min_max(PARAM *param, SEL_TREE *tree, double read_time)
+   /* The query passes all tests, so construct a new TRP object. */
+   read_plan= new (param->mem_root)
+                  TRP_GROUP_MIN_MAX(have_min, have_max, is_agg_distinct,
+-                                   min_max_arg_part,
++                                   best_min_max_arg_part,
+                                    group_prefix_len, used_key_parts,
+                                    group_key_parts, index_info, index,
+                                    key_infix_len,

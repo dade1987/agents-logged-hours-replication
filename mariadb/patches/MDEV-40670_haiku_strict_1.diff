@@ -1,0 +1,39 @@
+diff --git a/plugin/qc_info/qc_info.cc b/plugin/qc_info/qc_info.cc
+index a46e2d9f..9c991931 100644
+--- a/plugin/qc_info/qc_info.cc
++++ b/plugin/qc_info/qc_info.cc
+@@ -230,11 +230,29 @@ static int qc_info_fill_table(THD *thd, TABLE_LIST *tables,
+     /* The database against which the statement is executed is part of the
+        query cache query key
+      */
+-    compile_time_assert(QUERY_CACHE_DB_LENGTH_SIZE == 2); 
+-    db= key + statement_text_length + 1 + QUERY_CACHE_DB_LENGTH_SIZE;
+-    db_length= uint2korr(db - QUERY_CACHE_DB_LENGTH_SIZE);
+-
+-    table->field[COLUMN_STATEMENT_SCHEMA]->store(db, db_length, scs);
++    compile_time_assert(QUERY_CACHE_DB_LENGTH_SIZE == 2);
++    {
++      /*
++        The query text may itself contain \0 bytes, so the key cannot be
++        parsed unambiguously. Only trust the stored db name length if the
++        db name it describes lies entirely between the db length field
++        and the flags at the end of the key.
++      */
++      size_t db_offset= statement_text_length + 1 + QUERY_CACHE_DB_LENGTH_SIZE;
++
++      if (unlikely(db_offset > flags_length))
++      {
++        table->field[COLUMN_STATEMENT_SCHEMA]->
++          store(STRING_WITH_LEN(unknown), scs);
++      }
++      else
++      {
++        db= key + db_offset;
++        db_length= uint2korr(db - QUERY_CACHE_DB_LENGTH_SIZE);
++        db_length= MY_MIN(db_length, flags_length - db_offset);
++        table->field[COLUMN_STATEMENT_SCHEMA]->store(db, db_length, scs);
++      }
++    }
+ 
+     /* If we have result blocks, process them */
+     first_result_block= query_cache_query->result();

@@ -1,0 +1,37 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot run Moodle's test suite. You may run `php -l <file>` and read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-89921: Linear navigation footer is shown on error pages raised inside an activity
+
+When linear navigation is enabled, an error raised while a user is inside an activity is rendered with the "Previous / Next" sticky footer, even for activities that have deliberately turned it off.
+
+The footer is added by a hook that only checks whether the page has a course module ({{linearnavigationsettings::show_navigation_footer()}} returns early only if {{$PAGE->cm}} is null). Error pages are never given the chance to opt out, so the footer appears and invites the user to navigate away from the error they are meant to read.
+
+The quiz is a good example. MDL-88633 turned the footer off for quiz attempts with {{$PAGE->set_show_navigation_footer(false)}} in {{quiz_attempt::setup_attempt_page()}} ({{mod/quiz/classes/quiz_attempt.php:1352}}), but {{mod/quiz/processattempt.php}} throws its errors before any of that runs. It only calls {{require_login($course, false, $cm)}}, which is enough to set {{$PAGE->cm}} and bring the footer back.
+
+This is not a quiz problem. Any error page raised with a course module in scope behaves the same way.
+
+*Steps to reproduce*
+
+# Enable linear navigation for the course format (Topics or Weeks).
+# Add a quiz with at least two pages of questions and let a student start an attempt.
+# Make the quiz throw the "You have entered data outside the normal sequence" error, for example by opening the attempt in two browser tabs and submitting the same page from both.
+# Look at the error page.
+
+*Expected result*
+
+No Previous / Next footer. The error page should only offer the way back into the quiz.
+
+*Actual result*
+
+The linear navigation sticky footer is shown at the bottom of the error page:
+
+!Quiz-student-Captura de pantalla 2026-09-22 152150-20260922-132200.jpg|width=938,alt="Quiz-student-Captura de pantalla 2026-09-22 152150-20260922-132200.jpg"!
+
+Found during 5.3 QA testing of [https://moodle.atlassian.net/browse/MDLQA-22031|https://moodle.atlassian.net/browse/MDLQA-22031|smart-link]

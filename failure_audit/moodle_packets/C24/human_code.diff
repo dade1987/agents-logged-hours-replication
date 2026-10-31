@@ -1,0 +1,69 @@
+diff --git a/.upgradenotes/MDL-89434-2026081316544928.yml b/.upgradenotes/MDL-89434-2026081316544928.yml
+new file mode 100644
+index 00000000000..953e823625e
+--- /dev/null
++++ b/.upgradenotes/MDL-89434-2026081316544928.yml
+@@ -0,0 +1,9 @@
++issueNumber: MDL-89434
++notes:
++  core_form:
++    - message: >-
++        The `duration` form element type now more strictly enforces units as
++        defined by the caller, to avoid undefined behaviour during submission.
++        An exception will be thrown where `defaultunit` is not part of the
++        element `units` array
++      type: changed
+diff --git a/public/lib/form/duration.php b/public/lib/form/duration.php
+index f21cec34eb7..9ffe629d6ff 100644
+--- a/public/lib/form/duration.php
++++ b/public/lib/form/duration.php
+@@ -108,6 +108,13 @@ class MoodleQuickForm_duration extends MoodleQuickForm_group {
+             }
+             krsort($displayunits, SORT_NUMERIC);
+             $this->_options['units'] = $displayunits;
++
++            // The default unit (either supplied by the caller, or the class default) must be one
++            // of the restricted units, otherwise the element cannot render/submit correctly.
++            if (!array_key_exists($this->_options['defaultunit'], $displayunits)) {
++                throw new coding_exception($this->_options['defaultunit'] .
++                    ' is not one of the units allowed for this MoodleQuickForm_duration element.');
++            }
+         }
+     }
+ 
+@@ -299,7 +306,10 @@ class MoodleQuickForm_duration extends MoodleQuickForm_group {
+         if ($this->_options['optional'] && empty($valuearray['enabled'])) {
+             return $this->_prepareValue(0, $assoc);
+         }
+-        return $this->_prepareValue(
+-                (int) round($valuearray['number'] * $valuearray['timeunit']), $assoc);
++
++        // Missing number is treated as 0, missing timeunit falls back to the configured default unit.
++        $number = $valuearray['number'] ?? 0;
++        $timeunit = $valuearray['timeunit'] ?? $this->_options['defaultunit'];
++        return $this->_prepareValue((int) round($number * $timeunit), $assoc);
+     }
+ }
+diff --git a/public/repository/recent/lib.php b/public/repository/recent/lib.php
+index c43cf780ca6..d3786c241a5 100644
+--- a/public/repository/recent/lib.php
++++ b/public/repository/recent/lib.php
+@@ -198,8 +198,16 @@ class repository_recent extends repository {
+         $mform->setType('recentfilesnumber', PARAM_INT);
+         $mform->setDefault('recentfilesnumber', $number);
+ 
+-        $mform->addElement('duration', 'recentfilestimelimit',
+-            get_string('timelimit', 'repository_recent'), ['units' => [DAYSECS, WEEKSECS], 'optional' => true]);
++        $mform->addElement(
++            'duration',
++            'recentfilestimelimit',
++            get_string('timelimit', 'repository_recent'),
++            [
++                'units' => [DAYSECS, WEEKSECS],
++                'defaultunit' => DAYSECS,
++                'optional' => true,
++            ],
++        );
+         $mform->addHelpButton('recentfilestimelimit', 'timelimit', 'repository_recent');
+         $mform->setDefault('recentfilestimelimit', DEFAULT_RECENT_FILES_TIME_LIMIT);
+     }

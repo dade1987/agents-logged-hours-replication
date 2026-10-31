@@ -1,0 +1,55 @@
+diff --git a/mysql-test/main/func_kdf.result b/mysql-test/main/func_kdf.result
+index e334125c..fd09393d 100644
+--- a/mysql-test/main/func_kdf.result
++++ b/mysql-test/main/func_kdf.result
+@@ -177,6 +177,16 @@ Warning	3047	Invalid argument error: '999' in function kdf.
+ SELECT KDF('secret','salt',1000,'pbkdf2_hmac') IS NOT NULL;
+ KDF('secret','salt',1000,'pbkdf2_hmac') IS NOT NULL
+ 1
++#
++# MDEV-41094: iteration counts above INT_MAX must not be silently
++# truncated to a 32-bit alias
++#
++SELECT KDF('secret','salt',4294968296,'pbkdf2_hmac') IS NULL;
++KDF('secret','salt',4294968296,'pbkdf2_hmac') IS NULL
++1
++SELECT KDF('secret','salt',2147483648,'pbkdf2_hmac') IS NULL;
++KDF('secret','salt',2147483648,'pbkdf2_hmac') IS NULL
++1
+ SELECT KDF('secret','salt') IS NOT NULL;
+ KDF('secret','salt') IS NOT NULL
+ 1
+diff --git a/mysql-test/main/func_kdf.test b/mysql-test/main/func_kdf.test
+index 279323ed..0ff446d4 100644
+--- a/mysql-test/main/func_kdf.test
++++ b/mysql-test/main/func_kdf.test
+@@ -70,6 +70,15 @@ select kdf();
+ SELECT KDF('','',1000,256);
+ SELECT KDF('secret','salt',1000,999);
+ SELECT KDF('secret','salt',1000,'pbkdf2_hmac') IS NOT NULL;
++
++--echo #
++--echo # MDEV-41094: iteration counts above INT_MAX must not be silently
++--echo # truncated to a 32-bit alias
++--echo #
++--disable_warnings
++SELECT KDF('secret','salt',4294968296,'pbkdf2_hmac') IS NULL;
++SELECT KDF('secret','salt',2147483648,'pbkdf2_hmac') IS NULL;
++--enable_warnings
+ SELECT KDF('secret','salt') IS NOT NULL;
+ 
+ --echo #
+diff --git a/sql/item_strfunc.cc b/sql/item_strfunc.cc
+index 34e47988..917fc516 100644
+--- a/sql/item_strfunc.cc
++++ b/sql/item_strfunc.cc
+@@ -572,7 +572,8 @@ String *Item_func_kdf::val_str(String *buf)
+   else
+   {
+     longlong iter= arg_count > 2 ? args[2]->val_int() : 1000;
+-    if (iter <= 0)
++    /* PKCS5_PBKDF2_HMAC() takes an int iteration count */
++    if (iter <= 0 || iter > INT_MAX32)
+     {
+       if (!args[2]->null_value)
+         invalid_argument_error(func_name(),

@@ -1,0 +1,83 @@
+diff --git a/mysql-test/suite/innodb/r/import_bugs.result b/mysql-test/suite/innodb/r/import_bugs.result
+index 20e70f03..153f30fd 100644
+--- a/mysql-test/suite/innodb/r/import_bugs.result
++++ b/mysql-test/suite/innodb/r/import_bugs.result
+@@ -39,6 +39,9 @@ id INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,
+ PRIMARY KEY (id)
+ ) ENGINE=INNODB;
+ CREATE TABLE t2 LIKE t1;
++connect  mvcc,localhost,root;
++START TRANSACTION WITH CONSISTENT SNAPSHOT;
++connection default;
+ ALTER TABLE t2 DISCARD TABLESPACE;
+ INSERT INTO t1() VALUES();
+ INSERT INTO t1() VALUES();
+@@ -64,6 +67,12 @@ id
+ 3
+ 4
+ 5
++# MDEV-41669 ALTER TABLE...IMPORT TABLESPACE may break MVCC
++connection mvcc;
++SELECT * FROM t2;
++ERROR HY000: Table definition has changed, please retry transaction
++disconnect mvcc;
++connection default;
+ DROP TABLE t2;
+ #
+ # MDEV-34181  Instant table aborts after discard tablespace
+diff --git a/mysql-test/suite/innodb/t/import_bugs.test b/mysql-test/suite/innodb/t/import_bugs.test
+index 1b7edcf8..5382145f 100644
+--- a/mysql-test/suite/innodb/t/import_bugs.test
++++ b/mysql-test/suite/innodb/t/import_bugs.test
+@@ -53,6 +53,10 @@ CREATE TABLE t1(
+ 
+ CREATE TABLE t2 LIKE t1;
+ 
++--connect mvcc,localhost,root
++START TRANSACTION WITH CONSISTENT SNAPSHOT;
++--connection default
++
+ ALTER TABLE t2 DISCARD TABLESPACE;
+ 
+ INSERT INTO t1() VALUES();
+@@ -80,6 +84,13 @@ INSERT INTO t2() VALUES();
+ INSERT INTO t2() VALUES();
+ 
+ SELECT * FROM t2 ORDER BY id;
++
++--echo # MDEV-41669 ALTER TABLE...IMPORT TABLESPACE may break MVCC
++--connection mvcc
++--error ER_TABLE_DEF_CHANGED
++SELECT * FROM t2;
++--disconnect mvcc
++--connection default
+ DROP TABLE t2;
+ 
+ --echo #
+diff --git a/storage/innobase/row/row0import.cc b/storage/innobase/row/row0import.cc
+index c589b8f2..5a246c0a 100644
+--- a/storage/innobase/row/row0import.cc
++++ b/storage/innobase/row/row0import.cc
+@@ -3746,6 +3746,22 @@ row_import_update_index_root(trx_t* trx, dict_table_t* table, bool reset)
+ 
+ 	table->def_trx_id = trx->id;
+ 
++	if (!reset) {
++		/* The imported data does not correspond to any read view
++		that was created before the IMPORT. The DB_TRX_ID of the
++		imported records was reset to 0, so that they would be
++		visible to any read view. Mark the indexes as created by
++		this transaction, so that row_merge_is_index_usable()
++		will refuse to use them in a read view that was created
++		before this transaction started, and the SELECT will
++		fail with ER_TABLE_DEF_CHANGED instead of returning
++		data that does not correspond to the snapshot. */
++		for (dict_index_t* i = dict_table_get_first_index(table);
++		     i != 0; i = dict_table_get_next_index(i)) {
++			i->trx_id = trx->id;
++		}
++	}
++
+ 	for (index = dict_table_get_first_index(table);
+ 	     index != 0;
+ 	     index = dict_table_get_next_index(index)) {

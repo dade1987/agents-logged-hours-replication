@@ -1,0 +1,367 @@
+diff --git a/public/lib/tests/classes/output/react_component_renderable_fixture.php b/public/lib/tests/classes/output/react_component_renderable_fixture.php
+new file mode 100644
+index 00000000000..944e6591763
+--- /dev/null
++++ b/public/lib/tests/classes/output/react_component_renderable_fixture.php
+@@ -0,0 +1,41 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\tests\output;
++
++/**
++ * Fixture renderable implementing react_component_renderable, for use in renderer_base_test.
++ *
++ * @package   core
++ * @category  test
++ * @copyright 2026 Andrew Lyons <andrew@nicols.co.uk>
++ * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++final class react_component_renderable_fixture implements \core\output\react_component_renderable, \core\output\renderable {
++    #[\Override]
++    public function get_react_component_name(): string {
++        return 'core/example';
++    }
++
++    #[\Override]
++    public function get_react_component_props(
++        \core\output\renderer_base $renderer,
++    ): \stdClass {
++        $props = new \stdClass();
++        $props->foo = 'bar';
++        return $props;
++    }
++}
+diff --git a/public/lib/tests/output/html_writer_test.php b/public/lib/tests/output/html_writer_test.php
+index e44b31d355e..30a11a74915 100644
+--- a/public/lib/tests/output/html_writer_test.php
++++ b/public/lib/tests/output/html_writer_test.php
+@@ -28,20 +28,16 @@ use core_table\output\html_table_row;
+  * @package core
+  * @copyright 2010 Tim Hunt
+  * @license http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+- * @covers \core\output\html_writer
+- * @coversDefaultClass \\core\output\html_writer
+  */
++#[\PHPUnit\Framework\Attributes\CoversClass(html_writer::class)]
++#[\PHPUnit\Framework\Attributes\CoversClass(html_table::class)]
++#[\PHPUnit\Framework\Attributes\CoversClass(html_table_cell::class)]
++#[\PHPUnit\Framework\Attributes\CoversClass(html_table_row::class)]
+ final class html_writer_test extends \basic_testcase {
+-    /**
+-     * @covers ::start_tag
+-     */
+     public function test_start_tag(): void {
+         $this->assertSame('<div>', html_writer::start_tag('div'));
+     }
+ 
+-    /**
+-     * @covers ::start_tag
+-     */
+     public function test_start_tag_with_attr(): void {
+         $this->assertSame(
+             '<div class="frog">',
+@@ -49,9 +45,6 @@ final class html_writer_test extends \basic_testcase {
+         );
+     }
+ 
+-    /**
+-     * @covers ::start_tag
+-     */
+     public function test_start_tag_with_attrs(): void {
+         $this->assertSame(
+             '<div class="frog" id="mydiv">',
+@@ -59,23 +52,14 @@ final class html_writer_test extends \basic_testcase {
+         );
+     }
+ 
+-    /**
+-     * @covers ::end_tag
+-     */
+     public function test_end_tag(): void {
+         $this->assertSame('</div>', html_writer::end_tag('div'));
+     }
+ 
+-    /**
+-     * @covers ::empty_Tag
+-     */
+     public function test_empty_tag(): void {
+         $this->assertSame('<br />', html_writer::empty_tag('br'));
+     }
+ 
+-    /**
+-     * @covers ::empty_Tag
+-     */
+     public function test_empty_tag_with_attrs(): void {
+         $this->assertSame(
+             '<input type="submit" value="frog" />',
+@@ -83,9 +67,6 @@ final class html_writer_test extends \basic_testcase {
+         );
+     }
+ 
+-    /**
+-     * @covers ::nonempty_tag
+-     */
+     public function test_nonempty_tag_with_content(): void {
+         $this->assertSame(
+             '<div>Hello world!</div>',
+@@ -93,9 +74,6 @@ final class html_writer_test extends \basic_testcase {
+         );
+     }
+ 
+-    /**
+-     * @covers ::nonempty_tag
+-     */
+     public function test_nonempty_tag_empty(): void {
+         $this->assertSame(
+             '',
+@@ -103,9 +81,6 @@ final class html_writer_test extends \basic_testcase {
+         );
+     }
+ 
+-    /**
+-     * @covers ::nonempty_tag
+-     */
+     public function test_nonempty_tag_null(): void {
+         $this->assertSame(
+             '',
+@@ -113,9 +88,6 @@ final class html_writer_test extends \basic_testcase {
+         );
+     }
+ 
+-    /**
+-     * @covers ::nonempty_tag
+-     */
+     public function test_nonempty_tag_zero(): void {
+         $this->assertSame(
+             '<div class="score">0</div>',
+@@ -123,9 +95,6 @@ final class html_writer_test extends \basic_testcase {
+         );
+     }
+ 
+-    /**
+-     * @covers ::nonempty_tag
+-     */
+     public function test_nonempty_tag_zero_string(): void {
+         $this->assertSame(
+             '<div class="score">0</div>',
+@@ -133,9 +102,6 @@ final class html_writer_test extends \basic_testcase {
+         );
+     }
+ 
+-    /**
+-     * @covers ::div
+-     */
+     public function test_div(): void {
+         // All options.
+         $this->assertSame(
+@@ -164,9 +130,62 @@ final class html_writer_test extends \basic_testcase {
+         );
+     }
+ 
+-    /**
+-     * @covers ::start_div
+-     */
++    public function test_react_component_with_array_props(): void {
++        $this->assertSame(
++            '<div '
++                . 'data-react-component="core/component" '
++                . 'data-react-props="{&quot;foo&quot;:&quot;bar&quot;,&quot;baz&quot;:1}"></div>',
++            html_writer::react_component('core/component', ['foo' => 'bar', 'baz' => 1]),
++        );
++    }
++
++    public function test_react_component_with_stdclass_props(): void {
++        $props = new \stdClass();
++        $props->name = 'Kermit';
++
++        $this->assertSame(
++            '<div data-react-component="core/component" data-react-props="{&quot;name&quot;:&quot;Kermit&quot;}"></div>',
++            html_writer::react_component('core/component', $props),
++        );
++    }
++
++    public function test_react_component_with_string_props(): void {
++        $this->assertSame(
++            '<div data-react-component="core/component" data-react-props="&quot;a raw string&quot;"></div>',
++            html_writer::react_component('core/component', 'a raw string'),
++        );
++    }
++
++    public function test_react_component_with_jsonserializable_props(): void {
++        $props = new class implements \JsonSerializable {
++            #[\Override]
++            public function jsonSerialize(): array {
++                return ['serialized' => true];
++            }
++        };
++
++        $this->assertSame(
++            '<div data-react-component="core/component" data-react-props="{&quot;serialized&quot;:true}"></div>',
++            html_writer::react_component('core/component', $props),
++        );
++    }
++
++    public function test_react_component_props_are_not_slash_escaped(): void {
++        $this->assertSame(
++            '<div '
++                . 'data-react-component="core/component" '
++                . 'data-react-props="{&quot;url&quot;:&quot;https://example.com/path&quot;}"></div>',
++            html_writer::react_component('core/component', ['url' => 'https://example.com/path']),
++        );
++    }
++
++    public function test_react_component_props_are_not_unicode_escaped(): void {
++        $this->assertSame(
++            '<div data-react-component="core/component" data-react-props="{&quot;name&quot;:&quot;Björk&quot;}"></div>',
++            html_writer::react_component('core/component', ['name' => 'Björk']),
++        );
++    }
++
+     public function test_start_div(): void {
+         // All options.
+         $this->assertSame(
+@@ -195,16 +214,10 @@ final class html_writer_test extends \basic_testcase {
+         );
+     }
+ 
+-    /**
+-     * @covers ::end_div
+-     */
+     public function test_end_div(): void {
+         $this->assertSame('</div>', html_writer::end_div());
+     }
+ 
+-    /**
+-     * @covers ::span
+-     */
+     public function test_span(): void {
+         // All options.
+         $this->assertSame(
+@@ -233,9 +246,6 @@ final class html_writer_test extends \basic_testcase {
+         );
+     }
+ 
+-    /**
+-     * @covers ::start_span
+-     */
+     public function test_start_span(): void {
+         // All options.
+         $this->assertSame(
+@@ -264,19 +274,10 @@ final class html_writer_test extends \basic_testcase {
+         );
+     }
+ 
+-    /**
+-     * @covers ::end_span
+-     */
+     public function test_end_span(): void {
+         $this->assertSame('</span>', html_writer::end_span());
+     }
+ 
+-    /**
+-     * @covers ::table
+-     * @covers \core_table\output\html_table_row
+-     * @covers \core_table\output\html_table_cell
+-     * @covers \core_table\output\html_table
+-     */
+     public function test_table(): void {
+         $row = new html_table_row();
+ 
+@@ -326,9 +327,6 @@ EOF;
+         $this->assertSame($expected, $output);
+     }
+ 
+-    /**
+-     * @covers ::table
+-     */
+     public function test_table_hidden_caption(): void {
+ 
+         $table = new html_table();
+diff --git a/public/lib/tests/output/renderer_base_test.php b/public/lib/tests/output/renderer_base_test.php
+new file mode 100644
+index 00000000000..472e6ec3963
+--- /dev/null
++++ b/public/lib/tests/output/renderer_base_test.php
+@@ -0,0 +1,68 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++/**
++ * Unit tests for the renderer_base class.
++ *
++ * @package    core
++ * @category   test
++ * @copyright  2026 Andrew Lyons <andrew@nicols.co.uk>
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++
++namespace core\output;
++
++use core\tests\output\react_component_renderable_fixture;
++
++/**
++ * Unit tests for the renderer_base class.
++ */
++#[\PHPUnit\Framework\Attributes\CoversMethod(renderer_base::class, 'render')]
++final class renderer_base_test extends \advanced_testcase {
++    /**
++     * Test that a react_component_renderable is rendered as a React component placeholder.
++     */
++    public function test_render_react_component_renderable(): void {
++        $page = new \moodle_page();
++        $page->set_url('/user/profile.php');
++        $page->set_context(\context_system::instance());
++        $renderer = $page->get_renderer('core');
++
++        $widget = new react_component_renderable_fixture();
++
++        $this->assertSame(
++            html_writer::react_component('@moodle/lms/core/example', (object) ['foo' => 'bar']),
++            $renderer->render($widget),
++        );
++    }
++
++    /**
++     * Test that an explicit render_<classname> method on the renderer takes priority over
++     * the react_component_renderable handling.
++     */
++    public function test_render_react_component_renderable_render_method_priority(): void {
++        $widget = new react_component_renderable_fixture();
++
++        $renderer = new class (new \moodle_page(), 'general') extends renderer_base {
++            // phpcs:ignore moodle.NamingConventions.ValidFunctionName.LowercaseMethod, moodle.Commenting.MissingDocblock.MissingTestcaseMethodDescription
++            public function render_react_component_renderable_fixture(renderable $widget): string {
++                return 'rendered by explicit method';
++            }
++        };
++
++        $this->assertSame('rendered by explicit method', $renderer->render($widget));
++    }
++}

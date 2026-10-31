@@ -1,0 +1,18 @@
+diff --git a/storage/innobase/fts/fts0que.cc b/storage/innobase/fts/fts0que.cc
+index b8f22076..01fd61bc 100644
+--- a/storage/innobase/fts/fts0que.cc
++++ b/storage/innobase/fts/fts0que.cc
+@@ -2893,6 +2893,13 @@ fts_query_phrase_search(
+ 	/* Don't need it anymore. */
+ 	query->matched = NULL;
+ 
++	/* The FTS_PHRASE/FTS_PROXIMITY mode applies only to this phrase.
++	Clear it so that subsequent terms in the same query (e.g. a
++	wildcard term following the phrase) are processed normally,
++	in particular fts_query_cache() must perform the wildcard
++	search on the in-memory index cache. */
++	query->flags = 0;
++
+ 	return(query->error);
+ }
+ 

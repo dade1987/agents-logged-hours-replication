@@ -1,0 +1,30 @@
+diff --git a/sql/sql_base.cc b/sql/sql_base.cc
+index 379337af..876e202a 100644
+--- a/sql/sql_base.cc
++++ b/sql/sql_base.cc
+@@ -5006,14 +5006,19 @@ bool open_and_lock_internal_tables(TABLE *table, bool lock_table)
+                     MYSQL_LOCK_USE_MALLOC))
+       goto err;
+ 
+-    if (!(new_lock= mysql_lock_merge(save_lock, thd->lock)))
++    if (save_lock && thd->lock)
+     {
+-      thd->lock= save_lock;
+-      mysql_unlock_tables(thd, save_lock, 1);
+-      /* We don't have to close tables as caller will do that */
+-      goto err;
++      if (!(new_lock= mysql_lock_merge(save_lock, thd->lock)))
++      {
++        thd->lock= save_lock;
++        mysql_unlock_tables(thd, save_lock, 1);
++        /* We don't have to close tables as caller will do that */
++        goto err;
++      }
++      thd->lock= new_lock;
+     }
+-    thd->lock= new_lock;
++    else if (!thd->lock)
++      thd->lock= save_lock;
+   }
+   DBUG_RETURN(0);
+ 

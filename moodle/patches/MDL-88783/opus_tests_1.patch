@@ -1,0 +1,28 @@
+diff --git a/public/enrol/tests/enrollib_test.php b/public/enrol/tests/enrollib_test.php
+index ce998fc46ab..81a97fa4f03 100644
+--- a/public/enrol/tests/enrollib_test.php
++++ b/public/enrol/tests/enrollib_test.php
+@@ -1875,5 +1875,10 @@ final class enrollib_test extends advanced_testcase {
+         $this->assertNotEmpty($messages);
+         $message = reset($messages);
+         $this->assertStringContainsString('Hi ' . $student->firstname, quoted_printable_decode($message->fullmessage));
++
++        // The context URL should point to the enrolled course, not the user profile.
++        $expectedurl = new \moodle_url('/course/view.php', ['id' => $course->id]);
++        $this->assertEquals($expectedurl->out(), $message->contexturl);
++        $this->assertEquals('Course 1', $message->contexturlname);
+     }
+ }
+diff --git a/public/lib/enrollib.php b/public/lib/enrollib.php
+index aab8ca72d85..9f494db95aa 100644
+--- a/public/lib/enrollib.php
++++ b/public/lib/enrollib.php
+@@ -3722,7 +3722,7 @@ abstract class enrol_plugin {
+         $message->fullmessageformat = FORMAT_MARKDOWN;
+         $message->fullmessagehtml = $messagehtml;
+         $message->notification = 1;
+-        $message->contexturl = $a->profileurl;
++        $message->contexturl = $a->courselink;
+         $message->contexturlname = $a->coursename;
+ 
+         message_send($message);

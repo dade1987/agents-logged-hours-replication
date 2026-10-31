@@ -1,0 +1,173 @@
+diff --git a/public/lib/form/duration.php b/public/lib/form/duration.php
+index f21cec34eb7..6553e404d32 100644
+--- a/public/lib/form/duration.php
++++ b/public/lib/form/duration.php
+@@ -108,6 +108,13 @@ class MoodleQuickForm_duration extends MoodleQuickForm_group {
+             }
+             krsort($displayunits, SORT_NUMERIC);
+             $this->_options['units'] = $displayunits;
++
++            // The default unit must be one of the units offered.
++            if (!array_key_exists($this->_options['defaultunit'], $displayunits)) {
++                throw new coding_exception($this->_options['defaultunit'] .
++                        ' is not one of the units available in this MoodleQuickForm_duration. ' .
++                        'When restricting the units, the defaultunit option must be one of them.');
++            }
+         }
+     }
+ 
+@@ -285,8 +292,9 @@ class MoodleQuickForm_duration extends MoodleQuickForm_group {
+     function exportValue(&$submitValues, $assoc = false) {
+         // Get the values from all the child elements.
+         $valuearray = [];
++        $groupvalues = $submitValues[$this->getName()] ?? [];
+         foreach ($this->_elements as $element) {
+-            $thisexport = $element->exportValue($submitValues[$this->getName()], true);
++            $thisexport = $element->exportValue($groupvalues, true);
+             if (!is_null($thisexport)) {
+                 $valuearray += $thisexport;
+             }
+@@ -299,7 +307,14 @@ class MoodleQuickForm_duration extends MoodleQuickForm_group {
+         if ($this->_options['optional'] && empty($valuearray['enabled'])) {
+             return $this->_prepareValue(0, $assoc);
+         }
++        // Child controls that are disabled (e.g. by disabledIf/hideIf) are not submitted by the
++        // browser, so fall back to sensible values when they are missing.
++        $number = $valuearray['number'] ?? 0;
++        $timeunit = $valuearray['timeunit'] ?? $this->_options['defaultunit'];
++        if ($number === '' || $number === null) {
++            $number = 0;
++        }
+         return $this->_prepareValue(
+-                (int) round($valuearray['number'] * $valuearray['timeunit']), $assoc);
++                (int) round($number * $timeunit), $assoc);
+     }
+ }
+diff --git a/public/lib/form/tests/duration_test.php b/public/lib/form/tests/duration_test.php
+index d225e45425b..a2d8be50402 100644
+--- a/public/lib/form/tests/duration_test.php
++++ b/public/lib/form/tests/duration_test.php
+@@ -81,6 +81,42 @@ final class duration_test extends \basic_testcase {
+         $this->assertStringNotContainsString('value="3600"', $html);
+     }
+ 
++    /**
++     * Test constructor with limited units and an explicit default unit from that set.
++     */
++    public function test_constructor_limited_units_with_default_unit(): void {
++        $mform = $this->get_test_form();
++        $element = $mform->addElement('duration', 'testel', null,
++                ['units' => [DAYSECS, WEEKSECS], 'defaultunit' => WEEKSECS, 'optional' => false]);
++        $this->assertEquals([0, WEEKSECS], $element->seconds_to_unit(0));
++        $html = $mform->toHtml();
++        $html = preg_replace('~ +>~', '>', $html); // Clean HTML to avoid spurious errors.
++        $this->assertStringContainsString('<option value="604800" selected>weeks</option>', $html);
++        $this->assertStringContainsString('<option value="86400">days</option>', $html);
++        $this->assertStringNotContainsString('value="60"', $html);
++    }
++
++    /**
++     * Test constructor rejects a default unit that is not in the restricted units set.
++     *
++     * Here the class default unit (minutes) is not in the units offered, so this is a misconfiguration.
++     */
++    public function test_constructor_rejects_implicit_default_unit_not_in_units(): void {
++        $mform = $this->get_test_form();
++        $this->expectException(\coding_exception::class);
++        $mform->addElement('duration', 'testel', null, ['units' => [DAYSECS, WEEKSECS]]);
++    }
++
++    /**
++     * Test constructor rejects an explicit default unit that is not in the restricted units set.
++     */
++    public function test_constructor_rejects_explicit_default_unit_not_in_units(): void {
++        $mform = $this->get_test_form();
++        $this->expectException(\coding_exception::class);
++        $mform->addElement('duration', 'testel', null,
++                ['units' => [DAYSECS, WEEKSECS], 'defaultunit' => HOURSECS]);
++    }
++
+     /**
+      * Testcase for testing units (seconds, minutes, hours and days)
+      */
+@@ -183,6 +219,66 @@ final class duration_test extends \basic_testcase {
+         $this->assertEquals($expected, $el->exportValue($values));
+     }
+ 
++    /**
++     * Data provider for {@see test_export_value_missing_submitted_values()}.
++     *
++     * @return array test cases.
++     */
++    public static function export_value_missing_submitted_values_cases(): array {
++        return [
++            'nothing submitted for the element at all' => [0, [], []],
++            'nothing submitted for the child controls' => [0, [], ['testel' => []]],
++            'timeunit not submitted (disabled select), fall back to default unit' =>
++                    [120, ['defaultunit' => MINSECS], ['testel' => ['number' => '2']]],
++            'timeunit not submitted, with a different default unit' =>
++                    [2 * DAYSECS, ['defaultunit' => DAYSECS], ['testel' => ['number' => '2']]],
++            'timeunit not submitted, with restricted units' =>
++                    [3 * WEEKSECS, ['units' => [DAYSECS, WEEKSECS], 'defaultunit' => WEEKSECS],
++                            ['testel' => ['number' => '3']]],
++            'number not submitted (disabled text), treated as zero' =>
++                    [0, [], ['testel' => ['timeunit' => HOURSECS]]],
++            'number submitted empty, treated as zero' =>
++                    [0, [], ['testel' => ['number' => '', 'timeunit' => HOURSECS]]],
++            'optional and disabled, nothing submitted for the child controls' =>
++                    [0, ['optional' => true], ['testel' => ['enabled' => 1]]],
++            'optional and enabled, timeunit not submitted' =>
++                    [5 * MINSECS, ['optional' => true], ['testel' => ['number' => '5', 'enabled' => 1]]],
++        ];
++    }
++
++    /**
++     * Test exportValue when some or all of the child controls were not submitted.
++     *
++     * This happens when the child controls are disabled (for example by disabledIf or hideIf),
++     * because disabled form controls are not submitted by the browser.
++     *
++     * @dataProvider export_value_missing_submitted_values_cases
++     * @param int|null $expected expected value returned by the element.
++     * @param array $options options to create the element with.
++     * @param array $values the submitted values.
++     */
++    public function test_export_value_missing_submitted_values(?int $expected, array $options, array $values): void {
++        $mform = $this->get_test_form();
++        $el = $mform->addElement('duration', 'testel', null, $options);
++
++        $this->assertSame($expected, $el->exportValue($values));
++        $this->assertSame(['testel' => $expected], $el->exportValue($values, true));
++    }
++
++    /**
++     * Test validateSubmitValue when the child controls were not submitted (e.g. disabled).
++     */
++    public function test_validate_submit_value_missing_submitted_values(): void {
++        $form = new temp_form_duration(null, null, 'post', '', null, true);
++        /** @var \MoodleQuickForm_duration $element */
++        $element = $form->get_form()->addElement('duration', 'testel', '', ['units' => [DAYSECS, WEEKSECS],
++                'defaultunit' => WEEKSECS]);
++
++        $this->assertNull($element->validateSubmitValue(['testel' => ['number' => '1']]));
++        $this->assertNull($element->validateSubmitValue(['testel' => []]));
++        $this->assertNull($element->validateSubmitValue([]));
++    }
++
+     /**
+      * Test cases for {@see test_validate_submit_value_negative_blocked()}.
+      * @return array[] test cases.
+diff --git a/public/repository/recent/lib.php b/public/repository/recent/lib.php
+index c43cf780ca6..54e491c7dd8 100644
+--- a/public/repository/recent/lib.php
++++ b/public/repository/recent/lib.php
+@@ -199,7 +199,8 @@ class repository_recent extends repository {
+         $mform->setDefault('recentfilesnumber', $number);
+ 
+         $mform->addElement('duration', 'recentfilestimelimit',
+-            get_string('timelimit', 'repository_recent'), ['units' => [DAYSECS, WEEKSECS], 'optional' => true]);
++            get_string('timelimit', 'repository_recent'),
++            ['units' => [DAYSECS, WEEKSECS], 'defaultunit' => WEEKSECS, 'optional' => true]);
+         $mform->addHelpButton('recentfilestimelimit', 'timelimit', 'repository_recent');
+         $mform->setDefault('recentfilestimelimit', DEFAULT_RECENT_FILES_TIME_LIMIT);
+     }

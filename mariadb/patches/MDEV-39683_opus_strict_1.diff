@@ -1,0 +1,112 @@
+diff --git a/plugin/type_xmltype/mysql-test/type_xmltype/type_xmltype.result b/plugin/type_xmltype/mysql-test/type_xmltype/type_xmltype.result
+index e7416abe..50257004 100644
+--- a/plugin/type_xmltype/mysql-test/type_xmltype/type_xmltype.result
++++ b/plugin/type_xmltype/mysql-test/type_xmltype/type_xmltype.result
+@@ -380,4 +380,26 @@ CAST('a' AS xmltype)
+ NULL
+ Warnings:
+ Warning	1292	Truncated incorrect xmltype value: 'a'
++#
++# MDEV-39683 Numeric aggregates should end up with an error for xmltype
++#
++CREATE TABLE t (x XMLTYPE);
++INSERT INTO t VALUES ('<a/>'),('<b>1</b>'),('<n>4.5</n>'),('<c/>');
++SELECT SUM(x) FROM t;
++ERROR HY000: Illegal parameter data type xmltype for operation 'sum('
++SELECT SUM(DISTINCT x) FROM t;
++ERROR HY000: Illegal parameter data type xmltype for operation 'sum(distinct '
++SELECT AVG(x) FROM t;
++ERROR HY000: Illegal parameter data type xmltype for operation 'avg('
++SELECT AVG(DISTINCT x) FROM t;
++ERROR HY000: Illegal parameter data type xmltype for operation 'avg(distinct '
++SELECT STD(x) FROM t;
++ERROR HY000: Illegal parameter data type xmltype for operation 'std('
++SELECT STDDEV_SAMP(x) FROM t;
++ERROR HY000: Illegal parameter data type xmltype for operation 'stddev_samp('
++SELECT VARIANCE(x) FROM t;
++ERROR HY000: Illegal parameter data type xmltype for operation 'variance('
++SELECT VAR_SAMP(x) FROM t;
++ERROR HY000: Illegal parameter data type xmltype for operation 'var_samp('
++DROP TABLE t;
+ # End of 12.3 tests
+diff --git a/plugin/type_xmltype/mysql-test/type_xmltype/type_xmltype.test b/plugin/type_xmltype/mysql-test/type_xmltype/type_xmltype.test
+index 67f8cb69..9666a78f 100644
+--- a/plugin/type_xmltype/mysql-test/type_xmltype/type_xmltype.test
++++ b/plugin/type_xmltype/mysql-test/type_xmltype/type_xmltype.test
+@@ -308,4 +308,28 @@ DROP TABLE t1, t2;
+ 
+ SELECT CAST('a' AS xmltype);
+ 
++--echo #
++--echo # MDEV-39683 Numeric aggregates should end up with an error for xmltype
++--echo #
++
++CREATE TABLE t (x XMLTYPE);
++INSERT INTO t VALUES ('<a/>'),('<b>1</b>'),('<n>4.5</n>'),('<c/>');
++--error ER_ILLEGAL_PARAMETER_DATA_TYPE_FOR_OPERATION
++SELECT SUM(x) FROM t;
++--error ER_ILLEGAL_PARAMETER_DATA_TYPE_FOR_OPERATION
++SELECT SUM(DISTINCT x) FROM t;
++--error ER_ILLEGAL_PARAMETER_DATA_TYPE_FOR_OPERATION
++SELECT AVG(x) FROM t;
++--error ER_ILLEGAL_PARAMETER_DATA_TYPE_FOR_OPERATION
++SELECT AVG(DISTINCT x) FROM t;
++--error ER_ILLEGAL_PARAMETER_DATA_TYPE_FOR_OPERATION
++SELECT STD(x) FROM t;
++--error ER_ILLEGAL_PARAMETER_DATA_TYPE_FOR_OPERATION
++SELECT STDDEV_SAMP(x) FROM t;
++--error ER_ILLEGAL_PARAMETER_DATA_TYPE_FOR_OPERATION
++SELECT VARIANCE(x) FROM t;
++--error ER_ILLEGAL_PARAMETER_DATA_TYPE_FOR_OPERATION
++SELECT VAR_SAMP(x) FROM t;
++DROP TABLE t;
++
+ --echo # End of 12.3 tests
+diff --git a/plugin/type_xmltype/sql_type_xmltype.cc b/plugin/type_xmltype/sql_type_xmltype.cc
+index 0dd2e1ab..f36ee0ca 100644
+--- a/plugin/type_xmltype/sql_type_xmltype.cc
++++ b/plugin/type_xmltype/sql_type_xmltype.cc
+@@ -65,6 +65,27 @@ const Type_handler *Type_collection_xmltype::aggregate_for_num_op(
+ 
+ constexpr LEX_CSTRING Type_handler_xmltype::name_on_client;
+ 
++
++bool Type_handler_xmltype::
++       Item_sum_sum_fix_length_and_dec(Item_sum_sum *func) const
++{
++  return Item_func_or_sum_illegal_param(func);
++}
++
++
++bool Type_handler_xmltype::
++       Item_sum_avg_fix_length_and_dec(Item_sum_avg *func) const
++{
++  return Item_func_or_sum_illegal_param(func);
++}
++
++
++bool Type_handler_xmltype::
++       Item_sum_variance_fix_length_and_dec(Item_sum_variance *func) const
++{
++  return Item_func_or_sum_illegal_param(func);
++}
++
+ const Type_handler *Type_handler_xmltype::type_handler_for_comparison() const
+ {
+   return &type_handler_xmltype;
+diff --git a/plugin/type_xmltype/sql_type_xmltype.h b/plugin/type_xmltype/sql_type_xmltype.h
+index c393c24c..190338e4 100644
+--- a/plugin/type_xmltype/sql_type_xmltype.h
++++ b/plugin/type_xmltype/sql_type_xmltype.h
+@@ -77,6 +77,11 @@ class Type_handler_xmltype: public Type_handler_long_blob
+   bool can_return_date() const override { return false; }
+   bool can_return_time() const override { return false; }
+ 
++  bool Item_sum_sum_fix_length_and_dec(Item_sum_sum *) const override;
++  bool Item_sum_avg_fix_length_and_dec(Item_sum_avg *) const override;
++  bool Item_sum_variance_fix_length_and_dec(Item_sum_variance *)
++                                                              const override;
++
+ };
+ 
+ extern Type_handler_xmltype type_handler_xmltype;

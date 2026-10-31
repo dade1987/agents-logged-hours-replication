@@ -1,0 +1,207 @@
+# concurrent INSERT … SELECT on a partitioned InnoDB table can leave the table-level AUTO_INCREMENT counter behind MAX(pk), so later inserts are handed ids that already exist and fail with ER_DUP_ENTRY on the PRIMARY KEY 
+
+h2. Summary
+
+On a partitioned InnoDB table whose {{AUTO_INCREMENT}} column is the *leftmost* column of the PRIMARY
+KEY, concurrent {{INSERT ... SELECT}} can leave the table-level auto-increment counter *behind*
+{{MAX(pk)}}. Subsequent inserts are then handed ids that already exist and fail with
+{{ER_DUP_ENTRY (1062)}} on the PRIMARY KEY, even though the application never supplies the column.
+
+Not related to {{innodb_autoinc_lock_mode}} (for such a table InnoDB never allocates the value, so
+0/1/2 make no difference) nor to {{binlog_format}}. Non-partitioned InnoDB tables are not affected.
+
+h2. Description
+
+For a partitioned table whose {{AUTO_INCREMENT}} column is the leftmost PRIMARY KEY column, values are
+handed out by the partitioning layer from a single table-wide in-memory counter,
+{{Partition_share::next_auto_inc_val}}, reserved in doubling blocks (1, 2, 4, 8 ... values per
+reservation, {{handler::update_auto_increment()}}). Values left unused in the last block are returned at
+end of statement by {{ha_partition::release_auto_increment()}} ({{sql/ha_partition.cc:11094}} in
+10.11.11):
+
+{code:cpp}
+if (next_insert_id < next_auto_inc_val &&
+    auto_inc_interval_for_cur_row.maximum() >= next_auto_inc_val)
+{
+  if (thd->auto_inc_intervals_forced.maximum() < next_insert_id)
+    part_share->next_auto_inc_val= next_insert_id;
+}
+{code}
+
+The second condition means "no one reserved a block after my last one", which is intended to prove that
+the values being returned were never handed to anybody else.
+
+That reasoning does not hold once a row fails in the middle of the statement. {{write_record()}}
+({{sql/sql_insert.cc}}) captures {{prev_insert_id= table->file->next_insert_id}} before each row and, on
+error, calls {{handler::restore_auto_increment(prev_insert_id)}}, which sets {{next_insert_id}} back to
+the value it held before the failing row. *If the failing row was the first row drawn from a freshly
+reserved block, that value is the boundary of an earlier block* -- and the values between the two blocks
+have meanwhile been handed to, and written by, other sessions. The guard above still passes, because it
+inspects only the _last_ interval, so the shared counter is set to a value that is already in use.
+
+From then on sessions are handed existing ids. There is also no self-repair path:
+{{need_info_for_auto_inc()}} returns 0 by default ({{sql/handler.h:4075}}) and InnoDB does not override
+it, so {{part_share->auto_inc_initialized}} is never cleared and
+{{ha_partition::info(HA_STATUS_AUTO)}} never recomputes the counter from the partitions. A failing
+insert's rollback re-runs the same return path and can re-pin the counter at the same value, so the
+table can stay broken until the counter is reset by hand.
+
+h2. How to repeat
+
+Self-contained scripts are attached ({{01_setup.sql}}, {{02_run.sh}}, {{README.md}}). *Reproduces on a
+stock, unpatched server* with no configuration changes.
+
+{code:sql}
+CREATE TABLE t1 (
+  id  BIGINT NOT NULL AUTO_INCREMENT,   -- leftmost PK column
+  pk2 INT NOT NULL,                     -- partition key, second PK column
+  c1 INT NOT NULL, c2 INT NOT NULL, c3 INT NOT NULL,
+  c4 VARCHAR(32) NOT NULL, c5 INT NOT NULL DEFAULT 0,
+  PRIMARY KEY (id, pk2),
+  UNIQUE KEY uk1 (pk2, c1, c2, c3, c4)
+) ENGINE=InnoDB
+PARTITION BY LIST (pk2)
+ (PARTITION p1 VALUES IN (1), PARTITION p2 VALUES IN (2),
+  PARTITION p3 VALUES IN (3), PARTITION p4 VALUES IN (4));
+ALTER TABLE t1 AUTO_INCREMENT = 1000000000;
+{code}
+
+Concurrent sessions, all inserting into partition {{p1}}:
+
+# *4 sessions* looping {{INSERT ... SELECT}} of 8 rows, where a pre-seeded row makes the *4th* row
+violate {{uk1}}. The 4th row is the first row drawn from the statement's third reservation block
+(blocks are 1, then 2-3, then 4-7), so the failure rolls {{next_insert_id}} back to the second block's
+boundary.
+# *4 sessions* running long {{INSERT ... SELECT}} statements with a deliberately poor row estimate and a
+slowed predicate, so they hold many reservation blocks for seconds.
+# *4 sessions* inserting single rows in a loop -- these consume the values in the gaps _between_ the
+other statements' blocks.
+# *1 session* issuing {{KILL QUERY}} against a random in-flight {{INSERT}} every few seconds. This
+raises the rate of mid-statement aborts, which is the scarce ingredient; the bug also reproduces
+without it, but much less often.
+
+The driver reports two signals per round:
+
+* {{counter <= MAX(id)}}, sampled from {{information_schema.TABLES}} -- the defect itself;
+* {{ER_DUP_ENTRY ... for key 'PRIMARY'}} on a statement that never supplies the column -- the
+consequence.
+
+h3. Observed on a stock server
+
+{noformat}
+round 1: rows=40035 max_id=1000040957 counter=1000040958 counter_behind_max_samples=0 PRIMARY_dups=1
+1062 | Duplicate entry '1000001212-1' for key 'PRIMARY'
+{noformat}
+
+Reproduced independently on a second machine, including the state itself:
+
+{noformat}
+counter several thousand values behind MAX(id), sampled over a few ms
+1062 | Duplicate entry '1000001215-1' for key 'PRIMARY'
+1062 | Duplicate entry '1000001228-1' for key 'PRIMARY'   (round 5 of a 20-round run)
+{noformat}
+
+The number of rounds needed varies with core count and timing -- hits were seen on rounds 1, 2 and 5 of
+separate 20-round runs on two machines. The counter-behind-{{MAX}} state is the signal that fires most
+readily; whether it turns into {{ER_DUP_ENTRY}} depends on where the lowered counter lands, since the
+range between it and {{MAX(id)}} contains both written rows and abandoned reservation tails.
+
+h3. Instrumented evidence
+
+{{instrumentation-10.11.11.patch}} (attached, 38 lines) adds a high-water mark of ids actually written
+({{Partition_share::max_inserted_seen}}, maintained in {{set_auto_increment_if_higher()}}) and logs when
+the counter is lowered to at or below that mark, or when such a value is handed out. The complete error
+log of one such run is attached as {{patched-server-error.log}} -- 47 lines, of which 18 are the routine
+give-back traces and 5 are detector hits:
+
+{noformat}
+16:50:02 23 [ERROR] AUTOINC-BUG lower:   table autoinc_bug.t1 thread 23 counter 1000001213 -> 1000001212
+                                         max_inserted_seen=1000001212 cur_row_interval=[1000001212,1000001213)
+16:50:02 20 [ERROR] AUTOINC-BUG handout: table autoinc_bug.t1 thread 20 first_value=1000001212
+                                         max_inserted_seen=1000001212 nb_desired=1 next_insert_id=0
+                                         cur_row_interval=[0,0)
+16:50:02 17 [ERROR] AUTOINC-BUG lower:   table autoinc_bug.t1 thread 17 counter 1000001215 -> 1000001207
+                                         max_inserted_seen=1000001212 cur_row_interval=[1000001213,1000001215)
+16:50:02 21 [ERROR] AUTOINC-BUG handout: table autoinc_bug.t1 thread 21 first_value=1000001211
+                                         max_inserted_seen=1000001212 nb_desired=1 next_insert_id=0
+                                         cur_row_interval=[0,0)
+16:50:02 15 [ERROR] AUTOINC-BUG handout: table autoinc_bug.t1 thread 15 first_value=1000001212
+                                         max_inserted_seen=1000001212 nb_desired=2 next_insert_id=1000001211
+                                         cur_row_interval=[1000001210,1000001211)
+{noformat}
+
+The third entry is the clearest: thread 17 lowered the shared counter to *1000001207*, which is six
+values below its own current reservation interval {{[1000001213,1000001215)}} and six values below what
+had already been written ({{max_inserted_seen=1000001212}}). A {{next_insert_id}} below the statement's
+own interval is the direct signature of {{restore_auto_increment()}} having rolled it back across a
+block boundary; the guard in {{release_auto_increment()}} inspects only the interval, so it does not
+notice.
+
+The instrumentation logs {{thd->thread_id}}, which is the same number as {{CONNECTION_ID()}} (verified),
+and the reproduction registers every worker in a {{sessions}} table, so the threads above can be
+attributed to workload roles:
+
+||thread||role||action||
+|23|single-row inserts|lowered the counter onto an already-written value|
+|17|long multi-block INSERT ... SELECT|lowered the counter 6 values below its own interval|
+|15, 20, 21|long multi-block and single-row|handed an already-written value|
+
+The three resulting application errors in the same round came from two different roles:
+
+{noformat}
+1062  Duplicate entry '1000001208-1' for key 'PRIMARY'   (long multi-block session)
+1062  Duplicate entry '1000001212-1' for key 'PRIMARY'   (single-row session)
+1062  Duplicate entry '1000001209-1' for key 'PRIMARY'   (long multi-block session)
+{noformat}
+
+So both the session that corrupts the counter and the session subsequently handed a used id can be of
+any writer type, and they are not the same session.
+
+Note the detector compares against _written_ values only, so it under-reports: a counter lowered into a
+range that is reserved but not yet written is equally harmful and is not logged. An exact check would
+have to track outstanding reservations per share.
+
+h3. Structural note
+
+With the counter primed to 1000000000, the doubling blocks place the 1024-value reservation at ids
+1000001023-1000002046, and all failures observed across two machines fall inside that one block
+(offsets 1207, 1209, 1212, 1215, 1228). That is expected: the reservation block size bounds how far
+{{restore_auto_increment()}} can roll the pointer back, so the defect only becomes damaging once the
+blocks are large -- which also means larger statements widen the exposure.
+
+h2. Field occurrence
+
+Observed on a standalone 10.11.11 primary: no Galera, no replication apply into the table, no explicit
+{{AUTO_INCREMENT}} values anywhere in the application, and no DDL or restart in the window. Around a
+dozen concurrent {{INSERT ... SELECT}} statements, each running for several seconds, all into a single
+LIST partition of a table with a secondary UNIQUE key, so mid-statement failures occur naturally. The
+counter was left several hundred values behind {{MAX}}, pointing at an id that already existed, and
+inserts into that partition failed until the counter was reset. The binary log for the window contained
+no duplicated ids, which is consistent with the failing statements rolling back and therefore never
+being logged.
+
+h2. Workaround
+
+{{FLUSH TABLES <table>}} -- closing the table share discards the stale in-memory counter, and the next
+open recomputes it from the per-partition persisted values, which are monotonic and therefore always at
+least {{MAX+1}}. Verified against the broken state. {{ALTER TABLE ... AUTO_INCREMENT=N}} also works and
+is clamped upward by a real index scan ({{commit_set_autoinc()}} -> {{row_search_max_autoinc()}}), so it
+cannot be set too low.
+
+h2. Relationship to MDEV-21842
+
+MDEV-21842 (fixed in 10.3.28 / 10.4.18 / 10.5.9, so present here) removed a _different_ mechanism in the
+same area: the saving and restoring of {{part_share->next_auto_inc_val}} around duplicate-key errors,
+replaced by "only raise the counter after a row inserts successfully". That mechanism no longer exists in
+10.11. The path in this report is the end-of-statement return of unused values combined with a
+{{next_insert_id}} that {{restore_auto_increment()}} has rolled back across a block boundary, so this is
+a distinct window rather than a regression of that fix.
+
+h2. Attachments
+
+||file||contents||
+|01_setup.sql|schema and workload procedures|
+|02_run.sh|driver; reports both signals per round and attributes failures to roles|
+|README.md|step-by-step instructions, including building the instrumented server|
+|instrumentation-10.11.11.patch|the 38-line detector|
+|patched-server-error.log|complete error log of the instrumented run quoted above|

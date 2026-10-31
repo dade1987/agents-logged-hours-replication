@@ -1,0 +1,110 @@
+diff --git a/public/mod/quiz/report/overview/tests/behat/basic.feature b/public/mod/quiz/report/overview/tests/behat/basic.feature
+index c5996eeb13d..b11357f1e94 100644
+--- a/public/mod/quiz/report/overview/tests/behat/basic.feature
++++ b/public/mod/quiz/report/overview/tests/behat/basic.feature
+@@ -121,6 +121,16 @@ Feature: Basic use of the Grades report
+     Then I should see "Apple" in the "S1 Student1" "table_row"
+     And I should see "Banana" in the "S2 Student2" "table_row"
+ 
++  Scenario: View identity fields which the grades report always selects anyway
++    # The report selects idnumber, institution and department whether or not they are identity
++    # fields, so naming them here used to put each of them in the query twice.
++    Given the following config values are set as admin:
++      | showuseridentity | idnumber,institution,department,email |
++    And I am on the "Quiz 1" "quiz activity" page logged in as teacher1
++    And I navigate to "Results" in current page administration
++    Then I should see "S1000" in the "S1 Student1" "table_row"
++    And I should see "S2000" in the "S2 Student2" "table_row"
++
+   @javascript
+   Scenario: A teacher can search the user attempt by user profile field in the grades report.
+     Given the following config values are set as admin:
+diff --git a/public/mod/quiz/report/overview/tests/report_test.php b/public/mod/quiz/report/overview/tests/report_test.php
+index 8a31fbde31b..0a8c8d191e2 100644
+--- a/public/mod/quiz/report/overview/tests/report_test.php
++++ b/public/mod/quiz/report/overview/tests/report_test.php
+@@ -260,6 +260,45 @@ final class report_test extends \advanced_testcase {
+         // Just verify that this does not cause a fatal error.
+     }
+ 
++    /**
++     * A column the report always selects (idnumber, institution, department) must not be
++     * selected again just because it is also configured as an identity field.
++     */
++    public function test_report_sql_with_duplicate_identity_fields(): void {
++        $this->resetAfterTest();
++        $this->setAdminUser();
++        set_config('showuseridentity', 'idnumber,institution,department,email');
++
++        $generator = $this->getDataGenerator();
++        $course = $generator->create_course();
++        $quizgenerator = $generator->get_plugin_generator('mod_quiz');
++        $quiz = $quizgenerator->create_instance(['course' => $course->id,
++                'grade' => 100.0, 'sumgrades' => 10.0]);
++        $student = $generator->create_user(['idnumber' => 'S1000']);
++        $generator->enrol_user($student->id, $course->id);
++
++        $cm = get_coursemodule_from_instance('quiz', $quiz->id);
++        $context = \context_module::instance($cm->id);
++        $studentsjoins = get_enrolled_with_capabilities_join($context, '',
++                ['mod/quiz:attempt', 'mod/quiz:reviewmyattempts']);
++
++        $reportoptions = new quiz_overview_options('overview', $quiz, $cm, null);
++        $reportoptions->attempts = attempts_report::ENROLLED_ALL;
++
++        $table = new quiz_overview_table($quiz, $context, quiz_report_qm_filter_select($quiz),
++                $reportoptions, new \core\dml\sql_join(), $studentsjoins, [], null);
++        $table->define_columns(['fullname']);
++        $table->define_baseurl(new \moodle_url('/mod/quiz/report.php'));
++        $table->sortable(true, 'uniqueid');
++        $table->setup();
++        $table->setup_sql_queries($studentsjoins);
++
++        $table->query_db(30, false);
++
++        $this->assertEquals(1, $table->totalrows);
++        $this->assertEquals('S1000', reset($table->rawdata)->idnumber);
++    }
++
+     /**
+      * Bands provider.
+      * @return array
+diff --git a/public/mod/quiz/tests/external/get_users_in_report_test.php b/public/mod/quiz/tests/external/get_users_in_report_test.php
+index 0977c63c29b..d9861447f9b 100644
+--- a/public/mod/quiz/tests/external/get_users_in_report_test.php
++++ b/public/mod/quiz/tests/external/get_users_in_report_test.php
+@@ -101,4 +101,34 @@ final class get_users_in_report_test extends \advanced_testcase {
+         )['users'];
+         $this->assertCount(1, $users);
+     }
++
++    /**
++     * Custom profile fields included in showuseridentity must get a display label resolved via
++     * \core_user\fields::get_display_name(), not the raw 'profile_field_<shortname>' key.
++     */
++    public function test_get_users_in_report_extrafields_display_custom_profile_field(): void {
++        global $CFG;
++        require_once($CFG->dirroot . '/user/profile/lib.php');
++
++        $this->resetAfterTest();
++        $this->setAdminUser();
++
++        $dg = $this->getDataGenerator();
++        $dg->create_custom_profile_field(['datatype' => 'text', 'shortname' => 'fruit', 'name' => 'Fruit']);
++        set_config('showuseridentity', 'email,profile_field_fruit');
++
++        $course = $dg->create_course();
++        $quizgen = $dg->get_plugin_generator('mod_quiz');
++        $quiz = $quizgen->create_instance(['course' => $course->id]);
++
++        $result = get_users_in_report::execute(
++            $quiz->cmid,
++            'overview',
++            '{"attempts":"enrolled_with","onlygraded":"","search":"","onlyregraded":""}'
++        );
++
++        $index = array_search('profile_field_fruit', $result['extrafields']);
++        $this->assertNotFalse($index);
++        $this->assertSame('Fruit', $result['extrafieldsdisplay'][$index]);
++    }
+ }

@@ -1,0 +1,62 @@
+diff --git a/sql/sql_type_row.cc b/sql/sql_type_row.cc
+index c72cab62..e0ca939a 100644
+--- a/sql/sql_type_row.cc
++++ b/sql/sql_type_row.cc
+@@ -135,6 +135,37 @@ class my_var_sp_row_field: public my_var_sp
+ };
+ 
+ 
++/*
++  A field of a ROW TYPE OF table/cursor variable used in SELECT INTO.
++  The field is resolved by name at run time, as the structure
++  of the row is not known at parse time.
++*/
++class my_var_sp_row_field_by_name: public my_var_sp
++{
++  LEX_CSTRING m_field_name;
++public:
++  my_var_sp_row_field_by_name(const Lex_ident_sys_st &varname,
++                              const sp_rcontext_addr &varaddr,
++                              const LEX_CSTRING &field_name, sp_head *s)
++   :my_var_sp(varname, varaddr,
++              &type_handler_double/*Not really used*/, s),
++    m_field_name(field_name)
++  { }
++  bool check_assignability(THD *thd, const List<Item> &select_list,
++                           bool *assign_as_row) const override
++  {
++    *assign_as_row= false;
++    return select_list.elements == 1;
++  }
++  bool set(THD *thd, Item *item) override
++  {
++    return get_rcontext(thd->spcont)->
++             set_variable_composite_by_name(thd, offset(), m_field_name,
++                                            &item);
++  }
++};
++
++
+ my_var *Type_handler_row::make_outvar(THD *thd,
+                                       const Lex_ident_sys_st &name,
+                                       const sp_rcontext_addr &addr,
+@@ -159,6 +190,19 @@ my_var *Type_handler_row::make_outvar_field(THD *thd,
+   DBUG_ASSERT(t);
+   DBUG_ASSERT(t->type_handler() == this);
+ 
++  if (t->field_def.is_table_rowtype_ref() ||
++      t->field_def.is_cursor_rowtype_ref())
++  {
++    // The row structure is not known at parse time, resolve at run time
++    if (validate_only)
++      return nullptr;
++    LEX_CSTRING fname;
++    if (!thd->make_lex_string(&fname, field.str, field.length))
++      return nullptr;
++    return new (thd->mem_root) my_var_sp_row_field_by_name(name, addr, fname,
++                                                           sphead);
++  }
++
+   uint row_field_offset;
+   if (!t->find_row_field(&name, &field, &row_field_offset))
+   {

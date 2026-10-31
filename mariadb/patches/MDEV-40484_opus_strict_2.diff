@@ -1,0 +1,325 @@
+diff --git a/mysql-test/main/view_grant.result b/mysql-test/main/view_grant.result
+index aff05893..b86e0a2d 100644
+--- a/mysql-test/main/view_grant.result
++++ b/mysql-test/main/view_grant.result
+@@ -2047,4 +2047,44 @@ connection default;
+ disconnect con1;
+ drop user foo@localhost;
+ drop schema foo;
++#
++# MDEV-40484 ambiguous view frm parsing when username includes newline
++#
++create user 'root
++definer_host=localhost
++suid=1'@localhost;
++connect  u,localhost,'root
++definer_host=localhost
++suid=1';
++select group_concat(user,'@',host) from mysql.global_priv;
++ERROR 42000: SELECT command denied to user 'root
++definer_host=localhost
++suid=1'@'localhost' for table `mysql`.`global_priv`
++create function f() returns text sql security invoker
++return (select group_concat(user,'@',host) from mysql.global_priv);
++create view v as select f();
++select * from v;
++ERROR 42000: SELECT command denied to user 'root
++definer_host=localhost
++suid=1'@'localhost' for table `mysql`.`global_priv`
++connection default;
++disconnect u;
++select replace(definer, '\n', '|'), security_type from information_schema.views
++where table_schema='test' and table_name='v';
++replace(definer, '\n', '|')	security_type
++root|definer_host=localhost|suid=1@localhost	DEFINER
++select * from test.v;
++ERROR 42000: SELECT command denied to user 'root
++definer_host=localhost
++suid=1'@'localhost' for table `mysql`.`global_priv`
++rename table test.v to test.v2;
++select replace(definer, '\n', '|'), security_type from information_schema.views
++where table_schema='test' and table_name='v2';
++replace(definer, '\n', '|')	security_type
++root|definer_host=localhost|suid=1@localhost	DEFINER
++drop view test.v2;
++drop function test.f;
++drop user 'root
++definer_host=localhost
++suid=1'@localhost;
+ # End of 10.6 tests
+diff --git a/mysql-test/main/view_grant.test b/mysql-test/main/view_grant.test
+index 73c2fd51..d8a64ae7 100644
+--- a/mysql-test/main/view_grant.test
++++ b/mysql-test/main/view_grant.test
+@@ -2306,6 +2306,44 @@ connection default;
+ disconnect con1;
+ drop user foo@localhost;
+ drop schema foo;
++
++--echo #
++--echo # MDEV-40484 ambiguous view frm parsing when username includes newline
++--echo #
++create user 'root
++definer_host=localhost
++suid=1'@localhost;
++
++--connect u,localhost,'root
++definer_host=localhost
++suid=1'
++
++--error ER_TABLEACCESS_DENIED_ERROR
++select group_concat(user,'@',host) from mysql.global_priv;
++
++create function f() returns text sql security invoker
++  return (select group_concat(user,'@',host) from mysql.global_priv);
++
++create view v as select f();
++
++--error ER_TABLEACCESS_DENIED_ERROR
++select * from v;
++
++--connection default
++--disconnect u
++select replace(definer, '\n', '|'), security_type from information_schema.views
++  where table_schema='test' and table_name='v';
++--error ER_TABLEACCESS_DENIED_ERROR
++select * from test.v;
++rename table test.v to test.v2;
++select replace(definer, '\n', '|'), security_type from information_schema.views
++  where table_schema='test' and table_name='v2';
++drop view test.v2;
++drop function test.f;
++drop user 'root
++definer_host=localhost
++suid=1'@localhost;
++
+ --echo # End of 10.6 tests
+ 
+ # Wait till we reached the initial number of concurrent sessions
+diff --git a/mysql-test/suite/roles/definer.test b/mysql-test/suite/roles/definer.test
+index c1e56f3f..d5c52931 100644
+--- a/mysql-test/suite/roles/definer.test
++++ b/mysql-test/suite/roles/definer.test
+@@ -114,7 +114,7 @@ local $/;
+ my $f= "$ENV{MYSQLD_DATADIR}/test/v5.frm";
+ open(F, '<', $f) or die "open(<$f): $!";
+ $_=<F>;
+-s/create-version=2/create-version=1/;
++s/create-version=3/create-version=1/;
+ open(F, '>', $f) or die "open(>$f): $!";
+ syswrite F, $_ or die "syswrite($f): $!" 
+ EOF
+diff --git a/sql/parse_file.h b/sql/parse_file.h
+index 00132cb7..adc88e58 100644
+--- a/sql/parse_file.h
++++ b/sql/parse_file.h
+@@ -74,6 +74,8 @@ class File_parser_dummy_hook: public Unknown_key_hook
+ 
+ extern File_parser_dummy_hook file_parser_dummy_hook;
+ 
++my_bool read_escaped_string(const char *ptr, const char *eol, LEX_STRING *str);
++
+ bool get_file_options_ulllist(const char *&ptr, const char *end,
+                               const char *line, uchar* base,
+                               File_option *parameter,
+diff --git a/sql/sql_view.cc b/sql/sql_view.cc
+index ab2d4df9..2bde053b 100644
+--- a/sql/sql_view.cc
++++ b/sql/sql_view.cc
+@@ -880,6 +880,133 @@ static File_option view_timestamp_parameters[]=
+ static LEX_CSTRING view_file_type[]= {{STRING_WITH_LEN("VIEW") }};
+ 
+ 
++/*
++  View .frm file_version history:
++    version 1 - before 10.0.5
++    version 2 - empty definer_host means a role
++    version 3 - definer_user and definer_host are escaped
++                (see write_escaped_string() in parse_file.cc)
++*/
++static const ulonglong VIEW_FILE_VERSION_ESCAPED_DEFINER= 3;
++
++
++/**
++  Escape a definer user or host name for storing in a view .frm file.
++
++  definer_user and definer_host are stored as plain (FILE_OPTIONS_STRING)
++  values, terminated by '\n'. A user name (or host name) containing '\n'
++  could otherwise inject arbitrary parameters (e.g. definer_host or suid)
++  into the view definition file. Must be in sync with read_escaped_string().
++*/
++
++static bool escape_definer_part(THD *thd, LEX_CSTRING *str)
++{
++  if (!str->str)
++    return false;
++  char *buf= (char*) thd->alloc(str->length * 2 + 1);
++  if (!buf)
++    return true;
++  char *to= buf;
++  for (const char *ptr= str->str, *end= str->str + str->length;
++       ptr < end; ptr++)
++  {
++    switch (*ptr) {
++    case '\\': *to++= '\\'; *to++= '\\'; break;
++    case '\n': *to++= '\\'; *to++= 'n';  break;
++    case '\0': *to++= '\\'; *to++= '0';  break;
++    case 26:   *to++= '\\'; *to++= 'z';  break;
++    case '\'': *to++= '\\'; *to++= '\''; break;
++    default:   *to++= *ptr;
++    }
++  }
++  *to= '\0';
++  str->str= buf;
++  str->length= to - buf;
++  return false;
++}
++
++
++/**
++  Unescape a definer user or host name read from a view .frm file
++  (in place: the unescaped string is never longer than the escaped one).
++
++  @retval false OK
++  @retval true  wrong escape sequence
++*/
++
++static bool unescape_definer_part(LEX_CSTRING *str)
++{
++  if (!str->str || !str->length)
++    return false;
++  LEX_STRING tmp= { const_cast<char*>(str->str), str->length };
++  if (read_escaped_string(str->str, str->str + str->length, &tmp))
++    return true;
++  str->length= tmp.length;
++  return false;
++}
++
++
++/**
++  Unescape definer of a view, read from a view .frm file, if the
++  file format stores it escaped.
++*/
++
++static bool unescape_view_definer(TABLE_LIST *view)
++{
++  if (view->file_version < VIEW_FILE_VERSION_ESCAPED_DEFINER)
++    return false;
++  if (unescape_definer_part(&view->definer.user) ||
++      unescape_definer_part(&view->definer.host))
++  {
++    my_error(ER_FPARSER_ERROR_IN_PARAMETER, MYF(0), "definer",
++             view->definer.user.str ? view->definer.user.str : "");
++    return true;
++  }
++  return false;
++}
++
++
++/**
++  Write a view .frm file, escaping definer_user and definer_host.
++  The TABLE_LIST is left unchanged.
++*/
++
++static bool write_view_definition_file(THD *thd, const LEX_CSTRING *dir,
++                                       const LEX_CSTRING *file,
++                                       TABLE_LIST *view)
++{
++  LEX_CSTRING user= view->definer.user, host= view->definer.host;
++  ulonglong file_version= view->file_version;
++  bool res;
++
++  /*
++    The file is going to be written in the latest format, where
++    an empty definer_host means a role. See mysql_make_view().
++  */
++  if (file_version < 2 && view->definer.host.str &&
++      !view->definer.host.str[0])
++    view->definer.host= host_not_specified;
++
++  if (escape_definer_part(thd, &view->definer.user) ||
++      escape_definer_part(thd, &view->definer.host))
++  {
++    view->definer.user= user;
++    view->definer.host= host;
++    my_error(ER_OUT_OF_RESOURCES, MYF(0));
++    return true;
++  }
++  view->file_version= VIEW_FILE_VERSION_ESCAPED_DEFINER;
++
++  res= sql_create_definition_file(dir, file, view_file_type,
++                                  (uchar*) view, view_parameters);
++
++  view->definer.user= user;
++  view->definer.host= host;
++  view->file_version= file_version;
++  return res;
++}
++
++
+ int mariadb_fix_view(THD *thd, TABLE_LIST *view, bool wrong_checksum,
+                      bool swap_alg)
+ {
+@@ -920,8 +1047,7 @@ int mariadb_fix_view(THD *thd, TABLE_LIST *view, bool wrong_checksum,
+   }
+   view->mariadb_version= MYSQL_VERSION_ID;
+ 
+-  if (sql_create_definition_file(&dir, &file, view_file_type,
+-                                (uchar*)view, view_parameters))
++  if (write_view_definition_file(thd, &dir, &file, view))
+   {
+     sql_print_error("View '%-.192s'.'%-.192s': algorithm swap error.",
+                     view->db.str, view->table_name.str);
+@@ -1036,11 +1162,8 @@ static int mysql_register_view(THD *thd, DDL_LOG_STATE *ddl_log_state,
+     goto err;   
+   }
+ 
+-  /*
+-    version 1 - before 10.0.5
+-    version 2 - empty definer_host means a role
+-  */
+-  view->file_version= 2;
++  /* See VIEW_FILE_VERSION_ESCAPED_DEFINER for the version history */
++  view->file_version= VIEW_FILE_VERSION_ESCAPED_DEFINER;
+   view->mariadb_version= MYSQL_VERSION_ID;
+   view->calc_md5(md5);
+   if (!(view->md5.str= (char*) thd->memdup(md5, VIEW_MD5_LEN)))
+@@ -1229,8 +1352,7 @@ static int mysql_register_view(THD *thd, DDL_LOG_STATE *ddl_log_state,
+   }
+ 
+   debug_crash_here("ddl_log_create_before_create_view");
+-  if (sql_create_definition_file(&dir, &file, view_file_type,
+-				 (uchar*)view, view_parameters))
++  if (write_view_definition_file(thd, &dir, &file, view))
+   {
+     error= thd->is_error() ? -1 : 1;
+     goto err;
+@@ -1395,6 +1517,8 @@ bool mysql_make_view(THD *thd, TABLE_SHARE *share, TABLE_LIST *table,
+                                       required_view_parameters,
+                                       &file_parser_dummy_hook)))
+     goto end;
++  if ((result= unescape_view_definer(table)))
++    goto end;
+   DBUG_ASSERT(share->tabledef_version.length);
+   if (!table->tabledef_version.length)
+   {
+@@ -2343,7 +2467,8 @@ mysql_rename_view(THD *thd,
+     /* get view definition and source */
+     if (parser->parse((uchar*)&view_def, thd->mem_root, view_parameters,
+                       array_elements(view_parameters)-1,
+-                      &file_parser_dummy_hook))
++                      &file_parser_dummy_hook) ||
++        unescape_view_definer(&view_def))
+       goto err;
+ 
+     /* rename view and it's backups */
+@@ -2363,8 +2488,7 @@ mysql_rename_view(THD *thd,
+     file.str= pathstr.str + dir.length;
+     file.length= pathstr.length - dir.length;
+ 
+-    if (sql_create_definition_file(&dir, &file, view_file_type,
+-                                   (uchar*)&view_def, view_parameters))
++    if (write_view_definition_file(thd, &dir, &file, &view_def))
+     {
+       /* restore renamed view in case of error */
+       rename_in_schema_file(thd, new_db->str, new_name->str, old_db->str,

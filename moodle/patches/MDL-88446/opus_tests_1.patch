@@ -1,0 +1,46 @@
+diff --git a/public/media/player/videojs/classes/plugin.php b/public/media/player/videojs/classes/plugin.php
+index c9c4320e99c..56f0fa4b853 100644
+--- a/public/media/player/videojs/classes/plugin.php
++++ b/public/media/player/videojs/classes/plugin.php
+@@ -279,8 +279,10 @@ class media_videojs_plugin extends core_media_player_native {
+ 
+     public function list_supported_urls(array $urls, array $options = array()) {
+         $result = [];
+-        // Youtube.
++        // Reset per-embed state, as the same plugin instance may process multiple embeds sequentially.
+         $this->youtube = false;
++        $this->ogvtech = false;
++        // Youtube.
+         if (count($urls) == 1 && get_config('media_videojs', 'youtube')) {
+             $url = reset($urls);
+ 
+diff --git a/public/media/player/videojs/tests/player_test.php b/public/media/player/videojs/tests/player_test.php
+index 4f0d81eb931..1aa58c4d3ca 100644
+--- a/public/media/player/videojs/tests/player_test.php
++++ b/public/media/player/videojs/tests/player_test.php
+@@ -318,6 +318,25 @@ final class player_test extends \advanced_testcase {
+         $this->assertStringContainsString("&quot;youtube&quot;: {&quot;start&quot;: &quot;{$expectedstart}&quot;}", $embedcode);
+     }
+ 
++    /**
++     * Test that the OgvJS tech of a previous embed does not leak into a following Youtube embed.
++     */
++    public function test_youtube_after_ogv_embed(): void {
++        set_config('youtube', 1, 'media_videojs');
++
++        $manager = core_media_manager::instance();
++
++        // Embed an OGV supported video first.
++        $t = $manager->embed_url(new moodle_url('http://example.org/1.webm'));
++        $this->assertStringContainsString('mediaplugin_videojs', $t);
++        $this->assertStringContainsString('&quot;techOrder&quot;: [&quot;OgvJS&quot;]', $t);
++
++        // Then embed a Youtube video, using the same player instance.
++        $t = $manager->embed_url(new moodle_url('https://www.youtube.com/watch?v=vyrwMmsufJc'));
++        $this->youtube_plugin_engaged($t);
++        $this->assertStringNotContainsString('OgvJS', $t);
++    }
++
+     /**
+      * Helper function for testing flash videos embedding.
+      *

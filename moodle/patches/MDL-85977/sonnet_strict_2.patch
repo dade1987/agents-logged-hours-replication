@@ -1,0 +1,59 @@
+diff --git a/public/mod/bigbluebuttonbn/classes/local/config.php b/public/mod/bigbluebuttonbn/classes/local/config.php
+index 54b6dad5e59..81524cef903 100644
+--- a/public/mod/bigbluebuttonbn/classes/local/config.php
++++ b/public/mod/bigbluebuttonbn/classes/local/config.php
+@@ -97,6 +97,7 @@ class config {
+             'recording_all_from_start_editable' => false,
+             'recording_hide_button_default' => false,
+             'recording_hide_button_editable' => false,
++            'recording_safe_formats_extra' => '',
+             'recording_protect_editable' => true,
+             'general_warning_message' => '',
+             'general_warning_roles' => 'editingteacher,teacher',
+diff --git a/public/mod/bigbluebuttonbn/classes/settings.php b/public/mod/bigbluebuttonbn/classes/settings.php
+index 3d36118ae94..c2e910c291c 100644
+--- a/public/mod/bigbluebuttonbn/classes/settings.php
++++ b/public/mod/bigbluebuttonbn/classes/settings.php
+@@ -391,6 +391,29 @@ class settings {
+                 'statistics' => get_string('view_recording_format_statistics', 'mod_bigbluebuttonbn'),
+                 'video' => get_string('view_recording_format_video', 'mod_bigbluebuttonbn'),
+             ];
++            // Allow additional formats (not hard-coded here) to be offered, plus keep any already selected format.
++            $extraformats = str_getcsv(
++                config::get('recording_safe_formats_extra') . ',' . config::get('recording_safe_formats'),
++                escape: '\\'
++            );
++            foreach ($extraformats as $format) {
++                $format = trim($format);
++                if ($format !== '' && !isset($recordingsafeformat[$format])) {
++                    $recordingsafeformat[$format] = $format;
++                }
++            }
++            $item = new configtext(
++                'bigbluebuttonbn_recording_safe_formats_extra',
++                get_string('config_recording_safe_formats_extra', 'mod_bigbluebuttonbn'),
++                get_string('config_recording_safe_formats_extra_description', 'mod_bigbluebuttonbn'),
++                '',
++                PARAM_RAW
++            );
++            $this->add_conditional_element(
++                'recording_hide_button_editable',
++                $item,
++                $recordingsetting
++            );
+             $item = new configmultiselect(
+                 'bigbluebuttonbn_recording_safe_formats',
+                 get_string('config_recording_safe_formats', 'mod_bigbluebuttonbn'),
+diff --git a/public/mod/bigbluebuttonbn/lang/en/bigbluebuttonbn.php b/public/mod/bigbluebuttonbn/lang/en/bigbluebuttonbn.php
+index fe13f805d51..4589f25bf81 100644
+--- a/public/mod/bigbluebuttonbn/lang/en/bigbluebuttonbn.php
++++ b/public/mod/bigbluebuttonbn/lang/en/bigbluebuttonbn.php
+@@ -164,6 +164,8 @@ $string['config_recording_safe_formats'] = 'Recording formats viewable by everyo
+ $string['config_recording_safe_formats_description'] = 'Select the formats which are viewable by everyone.
+ All other formats are only viewable by teachers and other users with the mod/bigbluebuttonbn:viewallrecordingformats and
+  mod/bigbluebuttonbn:managerecordings capabilities.';
++$string['config_recording_safe_formats_extra'] = 'Additional recording formats';
++$string['config_recording_safe_formats_extra_description'] = 'Comma-separated list of additional recording format names (for example: transcript) that can be selected as viewable by everyone. Save, then reload this page to select them.';
+ $string['config_recordingready_enabled'] = 'Send recording available notification';
+ $string['config_recordingready_enabled_description'] = 'If enabled, a notification will be sent when a recording link is available. This feature requires the script post_publish_recording_ready_callback to be enabled on the BigBlueButton server.';
+ $string['config_recordings'] = 'Show recordings';

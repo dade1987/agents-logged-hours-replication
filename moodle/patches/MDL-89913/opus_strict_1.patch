@@ -1,0 +1,165 @@
+diff --git a/public/lib/classes/oauth2/server/repository/access_token_repository.php b/public/lib/classes/oauth2/server/repository/access_token_repository.php
+index 123d2cd8202..04a898642ab 100644
+--- a/public/lib/classes/oauth2/server/repository/access_token_repository.php
++++ b/public/lib/classes/oauth2/server/repository/access_token_repository.php
+@@ -70,6 +70,9 @@ class access_token_repository implements AccessTokenRepositoryInterface {
+         $record->timecreated = time();
+ 
+         $DB->insert_record('oauth2_server_client_access_tokens', $record);
++
++        // Record that the client was accessed as part of this flow.
++        \core\di::get(client_repository::class)->log_client_access($record->clientidentifier);
+     }
+ 
+     #[\Override]
+diff --git a/public/lib/classes/oauth2/server/repository/auth_code_repository.php b/public/lib/classes/oauth2/server/repository/auth_code_repository.php
+index bac4471c8a0..e514fa9b701 100644
+--- a/public/lib/classes/oauth2/server/repository/auth_code_repository.php
++++ b/public/lib/classes/oauth2/server/repository/auth_code_repository.php
+@@ -52,6 +52,9 @@ class auth_code_repository implements AuthCodeRepositoryInterface {
+         $record->timecreated = time();
+ 
+         $DB->insert_record('oauth2_server_client_auth_codes', $record);
++
++        // Record that the client was accessed as part of this flow.
++        \core\di::get(client_repository::class)->log_client_access($record->clientidentifier);
+     }
+ 
+     #[\Override]
+diff --git a/public/lib/classes/oauth2/server/repository/client_repository.php b/public/lib/classes/oauth2/server/repository/client_repository.php
+index b8ae134a371..efd15dee0ba 100644
+--- a/public/lib/classes/oauth2/server/repository/client_repository.php
++++ b/public/lib/classes/oauth2/server/repository/client_repository.php
+@@ -84,17 +84,54 @@ class client_repository implements ClientRepositoryInterface {
+         $params = [
+             'clientidentifier' => $clientidentifier,
+             'revoked' => client_entity::SECRET_REVOKED_NO,
+-            'now' => time(),
++            'now' => \core\di::get(\core\clock::class)->time(),
+         ];
+ 
+         $secrets = $DB->get_records_select('oauth2_server_client_secrets', $select, $params);
+ 
+         foreach ($secrets as $secret) {
+             if (password_verify($clientsecret, $secret->secret)) {
++                // The secret successfully authenticated the client, so record that it (and the client) was used.
++                $this->log_secret_access((int) $secret->id);
++                $this->log_client_access($clientidentifier);
+                 return true;
+             }
+         }
+ 
+         return false;
+     }
++
++    /**
++     * Record that a client was just accessed (e.g. during an authorization or token exchange flow).
++     *
++     * @param string $clientidentifier The client identifier.
++     * @return void
++     */
++    public function log_client_access(string $clientidentifier): void {
++        global $DB;
++
++        $DB->set_field(
++            'oauth2_server_clients',
++            'lastaccessed',
++            \core\di::get(\core\clock::class)->time(),
++            ['clientidentifier' => $clientidentifier],
++        );
++    }
++
++    /**
++     * Record that a client secret was just used to successfully authenticate a client.
++     *
++     * @param int $secretid The client secret record ID.
++     * @return void
++     */
++    public function log_secret_access(int $secretid): void {
++        global $DB;
++
++        $DB->set_field(
++            'oauth2_server_client_secrets',
++            'lastaccessed',
++            \core\di::get(\core\clock::class)->time(),
++            ['id' => $secretid],
++        );
++    }
+ }
+diff --git a/public/lib/tests/oauth2/server/repository/auth_code_repository_test.php b/public/lib/tests/oauth2/server/repository/auth_code_repository_test.php
+index 4a058993937..b86ea2aa1ce 100644
+--- a/public/lib/tests/oauth2/server/repository/auth_code_repository_test.php
++++ b/public/lib/tests/oauth2/server/repository/auth_code_repository_test.php
+@@ -86,6 +86,9 @@ final class auth_code_repository_test extends \advanced_testcase {
+         $this->assertSame('profile', $record->scopes);
+         $this->assertEquals(0, $record->revoked);
+ 
++        // The client last accessed time is recorded.
++        $this->assertNotEmpty($DB->get_field('oauth2_server_clients', 'lastaccessed', ['clientidentifier' => 'client-id']));
++
+         // Duplicate identifier.
+         $this->expectException(\dml_write_exception::class);
+         $repository->persistNewAuthCode($code);
+diff --git a/public/lib/tests/oauth2/server/repository/client_repository_test.php b/public/lib/tests/oauth2/server/repository/client_repository_test.php
+index b60e5764a89..d67d346b0ec 100644
+--- a/public/lib/tests/oauth2/server/repository/client_repository_test.php
++++ b/public/lib/tests/oauth2/server/repository/client_repository_test.php
+@@ -197,6 +197,58 @@ final class client_repository_test extends \advanced_testcase {
+         );
+     }
+ 
++    /**
++     * Test that successful client validation records the last accessed time of the client and secret.
++     *
++     * @return void
++     */
++    public function test_validate_client_logs_last_accessed(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $clock = $this->mock_clock_with_frozen();
++
++        $repository = new client_repository();
++        $DB->insert_record('oauth2_server_clients', (object) [
++            'name' => 'Confidential Client',
++            'clientidentifier' => 'client-conf',
++            'ownercontext' => \context_system::instance()->id,
++            'status' => client_entity::STATUS_ACTIVE,
++            'isconfidential' => 1,
++            'granttypes' => client_entity::GRANT_TYPE_AUTHORIZATION_CODE,
++            'timecreated' => time(),
++            'scopes' => '',
++        ]);
++        $usedid = $DB->insert_record('oauth2_server_client_secrets', (object) [
++            'clientidentifier' => 'client-conf',
++            'secret' => password_hash('supersecret', PASSWORD_DEFAULT),
++            'revoked' => client_entity::SECRET_REVOKED_NO,
++            'expirytime' => $clock->time() + 3600,
++            'timecreated' => $clock->time(),
++        ]);
++        $otherid = $DB->insert_record('oauth2_server_client_secrets', (object) [
++            'clientidentifier' => 'client-conf',
++            'secret' => password_hash('othersecret', PASSWORD_DEFAULT),
++            'revoked' => client_entity::SECRET_REVOKED_NO,
++            'expirytime' => $clock->time() + 3600,
++            'timecreated' => $clock->time(),
++        ]);
++
++        // A failed validation does not record anything.
++        $this->assertFalse($repository->validateClient('client-conf', 'wrongsecret', null));
++        $this->assertNull($DB->get_field('oauth2_server_clients', 'lastaccessed', ['clientidentifier' => 'client-conf']));
++        $this->assertNull($DB->get_field('oauth2_server_client_secrets', 'lastaccessed', ['id' => $usedid]));
++
++        $clock->bump(10);
++        $this->assertTrue($repository->validateClient('client-conf', 'supersecret', null));
++        $this->assertEquals(
++            $clock->time(),
++            $DB->get_field('oauth2_server_clients', 'lastaccessed', ['clientidentifier' => 'client-conf']),
++        );
++        $this->assertEquals($clock->time(), $DB->get_field('oauth2_server_client_secrets', 'lastaccessed', ['id' => $usedid]));
++        $this->assertNull($DB->get_field('oauth2_server_client_secrets', 'lastaccessed', ['id' => $otherid]));
++    }
++
+     /**
+      * Data provider for validateClient tests.
+      *

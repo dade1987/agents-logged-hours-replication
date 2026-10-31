@@ -1,0 +1,29 @@
+You are a software engineer fixing an issue in MariaDB Server (C/C++). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot build MariaDB or run its test suite. Read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update mysql-test tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDEV-41022: Wildcard term returns no rows when combined with a phrase in  boolean search
+
+In BOOLEAN MODE, an InnoDB full-text query that contains a quoted phrase followed by an un-prefixed wildcard term (for example "zzzz" aut*) fails to match rows whose words are still in the in-memory FTS index cache, i.e. rows inserted or updated since the cache was last synced to the auxiliary index tables. The same rows are matched once they have been flushed to disk (OPTIMIZE TABLE with innodb_optimize_fulltext_only=ON, cache size limit reached, or server restart).
+
+The bug is triggered by the ordering of the terms only. The following variants of the same query all return the row correctly:
+* the wildcard term placed before the phrase: aut* "zzzz"
+* the wildcard term marked as required: "zzzz" +aut*
+* an exact word instead of a wildcard: "zzzz" auth
+* the wildcard term on its own: aut*
+
+{code:sql}
+CREATE TABLE t (id INT AUTO_INCREMENT PRIMARY KEY, txt TEXT, FULLTEXT(txt)) ENGINE=InnoDB;
+INSERT INTO t (txt) VALUES ('auth code out');
+SELECT id FROM t WHERE MATCH(txt) AGAINST('"zzzz" aut*' IN BOOLEAN MODE);   -- empty (wrong)
+SELECT id FROM t WHERE MATCH(txt) AGAINST('aut* "zzzz"' IN BOOLEAN MODE);   -- 1
+SELECT id FROM t WHERE MATCH(txt) AGAINST('"zzzz" +aut*' IN BOOLEAN MODE);  -- 1
+SET GLOBAL innodb_optimize_fulltext_only=ON; OPTIMIZE TABLE t;
+SELECT id FROM t WHERE MATCH(txt) AGAINST('"zzzz" aut*' IN BOOLEAN MODE);   -- 1 once synced to disk
+{code}
+

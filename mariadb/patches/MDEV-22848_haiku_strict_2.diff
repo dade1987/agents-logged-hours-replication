@@ -1,0 +1,23 @@
+diff --git a/sql/sys_vars.cc b/sql/sys_vars.cc
+index 957e231c..e1e59783 100644
+--- a/sql/sys_vars.cc
++++ b/sql/sys_vars.cc
+@@ -2036,7 +2036,17 @@ Sys_var_gtid_slave_pos::do_check(THD *thd, set_var *var)
+     return true;
+   if (!(res= var->value->val_str(&str)))
+     return true;
+-  if (thd->in_active_multi_stmt_transaction())
++  /*
++    Updating gtid_slave_pos commits internally (truncate_state_table() and
++    record_gtid() call trans_commit()/ha_commit_trans() on the session).
++    With autocommit=0 that would silently end the session's transaction
++    state and leave engines such as InnoDB registered for 2PC inconsistently
++    with the transaction, which later trips asserts in innobase_xa_prepare()
++    and innobase_savepoint() (MDEV-22848). So refuse the update whenever the
++    session is in multi-statement transaction mode, not only when a
++    transaction is already active.
++  */
++  if (thd->in_multi_stmt_transaction_mode())
+   {
+     my_error(ER_CANT_DO_THIS_DURING_AN_TRANSACTION, MYF(0));
+     return true;

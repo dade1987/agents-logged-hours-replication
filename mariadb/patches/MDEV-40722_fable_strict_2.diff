@@ -1,0 +1,197 @@
+diff --git a/mysql-test/suite/compat/oracle/r/sp-package-security.result b/mysql-test/suite/compat/oracle/r/sp-package-security.result
+index c08b78cb..c68143c7 100644
+--- a/mysql-test/suite/compat/oracle/r/sp-package-security.result
++++ b/mysql-test/suite/compat/oracle/r/sp-package-security.result
+@@ -320,3 +320,36 @@ SESSION_USER()	CURRENT_USER()	msg
+ root@localhost	root@localhost	p1.p1
+ DROP PACKAGE p1;
+ DROP USER xxx@localhost;
++#
++# MDEV-40722 DROP PACKAGE leaves PACKAGE BODY grant in mysql.procs_priv
++#
++CREATE PACKAGE pkg1 AS
++FUNCTION f RETURN VARCHAR2(64);
++END;
++$$
++CREATE PACKAGE BODY pkg1 AS
++FUNCTION f RETURN VARCHAR2(64) AS
++BEGIN
++RETURN 'benign';
++END;
++END;
++$$
++CREATE USER reader@localhost;
++GRANT EXECUTE ON PACKAGE test.pkg1 TO reader@localhost;
++GRANT EXECUTE ON PACKAGE BODY test.pkg1 TO reader@localhost;
++SELECT host,db,user,routine_name,routine_type,proc_priv FROM mysql.procs_priv WHERE user='reader' ORDER BY routine_type;
++host	db	user	routine_name	routine_type	proc_priv
++localhost	test	reader	pkg1	PACKAGE	Execute
++localhost	test	reader	pkg1	PACKAGE BODY	Execute
++SHOW GRANTS FOR reader@localhost;
++Grants for reader@localhost
++GRANT USAGE ON *.* TO "reader"@"localhost"
++GRANT EXECUTE ON PACKAGE "test"."pkg1" TO "reader"@"localhost"
++GRANT EXECUTE ON PACKAGE BODY "test"."pkg1" TO "reader"@"localhost"
++DROP PACKAGE pkg1;
++SELECT host,db,user,routine_name,routine_type,proc_priv FROM mysql.procs_priv WHERE user='reader' ORDER BY routine_type;
++host	db	user	routine_name	routine_type	proc_priv
++SHOW GRANTS FOR reader@localhost;
++Grants for reader@localhost
++GRANT USAGE ON *.* TO "reader"@"localhost"
++DROP USER reader@localhost;
+diff --git a/mysql-test/suite/compat/oracle/t/sp-package-security.test b/mysql-test/suite/compat/oracle/t/sp-package-security.test
+index 583f70af..3e294e36 100644
+--- a/mysql-test/suite/compat/oracle/t/sp-package-security.test
++++ b/mysql-test/suite/compat/oracle/t/sp-package-security.test
+@@ -330,3 +330,31 @@ DELIMITER ;$$
+ CALL p1.p1;
+ DROP PACKAGE p1;
+ DROP USER xxx@localhost;
++
++
++--echo #
++--echo # MDEV-40722 DROP PACKAGE leaves PACKAGE BODY grant in mysql.procs_priv
++--echo #
++
++DELIMITER $$;
++CREATE PACKAGE pkg1 AS
++  FUNCTION f RETURN VARCHAR2(64);
++END;
++$$
++CREATE PACKAGE BODY pkg1 AS
++  FUNCTION f RETURN VARCHAR2(64) AS
++  BEGIN
++    RETURN 'benign';
++  END;
++END;
++$$
++DELIMITER ;$$
++CREATE USER reader@localhost;
++GRANT EXECUTE ON PACKAGE test.pkg1 TO reader@localhost;
++GRANT EXECUTE ON PACKAGE BODY test.pkg1 TO reader@localhost;
++SELECT host,db,user,routine_name,routine_type,proc_priv FROM mysql.procs_priv WHERE user='reader' ORDER BY routine_type;
++SHOW GRANTS FOR reader@localhost;
++DROP PACKAGE pkg1;
++SELECT host,db,user,routine_name,routine_type,proc_priv FROM mysql.procs_priv WHERE user='reader' ORDER BY routine_type;
++SHOW GRANTS FOR reader@localhost;
++DROP USER reader@localhost;
+diff --git a/sql/sql_acl.cc b/sql/sql_acl.cc
+index 3dc5f391..d2d3276c 100644
+--- a/sql/sql_acl.cc
++++ b/sql/sql_acl.cc
+@@ -11761,6 +11761,48 @@ Silence_routine_definer_errors::handle_condition(
+ }
+ 
+ 
++/*
++  Remove all privileges for the routine of the given type (sph)
++  with the given name from the in-memory grant hash and from
++  the mysql.procs_priv table. The caller must have opened and locked
++  the grant tables and must hold LOCK_grant and acl_cache->lock.
++*/
++static void sp_revoke_privileges_internal(THD *thd, TABLE *procs_priv_table,
++                                          const char *sp_db,
++                                          const char *sp_name,
++                                          const Sp_handler *sph)
++{
++  uint counter, revoked;
++  HASH *hash= sph->get_priv_hash();
++
++  /* Remove procedure access */
++  do
++  {
++    for (counter= 0, revoked= 0 ; counter < hash->records ; )
++    {
++      GRANT_NAME *grant_proc= (GRANT_NAME*) my_hash_element(hash, counter);
++      if (!my_strcasecmp(&my_charset_utf8mb3_bin, grant_proc->db, sp_db) &&
++	  !my_strcasecmp(system_charset_info, grant_proc->tname, sp_name))
++      {
++        LEX_USER lex_user;
++	lex_user.user.str= grant_proc->user;
++	lex_user.user.length= strlen(grant_proc->user);
++        lex_user.host.str= safe_str(grant_proc->host.hostname);
++        lex_user.host.length= strlen(lex_user.host.str);
++        if (replace_routine_table(thd, grant_proc, procs_priv_table, lex_user,
++                                  grant_proc->db, grant_proc->tname,
++                                  sph, ALL_KNOWN_ACL, 1) == 0)
++	{
++	  revoked= 1;
++	  continue;
++	}
++      }
++      counter++;
++    }
++  } while (revoked);
++}
++
++
+ /**
+   Revoke privileges for all users on a stored procedure.  Use an error handler
+   that converts errors about missing grants into warnings.
+@@ -11781,9 +11823,7 @@ Silence_routine_definer_errors::handle_condition(
+ bool sp_revoke_privileges(THD *thd, const char *sp_db, const char *sp_name,
+                           const Sp_handler *sph)
+ {
+-  uint counter, revoked;
+   int result;
+-  HASH *hash= sph->get_priv_hash();
+   Silence_routine_definer_errors error_handler;
+   DBUG_ENTER("sp_revoke_privileges");
+ 
+@@ -11802,32 +11842,17 @@ bool sp_revoke_privileges(THD *thd, const char *sp_db, const char *sp_name,
+   mysql_rwlock_wrlock(&LOCK_grant);
+   mysql_mutex_lock(&acl_cache->lock);
+ 
+-  /* Remove procedure access */
+-  do
+-  {
+-    for (counter= 0, revoked= 0 ; counter < hash->records ; )
+-    {
+-      GRANT_NAME *grant_proc= (GRANT_NAME*) my_hash_element(hash, counter);
+-      if (!my_strcasecmp(&my_charset_utf8mb3_bin, grant_proc->db, sp_db) &&
+-	  !my_strcasecmp(system_charset_info, grant_proc->tname, sp_name))
+-      {
+-        LEX_USER lex_user;
+-	lex_user.user.str= grant_proc->user;
+-	lex_user.user.length= strlen(grant_proc->user);
+-        lex_user.host.str= safe_str(grant_proc->host.hostname);
+-        lex_user.host.length= strlen(lex_user.host.str);
+-        if (replace_routine_table(thd, grant_proc,
+-                                  tables.procs_priv_table().table(), lex_user,
+-                                  grant_proc->db, grant_proc->tname,
+-                                  sph, ALL_KNOWN_ACL, 1) == 0)
+-	{
+-	  revoked= 1;
+-	  continue;
+-	}
+-      }
+-      counter++;
+-    }
+-  } while (revoked);
++  sp_revoke_privileges_internal(thd, tables.procs_priv_table().table(),
++                                sp_db, sp_name, sph);
++
++  /*
++    DROP PACKAGE also drops the corresponding PACKAGE BODY (if any),
++    so the privileges granted on the PACKAGE BODY must be removed too.
++    MDEV-40722.
++  */
++  if (sph->type() == SP_TYPE_PACKAGE)
++    sp_revoke_privileges_internal(thd, tables.procs_priv_table().table(),
++                                  sp_db, sp_name, &sp_handler_package_body);
+ 
+   mysql_mutex_unlock(&acl_cache->lock);
+   mysql_rwlock_unlock(&LOCK_grant);
+diff --git a/sql/sql_parse.cc b/sql/sql_parse.cc
+index 9b1337ff..d4ed003a 100644
+--- a/sql/sql_parse.cc
++++ b/sql/sql_parse.cc
+@@ -6775,7 +6775,7 @@ drop_routine(THD *thd, LEX *lex)
+   if (sp_result != SP_KEY_NOT_FOUND &&
+       sp_automatic_privileges && !opt_noacl &&
+       sp_revoke_privileges(thd, lex->spname->m_db.str, lex->spname->m_name.str,
+-                           Sp_handler::handler(lex->sql_command)))
++                           sph))
+   {
+     push_warning(thd, Sql_condition::WARN_LEVEL_WARN,
+                  ER_PROC_AUTO_REVOKE_FAIL,

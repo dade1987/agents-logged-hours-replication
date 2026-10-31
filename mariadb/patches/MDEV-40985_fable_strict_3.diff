@@ -1,0 +1,94 @@
+diff --git a/mysql-test/suite/versioning/r/alter.result b/mysql-test/suite/versioning/r/alter.result
+index 52c35f47..97c3bd40 100644
+--- a/mysql-test/suite/versioning/r/alter.result
++++ b/mysql-test/suite/versioning/r/alter.result
+@@ -881,3 +881,32 @@ t1	CREATE TABLE `t1` (
+ ) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci WITH SYSTEM VERSIONING
+ drop table t1;
+ # End of 10.5 tests
++#
++# MDEV-40985 row_end access out of bounds in ALTER TABLE
++#
++CREATE TABLE t1 (c1 TEXT, v1 INT AS(1), v2 INT AS(1), v3 INT AS(1),
++v4 INT AS(1), v5 INT AS(1), FULLTEXT(c1))
++WITH SYSTEM VERSIONING ENGINE=InnoDB;
++INSERT INTO t1 (c1) VALUES ('foo'),('bar');
++ALTER TABLE t1 FORCE;
++CHECK TABLE t1;
++Table	Op	Msg_type	Msg_text
++test.t1	check	status	OK
++SELECT c1 FROM t1 WHERE MATCH(c1) AGAINST('foo');
++c1
++foo
++DROP TABLE t1;
++CREATE TABLE t1 (c1 TEXT, v1 INT AS(1), v2 INT AS(1), v3 INT AS(1))
++WITH SYSTEM VERSIONING ENGINE=InnoDB;
++INSERT INTO t1 (c1) VALUES ('foo'),('bar');
++DELETE FROM t1;
++ALTER TABLE t1 ADD FULLTEXT(c1);
++CHECK TABLE t1;
++Table	Op	Msg_type	Msg_text
++test.t1	check	status	OK
++ALTER TABLE t1 FORCE;
++CHECK TABLE t1;
++Table	Op	Msg_type	Msg_text
++test.t1	check	status	OK
++DROP TABLE t1;
++# End of 10.6 tests
+diff --git a/mysql-test/suite/versioning/t/alter.test b/mysql-test/suite/versioning/t/alter.test
+index 85d40b1e..94ab54a6 100644
+--- a/mysql-test/suite/versioning/t/alter.test
++++ b/mysql-test/suite/versioning/t/alter.test
+@@ -781,3 +781,27 @@ show create table t1;
+ drop table t1;
+ 
+ --echo # End of 10.5 tests
++
++--echo #
++--echo # MDEV-40985 row_end access out of bounds in ALTER TABLE
++--echo #
++CREATE TABLE t1 (c1 TEXT, v1 INT AS(1), v2 INT AS(1), v3 INT AS(1),
++                 v4 INT AS(1), v5 INT AS(1), FULLTEXT(c1))
++WITH SYSTEM VERSIONING ENGINE=InnoDB;
++INSERT INTO t1 (c1) VALUES ('foo'),('bar');
++ALTER TABLE t1 FORCE;
++CHECK TABLE t1;
++SELECT c1 FROM t1 WHERE MATCH(c1) AGAINST('foo');
++DROP TABLE t1;
++
++CREATE TABLE t1 (c1 TEXT, v1 INT AS(1), v2 INT AS(1), v3 INT AS(1))
++WITH SYSTEM VERSIONING ENGINE=InnoDB;
++INSERT INTO t1 (c1) VALUES ('foo'),('bar');
++DELETE FROM t1;
++ALTER TABLE t1 ADD FULLTEXT(c1);
++CHECK TABLE t1;
++ALTER TABLE t1 FORCE;
++CHECK TABLE t1;
++DROP TABLE t1;
++
++--echo # End of 10.6 tests
+diff --git a/storage/innobase/handler/handler0alter.cc b/storage/innobase/handler/handler0alter.cc
+index 99413f79..6b6d352d 100644
+--- a/storage/innobase/handler/handler0alter.cc
++++ b/storage/innobase/handler/handler0alter.cc
+@@ -4322,8 +4322,19 @@ ha_innobase_inplace_ctx::create_key_defs(
+ 		index->fields[0].descending = false;
+ 		index->fields[0].is_v_col = false;
+ 		if (nfields == 2) {
+-			index->fields[1].col_no
++			/* Convert the MariaDB field number of row_end
++			into the InnoDB stored column number by skipping
++			any virtual columns that precede it. */
++			const uint end_fieldno
+ 				= altered_table->s->vers.end_fieldno;
++			ulint num_v = 0;
++			for (uint i = 0; i < end_fieldno; i++) {
++				if (!altered_table->field[i]
++				    ->stored_in_db()) {
++					num_v++;
++				}
++			}
++			index->fields[1].col_no = end_fieldno - num_v;
+ 			index->fields[1].prefix_len = 0;
+ 			index->fields[1].descending = false;
+ 			index->fields[1].is_v_col = false;

@@ -1,0 +1,26 @@
+diff --git a/storage/innobase/fts/fts0que.cc b/storage/innobase/fts/fts0que.cc
+index b8f22076..a73e7b85 100644
+--- a/storage/innobase/fts/fts0que.cc
++++ b/storage/innobase/fts/fts0que.cc
+@@ -2720,6 +2720,10 @@ fts_query_phrase_search(
+ 	mem_heap_t*		heap = mem_heap_create(sizeof(fts_string_t));
+ 	ib_alloc_t*		heap_alloc;
+ 	ulint			num_token;
++	/* query->flags is only meaningful for the current phrase; restore
++	the caller's value on exit so that a following wildcard term is
++	searched with fts_cache_find_wildcard() and not skipped. */
++	const ulint		saved_flags = query->flags;
+ 
+ 	heap_alloc = ib_heap_allocator_create(heap);
+ 
+@@ -2893,6 +2897,10 @@ fts_query_phrase_search(
+ 	/* Don't need it anymore. */
+ 	query->matched = NULL;
+ 
++	/* Restore the flags of the enclosing query, so that a
++	following wildcard term is searched with fts_cache_find_wildcard(). */
++	query->flags = saved_flags;
++
+ 	return(query->error);
+ }
+ 

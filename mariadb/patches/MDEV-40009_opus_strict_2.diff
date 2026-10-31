@@ -1,0 +1,92 @@
+diff --git a/mysql-test/suite/sys_vars/r/path_basic.result b/mysql-test/suite/sys_vars/r/path_basic.result
+index ce70edf2..f82a75b0 100644
+--- a/mysql-test/suite/sys_vars/r/path_basic.result
++++ b/mysql-test/suite/sys_vars/r/path_basic.result
+@@ -572,3 +572,20 @@ set path 'test';
+ end//
+ drop package pkg;
+ SET @@global.path = @start_global_value;
++#
++# MDEV-40009 SIGSEGV in Sql_path::from_text
++#
++SET @save_path= @@session.path;
++SET NAMES swe7;
++SET PATH '`';
++SET PATH 'abc,def';
++SET NAMES utf8;
++SELECT @@session.path;
++@@session.path
++`abc`,`def`
++SET PATH _ucs2 0x0061006200630020002C0020006400650066;
++SELECT @@session.path;
++@@session.path
++`abc`,`def`
++SET @@session.path= @save_path;
++SET NAMES utf8;
+diff --git a/mysql-test/suite/sys_vars/t/path_basic.test b/mysql-test/suite/sys_vars/t/path_basic.test
+index 83050d78..5201432f 100644
+--- a/mysql-test/suite/sys_vars/t/path_basic.test
++++ b/mysql-test/suite/sys_vars/t/path_basic.test
+@@ -421,3 +421,18 @@ delimiter ;//
+ drop package pkg;
+ 
+ SET @@global.path = @start_global_value;
++
++--echo #
++--echo # MDEV-40009 SIGSEGV in Sql_path::from_text
++--echo #
++SET @save_path= @@session.path;
++SET NAMES swe7;
++# 0x60 is a letter (E with acute) in swe7, not a backtick
++SET PATH '`';
++SET PATH 'abc,def';
++SET NAMES utf8;
++SELECT @@session.path;
++SET PATH _ucs2 0x0061006200630020002C0020006400650066;
++SELECT @@session.path;
++SET @@session.path= @save_path;
++SET NAMES utf8;
+diff --git a/sql/sql_path.cc b/sql/sql_path.cc
+index 982fbffa..046211c0 100644
+--- a/sql/sql_path.cc
++++ b/sql/sql_path.cc
+@@ -283,6 +283,8 @@ bool Sql_path::from_text(const system_variables &sv, String *str)
+   while (curr < end)
+   {
+     auto len = cs->charlen(curr, end);
++    if (len <= 0)
++      goto err_bad_val; // Not a well-formed utf8mb3 character
+ 
+     switch (state)
+     {
+diff --git a/sql/sys_vars.inl b/sql/sys_vars.inl
+index 0f8aa1eb..9d95dbfc 100644
+--- a/sql/sys_vars.inl
++++ b/sql/sys_vars.inl
+@@ -3099,10 +3099,23 @@ class Sys_var_path: public sys_var
+ 
+   static bool from_item(THD *thd, Sql_path *path, Item *item)
+   {
+-    String *value, buffer;
+-    if (!(value= item->val_str_ascii(&buffer)))
++    /*
++      Sql_path::from_text() parses the value as utf8mb3,
++      so convert the value from its own character set to utf8mb3.
++      Using val_str_ascii() here was wrong: it converts non-ASCII
++      character sets (e.g. swe7, ucs2) to latin1, which can produce
++      byte sequences that are not well-formed utf8mb3.
++    */
++    StringBuffer<STRING_BUFFER_USUAL_SIZE> tmp;
++    String *res;
++    uint errors;
++    if (!(res= item->val_str(&tmp)))
++      return true;
++    StringBuffer<STRING_BUFFER_USUAL_SIZE> value;
++    if (value.copy(res->ptr(), res->length(), item->collation.collation,
++                   &my_charset_utf8mb3_general_ci, &errors))
+       return true;
+-    return path->from_text(thd->variables, value);
++    return path->from_text(thd->variables, &value);
+   }
+ 
+   static const uchar *make_value_ptr(THD *thd, const Sql_path &path)

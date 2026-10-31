@@ -1,0 +1,78 @@
+diff --git a/public/lib/classes/oauth2/server/client_manager.php b/public/lib/classes/oauth2/server/client_manager.php
+index ff0353dd677..0ae5ed098e8 100644
+--- a/public/lib/classes/oauth2/server/client_manager.php
++++ b/public/lib/classes/oauth2/server/client_manager.php
+@@ -135,6 +135,7 @@ class client_manager {
+         $transaction = $this->db->start_delegated_transaction();
+         $record->id = $this->db->insert_record('oauth2_server_clients', $record);
+         $this->insert_redirect_uris($record->clientidentifier, $redirecturis);
++        add_to_config_log('oauth2_client_create', null, $record->clientidentifier, 'core');
+         $transaction->allow_commit();
+ 
+         // Everything the entity needs is already in hand, so build it rather than reading it back.
+@@ -198,6 +199,7 @@ class client_manager {
+         }
+ 
+         $client = $this->get_client_record($clientid);
++        $original = clone $client;
+ 
+         foreach ($filteredupdates as $field => $value) {
+             $client->{$field} = $value;
+@@ -214,6 +216,17 @@ class client_manager {
+         $client->timemodified = $this->clock->time();
+ 
+         $this->db->update_record('oauth2_server_clients', $client);
++
++        foreach (['name', 'description', 'ispkcerequired', 'scopes'] as $field) {
++            if ((string) $original->{$field} !== (string) $client->{$field}) {
++                add_to_config_log(
++                    "oauth2_client_{$field}",
++                    "{$client->clientidentifier}: {$original->{$field}}",
++                    "{$client->clientidentifier}: {$client->{$field}}",
++                    'core',
++                );
++            }
++        }
+     }
+ 
+     /**
+@@ -265,6 +278,7 @@ class client_manager {
+             $params,
+         );
+ 
++        add_to_config_log('oauth2_client_disable', null, $client->clientidentifier, 'core');
+         $transaction->allow_commit();
+     }
+ 
+@@ -285,6 +299,7 @@ class client_manager {
+         $client->timemodified = $this->clock->time();
+ 
+         $this->db->update_record('oauth2_server_clients', $client);
++        add_to_config_log('oauth2_client_reactivate', null, $client->clientidentifier, 'core');
+     }
+ 
+     /**
+@@ -322,6 +337,7 @@ class client_manager {
+         $this->db->delete_records('oauth2_server_client_redirect_uris', $params);
+         $this->db->delete_records('oauth2_server_clients', ['id' => $clientid]);
+ 
++        add_to_config_log('oauth2_client_delete', $client->clientidentifier, null, 'core');
+         $transaction->allow_commit();
+     }
+ 
+@@ -455,6 +471,7 @@ class client_manager {
+         }
+ 
+         $this->insert_redirect_uris($client->clientidentifier, [$uri]);
++        add_to_config_log('oauth2_client_redirect_uri_add', null, "{$client->clientidentifier}: {$uri}", 'core');
+     }
+ 
+     /**
+@@ -478,6 +495,7 @@ class client_manager {
+ 
+         [$insql, $params] = $this->db->get_in_or_equal($matches, SQL_PARAMS_NAMED);
+         $this->db->delete_records_select('oauth2_server_client_redirect_uris', "id {$insql}", $params);
++        add_to_config_log('oauth2_client_redirect_uri_remove', "{$client->clientidentifier}: {$uri}", null, 'core');
+     }
+ 
+     /**

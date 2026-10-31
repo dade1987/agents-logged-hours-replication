@@ -1,0 +1,64 @@
+diff --git a/public/backup/util/loggers/file_logger.class.php b/public/backup/util/loggers/file_logger.class.php
+index 797ffa0e29f..c925e1df92d 100644
+--- a/public/backup/util/loggers/file_logger.class.php
++++ b/public/backup/util/loggers/file_logger.class.php
+@@ -56,21 +56,51 @@ class file_logger extends base_logger {
+         }
+     }
+ 
+-    public function __sleep() {
++    /**
++     * Serialize the logger, closing the file handle and storing the log path relative to the backup temp dir when possible.
++     *
++     * @return array
++     */
++    public function __serialize(): array {
++        global $CFG;
+         if (is_resource($this->fhandle)) {
+             // Blindy close the file handler before serialization.
+             @fclose($this->fhandle);
+             $this->fhandle = null;
+         }
+-        return array('level', 'showdate', 'showlevel', 'next', 'fullpath');
++        $path = $this->fullpath;
++        $tempdir = rtrim($CFG->backuptempdir, '/\\');
++        if ($path !== null && $tempdir !== '' && dirname($path) === $tempdir) {
++            // Host specific location, store only the filename.
++            $path = basename($path);
++        }
++        return [
++            'level' => $this->level,
++            'showdate' => $this->showdate,
++            'showlevel' => $this->showlevel,
++            'next' => $this->next,
++            'fullpath' => $path,
++        ];
+     }
+ 
+-    public function __wakeup() {
+-        // If the stored path no longer exists, reconstruct it using the current backup temp dir.
+-        if (!empty($this->fullpath) && !file_exists(dirname($this->fullpath))) {
+-            $filename = basename($this->fullpath);
+-            $backuptempdir = make_backup_temp_directory('');
+-            $this->fullpath = $backuptempdir . '/' . $filename;
++    /**
++     * Restore the logger, rebuilding the full path from the current backup temp dir when needed.
++     *
++     * @param array $data
++     */
++    public function __unserialize(array $data): void {
++        $this->level = $data['level'];
++        $this->showdate = $data['showdate'];
++        $this->showlevel = $data['showlevel'];
++        $this->next = $data['next'];
++        $this->fullpath = $data['fullpath'];
++
++        if (!empty($this->fullpath)) {
++            $isrelative = (basename($this->fullpath) === $this->fullpath);
++            // Relative paths, or absolute ones whose directory no longer exists, use the current backup temp dir.
++            if ($isrelative || !file_exists(dirname($this->fullpath))) {
++                $this->fullpath = make_backup_temp_directory('') . '/' . basename($this->fullpath);
++            }
+         }
+ 
+         if ($this->level > backup::LOG_NONE) { // Only create the file if we are going to log something

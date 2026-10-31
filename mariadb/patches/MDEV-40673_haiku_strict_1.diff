@@ -1,0 +1,43 @@
+diff --git a/sql/item_jsonfunc.cc b/sql/item_jsonfunc.cc
+index ade54b2c..d67a41bf 100644
+--- a/sql/item_jsonfunc.cc
++++ b/sql/item_jsonfunc.cc
+@@ -3090,7 +3090,7 @@ String *Item_func_json_merge_patch::val_str(String *str)
+         goto cont_point;
+ 
+       merge_to_null= false;
+-      str->set(js2->ptr(), js2->length(), js2->charset());
++      str->copy(js2->ptr(), js2->length(), js2->charset());
+       goto cont_point;
+     }
+ 
+@@ -3360,7 +3360,11 @@ String *Item_func_json_type::val_str(String *str)
+   if (je.s.error)
+     goto error;
+ 
+-  str->set(type, strlen(type), &my_charset_utf8mb3_general_ci);
++  if (str->copy(type, strlen(type), &my_charset_utf8mb3_general_ci))
++  {
++    null_value= 1;
++    return 0;
++  }
+   return str;
+ 
+ error:
+diff --git a/sql/item_timefunc.cc b/sql/item_timefunc.cc
+index 8dbefcf9..3297d9e2 100644
+--- a/sql/item_timefunc.cc
++++ b/sql/item_timefunc.cc
+@@ -3785,7 +3785,11 @@ String *Item_func_get_format::val_str_ascii(String *str)
+ 		                     format_name, val_len))
+     {
+       const char *format_str= get_date_time_format_str(format, type);
+-      str->set(format_str, (uint) strlen(format_str), &my_charset_numeric);
++      if (str->copy(format_str, (uint) strlen(format_str), &my_charset_numeric))
++      {
++        null_value= 1;
++        return 0;
++      }
+       return str;
+     }
+   }

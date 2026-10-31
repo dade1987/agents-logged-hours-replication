@@ -1,0 +1,79 @@
+diff --git a/public/customfield/field/textarea/classes/data_controller.php b/public/customfield/field/textarea/classes/data_controller.php
+index f133cf1b4cb..804f8c03174 100644
+--- a/public/customfield/field/textarea/classes/data_controller.php
++++ b/public/customfield/field/textarea/classes/data_controller.php
+@@ -53,7 +53,10 @@ class data_controller extends \core_customfield\data_controller {
+     protected function value_editor_options() {
+         /** @var field_controller $field */
+         $field = $this->get_field();
+-        return $field->value_editor_options($this->get('id') ? $this->get_context() : null);
++        // Always pass the data context to the editor (even when the data record does not exist yet). The context is
++        // derived from the instance (for example the course) when it is known, so that the editor and its plugins
++        // (e.g. H5P) check capabilities in the right context rather than falling back to the system context.
++        return $field->value_editor_options($this->get_context());
+     }
+ 
+     /**
+@@ -140,11 +143,17 @@ class data_controller extends \core_customfield\data_controller {
+                 'value', $this->get('id'));
+             $value = $temp->field_editor;
+         } else {
+-            $text = $this->get_field()->get_configdata_property('defaultvalue');
+-            $format = $this->get_field()->get_configdata_property('defaultvalueformat');
++            // The default value (and its embedded files) is stored in the field configuration context, so prepare
++            // the editor content using that context rather than the (possibly different) data context.
++            /** @var field_controller $field */
++            $field = $this->get_field();
++            $defaultoptions = $field->value_editor_options();
++            $defaultcontext = $defaultoptions['context'];
++            $text = $field->get_configdata_property('defaultvalue');
++            $format = $field->get_configdata_property('defaultvalueformat');
+             $temp = (object) ['field' => $text, 'fieldformat' => $format, 'fieldtrust' => trusttext_trusted($context)];
+-            file_prepare_standard_editor($temp, 'field', $textoptions, $context, 'customfield_textarea',
+-                'defaultvalue', $this->get_field()->get('id'));
++            file_prepare_standard_editor($temp, 'field', $defaultoptions, $defaultcontext, 'customfield_textarea',
++                'defaultvalue', $field->get('id'));
+             $value = $temp->field_editor;
+         }
+         $instance->{$this->get_form_element_name()} = $value;
+diff --git a/public/customfield/field/textarea/tests/plugin_test.php b/public/customfield/field/textarea/tests/plugin_test.php
+index 3454c6c6ce5..0156f232b74 100644
+--- a/public/customfield/field/textarea/tests/plugin_test.php
++++ b/public/customfield/field/textarea/tests/plugin_test.php
+@@ -179,6 +179,36 @@ final class plugin_test extends \advanced_testcase {
+         $this->assertNull(\core_customfield\data_controller::create($this->cfdata[1]->get('id'))->export_value());
+     }
+ 
++    /**
++     * Test that the editor options always use the data context, even before the data record has been saved
++     */
++    public function test_value_editor_options_context(): void {
++        $rcm = new \ReflectionMethod(data_controller::class, 'value_editor_options');
++
++        // Existing data record: context is the course context.
++        $options = $rcm->invoke($this->cfdata[1]);
++        $this->assertEquals(\context_course::instance($this->courses[1]->id)->id, $options['context']->id);
++
++        // Data record that does not exist yet, but the instance (course) is known: context must still be the
++        // course context (and not fall back to the system / configuration context).
++        $d = \core_customfield\data_controller::create(0, (object)['instanceid' => $this->courses[3]->id],
++            $this->cfields[3]);
++        $this->assertEmpty($d->get('id'));
++        $options = $rcm->invoke($d);
++        $this->assertEquals(\context_course::instance($this->courses[3]->id)->id, $options['context']->id);
++
++        // The default value is still available when preparing the form for a non-existing data record.
++        $instance = (object)['id' => $this->courses[3]->id];
++        $d->instance_form_before_set_data($instance);
++        $formelementname = (new \ReflectionMethod(data_controller::class, 'get_form_element_name'))->invoke($d);
++        $this->assertEquals('Value3', $instance->{$formelementname}['text']);
++
++        // Instance is not known yet (for example a new course): fall back to the system context.
++        $d = \core_customfield\data_controller::create(0, null, $this->cfields[3]);
++        $options = $rcm->invoke($d);
++        $this->assertEquals(\context_system::instance()->id, $options['context']->id);
++    }
++
+     /**
+      * Test for data_controller::get_value and export_value
+      */

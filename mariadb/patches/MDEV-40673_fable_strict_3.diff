@@ -1,0 +1,115 @@
+diff --git a/mysql-test/main/func_concat.result b/mysql-test/main/func_concat.result
+index 4b91fb97..c725ab70 100644
+--- a/mysql-test/main/func_concat.result
++++ b/mysql-test/main/func_concat.result
+@@ -304,3 +304,52 @@ f
+ NULL
+ DROP TABLE t1;
+ # End of 10.5 tests
++# Start of 10.11 tests
++#
++# MDEV-40673 CONCAT silently returns the wrong string, dropping its
++# first argument's value, when that argument is JSON_TYPE() or
++# GET_FORMAT()
++#
++SELECT CONCAT(JSON_TYPE('{"a":1}'), 'X');
++CONCAT(JSON_TYPE('{"a":1}'), 'X')
++OBJECTX
++SELECT CONCAT('P', JSON_TYPE('{"a":1}'));
++CONCAT('P', JSON_TYPE('{"a":1}'))
++POBJECT
++SELECT CONCAT(JSON_TYPE('{"a":1}'), JSON_TYPE('[1]'));
++CONCAT(JSON_TYPE('{"a":1}'), JSON_TYPE('[1]'))
++OBJECTARRAY
++SELECT CONCAT(JSON_TYPE('{"a":1}'), 'A', 'B');
++CONCAT(JSON_TYPE('{"a":1}'), 'A', 'B')
++OBJECTAB
++SELECT LENGTH(CONCAT(JSON_TYPE('{"a":1}'), 'X'));
++LENGTH(CONCAT(JSON_TYPE('{"a":1}'), 'X'))
++7
++SELECT CONCAT(JSON_TYPE('{"a":1}'), '');
++CONCAT(JSON_TYPE('{"a":1}'), '')
++OBJECT
++SELECT CONCAT(GET_FORMAT(DATE, 'USA'), 'X');
++CONCAT(GET_FORMAT(DATE, 'USA'), 'X')
++%m.%d.%YX
++SELECT CONCAT_WS('-', JSON_TYPE('{"a":1}'), 'X');
++CONCAT_WS('-', JSON_TYPE('{"a":1}'), 'X')
++OBJECT-X
++SET sql_mode='ORACLE';
++SELECT JSON_TYPE('{"a":1}') || 'X';
++JSON_TYPE('{"a":1}') || 'X'
++OBJECTX
++SELECT GET_FORMAT(DATE, 'USA') || 'X';
++GET_FORMAT(DATE, 'USA') || 'X'
++%m.%d.%YX
++SELECT NULL || JSON_TYPE('{"a":1}') || 'X';
++NULL || JSON_TYPE('{"a":1}') || 'X'
++OBJECTX
++SET sql_mode=DEFAULT;
++CREATE TABLE t1 (j JSON);
++INSERT INTO t1 VALUES ('{"a":1}'), ('[1,2]');
++SELECT CONCAT(JSON_TYPE(j), '.') AS c FROM t1;
++c
++OBJECT.
++ARRAY.
++DROP TABLE t1;
++# End of 10.11 tests
+diff --git a/mysql-test/main/func_concat.test b/mysql-test/main/func_concat.test
+index f93b150f..3ae10b88 100644
+--- a/mysql-test/main/func_concat.test
++++ b/mysql-test/main/func_concat.test
+@@ -281,3 +281,32 @@ SELECT CONCAT_WS(' ', a, b, PASSWORD(c)) AS f FROM t1 GROUP BY f WITH ROLLUP;
+ DROP TABLE t1;
+ 
+ --echo # End of 10.5 tests
++
++--echo # Start of 10.11 tests
++
++--echo #
++--echo # MDEV-40673 CONCAT silently returns the wrong string, dropping its
++--echo # first argument's value, when that argument is JSON_TYPE() or
++--echo # GET_FORMAT()
++--echo #
++
++SELECT CONCAT(JSON_TYPE('{"a":1}'), 'X');
++SELECT CONCAT('P', JSON_TYPE('{"a":1}'));
++SELECT CONCAT(JSON_TYPE('{"a":1}'), JSON_TYPE('[1]'));
++SELECT CONCAT(JSON_TYPE('{"a":1}'), 'A', 'B');
++SELECT LENGTH(CONCAT(JSON_TYPE('{"a":1}'), 'X'));
++SELECT CONCAT(JSON_TYPE('{"a":1}'), '');
++SELECT CONCAT(GET_FORMAT(DATE, 'USA'), 'X');
++SELECT CONCAT_WS('-', JSON_TYPE('{"a":1}'), 'X');
++SET sql_mode='ORACLE';
++SELECT JSON_TYPE('{"a":1}') || 'X';
++SELECT GET_FORMAT(DATE, 'USA') || 'X';
++SELECT NULL || JSON_TYPE('{"a":1}') || 'X';
++SET sql_mode=DEFAULT;
++
++CREATE TABLE t1 (j JSON);
++INSERT INTO t1 VALUES ('{"a":1}'), ('[1,2]');
++SELECT CONCAT(JSON_TYPE(j), '.') AS c FROM t1;
++DROP TABLE t1;
++
++--echo # End of 10.11 tests
+diff --git a/sql/item_strfunc.cc b/sql/item_strfunc.cc
+index b4388f12..547a36b3 100644
+--- a/sql/item_strfunc.cc
++++ b/sql/item_strfunc.cc
+@@ -642,7 +642,15 @@ bool Item_func_concat::realloc_result(String *str, uint length) const
+   if (str->alloced_length() >= length)
+     return false; // Alloced space is big enough, nothing to do.
+ 
+-  if (str->alloced_length() == 0)
++  /*
++    alloced_length()==0 does not necessarily mean the string is empty:
++    args[0]->val_str(str) could have re-pointed "str" to a static buffer
++    using String::set() (e.g. JSON_TYPE(), GET_FORMAT()). alloc() empties
++    the string (see Binary_string::real_alloc()), so use it only when there
++    is nothing to preserve. Otherwise fall through to realloc(), which
++    copies the existing bytes into the newly allocated buffer.
++  */
++  if (str->alloced_length() == 0 && str->length() == 0)
+     return str->alloc(length);
+ 
+   /*

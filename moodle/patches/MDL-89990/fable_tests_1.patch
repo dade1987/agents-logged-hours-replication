@@ -1,0 +1,364 @@
+diff --git a/public/admin/tool/oauth2/issuers.php b/public/admin/tool/oauth2/issuers.php
+index 8cee1fc136b..d2787e0a608 100644
+--- a/public/admin/tool/oauth2/issuers.php
++++ b/public/admin/tool/oauth2/issuers.php
+@@ -99,6 +99,7 @@ if ($mform && $mform->is_cancelled()) {
+         $issuer = new core\oauth2\issuer(0, $data);
+         $issuer->create();
+         $issuer = core\oauth2\api::create_endpoints_for_standard_issuer($type, $issuer);
++        core\oauth2\api::add_to_config_log('oauth2_issuer_created', $issuer, null, $issuer->to_record());
+         redirect($PAGE->url, get_string('changessaved'), null, \core\output\notification::NOTIFY_SUCCESS);
+     } else {
+         echo $OUTPUT->header();
+diff --git a/public/lib/classes/oauth2/api.php b/public/lib/classes/oauth2/api.php
+index 260ea355305..8bcaaad824e 100644
+--- a/public/lib/classes/oauth2/api.php
++++ b/public/lib/classes/oauth2/api.php
+@@ -40,6 +40,89 @@ use moodle_exception;
+  */
+ class api {
+ 
++    /**
++     * Add an entry to the admin config log for a change to an OAuth2 object (issuer, endpoint or user field mapping).
++     *
++     * The log entry contains a description of the changed object (and, for updates, the values before
++     * and after the change) so that OAuth2 configuration changes can be reviewed in the config changes report.
++     * Sensitive values (the client secret) are never written to the log.
++     *
++     * @param string $name The config log name, e.g. 'oauth2_issuer_created'.
++     * @param \core\persistent $object The OAuth2 object that was created, updated or deleted.
++     * @param stdClass|null $oldrecord The record before the change (for updates and deletions), or null for creations.
++     * @param stdClass|null $newrecord The record after the change (for creations and updates), or null for deletions.
++     */
++    public static function add_to_config_log(
++        string $name,
++        \core\persistent $object,
++        ?stdClass $oldrecord = null,
++        ?stdClass $newrecord = null,
++    ): void {
++        $sensitive = ['clientsecret'];
++        $ignored = ['id', 'usermodified', 'timecreated', 'timemodified'];
++
++        $describe = function (?stdClass $record) use ($sensitive, $ignored): string {
++            if ($record === null) {
++                return '';
++            }
++            $values = [];
++            foreach ((array) $record as $key => $value) {
++                if (in_array($key, $ignored, true)) {
++                    continue;
++                }
++                if (in_array($key, $sensitive, true)) {
++                    $value = empty($value) ? '' : '********';
++                }
++                $values[$key] = $value;
++            }
++            return json_encode($values, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
++        };
++
++        if ($oldrecord !== null && $newrecord !== null) {
++            // Only log the properties that have actually changed.
++            $oldvalues = (array) $oldrecord;
++            $newvalues = (array) $newrecord;
++            foreach ($ignored as $key) {
++                unset($oldvalues[$key], $newvalues[$key]);
++            }
++            $changed = [];
++            foreach ($newvalues as $key => $value) {
++                if (!array_key_exists($key, $oldvalues) || (string) $oldvalues[$key] !== (string) $value) {
++                    $changed[$key] = true;
++                }
++            }
++            foreach ($oldvalues as $key => $value) {
++                if (!array_key_exists($key, $newvalues)) {
++                    $changed[$key] = true;
++                }
++            }
++            if (empty($changed)) {
++                // Nothing has changed, nothing to log.
++                return;
++            }
++            $oldrecord = (object) (['id' => $oldrecord->id ?? null] + array_intersect_key($oldvalues, $changed));
++            $newrecord = (object) (['id' => $newrecord->id ?? null] + array_intersect_key($newvalues, $changed));
++        }
++
++        // Prefix the log values with the object type and id so the entry can be related to the actual object.
++        // Note: the id is taken from the records as a deleted persistent no longer has an id.
++        $id = $newrecord->id ?? $oldrecord->id ?? $object->get('id');
++        $parts = explode('\\', get_class($object));
++        $prefix = end($parts) . ' ' . $id;
++        if ($object instanceof issuer) {
++            $prefix .= ' (' . $object->get('name') . ')';
++        } else if ($object instanceof endpoint) {
++            $prefix .= ' (' . $object->get('name') . ')';
++        } else if ($object instanceof user_field_mapping) {
++            $prefix .= ' (' . $object->get('externalfield') . ' -> ' . $object->get('internalfield') . ')';
++        }
++
++        $oldvalue = $oldrecord === null ? '' : $prefix . ': ' . $describe($oldrecord);
++        $value = $newrecord === null ? '' : $prefix . ': ' . $describe($newrecord);
++
++        add_to_config_log($name, $oldvalue, $value, 'core');
++    }
++
+     /**
+      * Initializes a record for one of the standard issuers to be displayed in the settings.
+      * The issuer is not yet created in the database.
+@@ -339,8 +422,11 @@ class api {
+             $classname = self::get_service_classname($issuer->get('servicetype'));
+             $classname::discover_endpoints($issuer);
+             self::guess_image($issuer);
++            self::add_to_config_log('oauth2_issuer_created', $issuer, null, $issuer->to_record());
+         } else {
++            $oldrecord = (new issuer($issuer->get('id')))->to_record();
+             $issuer->update();
++            self::add_to_config_log('oauth2_issuer_updated', $issuer, $oldrecord, $issuer->to_record());
+         }
+ 
+         return $issuer;
+@@ -377,9 +463,11 @@ class api {
+     public static function update_endpoint($data) {
+         require_capability('moodle/site:config', context_system::instance());
+         $endpoint = new endpoint(0, $data);
++        $oldrecord = (new endpoint($endpoint->get('id')))->to_record();
+ 
+         // Will throw exceptions on validation failures.
+         $endpoint->update();
++        self::add_to_config_log('oauth2_endpoint_updated', $endpoint, $oldrecord, $endpoint->to_record());
+ 
+         return $endpoint;
+     }
+@@ -396,6 +484,7 @@ class api {
+ 
+         // Will throw exceptions on validation failures.
+         $endpoint->create();
++        self::add_to_config_log('oauth2_endpoint_created', $endpoint, null, $endpoint->to_record());
+         return $endpoint;
+     }
+ 
+@@ -408,9 +497,12 @@ class api {
+     public static function update_user_field_mapping($data) {
+         require_capability('moodle/site:config', context_system::instance());
+         $userfieldmapping = new user_field_mapping(0, $data);
++        $oldrecord = (new user_field_mapping($userfieldmapping->get('id')))->to_record();
+ 
+         // Will throw exceptions on validation failures.
+         $userfieldmapping->update();
++        self::add_to_config_log('oauth2_user_field_mapping_updated', $userfieldmapping, $oldrecord,
++            $userfieldmapping->to_record());
+ 
+         return $userfieldmapping;
+     }
+@@ -427,6 +519,8 @@ class api {
+ 
+         // Will throw exceptions on validation failures.
+         $userfieldmapping->create();
++        self::add_to_config_log('oauth2_user_field_mapping_created', $userfieldmapping, null,
++            $userfieldmapping->to_record());
+         return $userfieldmapping;
+     }
+ 
+@@ -512,8 +606,11 @@ class api {
+         require_capability('moodle/site:config', context_system::instance());
+         $issuer = new issuer($id);
+ 
++        $oldrecord = $issuer->to_record();
+         $issuer->set('enabled', 0);
+-        return $issuer->update();
++        $result = $issuer->update();
++        self::add_to_config_log('oauth2_issuer_disabled', $issuer, $oldrecord, $issuer->to_record());
++        return $result;
+     }
+ 
+ 
+@@ -529,8 +626,11 @@ class api {
+         require_capability('moodle/site:config', context_system::instance());
+         $issuer = new issuer($id);
+ 
++        $oldrecord = $issuer->to_record();
+         $issuer->set('enabled', 1);
+-        return $issuer->update();
++        $result = $issuer->update();
++        self::add_to_config_log('oauth2_issuer_enabled', $issuer, $oldrecord, $issuer->to_record());
++        return $result;
+     }
+ 
+     /**
+@@ -557,7 +657,10 @@ class api {
+         }
+ 
+         // Will throw exceptions on validation failures.
+-        return $issuer->delete();
++        $oldrecord = $issuer->to_record();
++        $result = $issuer->delete();
++        self::add_to_config_log('oauth2_issuer_deleted', $issuer, $oldrecord, null);
++        return $result;
+     }
+ 
+     /**
+@@ -573,7 +676,10 @@ class api {
+         $endpoint = new endpoint($id);
+ 
+         // Will throw exceptions on validation failures.
+-        return $endpoint->delete();
++        $oldrecord = $endpoint->to_record();
++        $result = $endpoint->delete();
++        self::add_to_config_log('oauth2_endpoint_deleted', $endpoint, $oldrecord, null);
++        return $result;
+     }
+ 
+     /**
+@@ -589,7 +695,10 @@ class api {
+         $userfieldmapping = new user_field_mapping($id);
+ 
+         // Will throw exceptions on validation failures.
+-        return $userfieldmapping->delete();
++        $oldrecord = $userfieldmapping->to_record();
++        $result = $userfieldmapping->delete();
++        self::add_to_config_log('oauth2_user_field_mapping_deleted', $userfieldmapping, $oldrecord, null);
++        return $result;
+     }
+ 
+     /**
+diff --git a/public/lib/tests/oauth2_test.php b/public/lib/tests/oauth2_test.php
+index be2f9d736b3..6a186e654d9 100644
+--- a/public/lib/tests/oauth2_test.php
++++ b/public/lib/tests/oauth2_test.php
+@@ -210,6 +210,137 @@ final class oauth2_test extends \advanced_testcase {
+         $this->assertTrue((bool)$check->get('enabled'));
+     }
+ 
++    /**
++     * Tests that CRUD operations on issuers, endpoints and user field mappings are logged to the config log.
++     */
++    public function test_config_log(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $this->setAdminUser();
++
++        // Create an issuer.
++        $data = (object) [
++            'name' => 'My issuer',
++            'clientid' => 'myclientid',
++            'clientsecret' => 'mysecret',
++            'baseurl' => '',
++            'image' => '',
++            'loginscopes' => 'openid',
++            'loginscopesoffline' => 'openid',
++            'loginparams' => '',
++            'loginparamsoffline' => '',
++            'alloweddomains' => '',
++            'enabled' => 1,
++            'showonloginpage' => issuer::SERVICEONLY,
++            'servicetype' => '',
++        ];
++        $issuer = api::create_issuer($data);
++        $issuerid = $issuer->get('id');
++
++        $log = $DB->get_record('config_log', ['name' => 'oauth2_issuer_created'], '*', MUST_EXIST);
++        $this->assertEquals('core', $log->plugin);
++        $this->assertEquals('', $log->oldvalue);
++        $this->assertStringContainsString("issuer {$issuerid} (My issuer)", $log->value);
++        $this->assertStringContainsString('"clientid":"myclientid"', $log->value);
++        // The client secret must never be logged.
++        $this->assertStringNotContainsString('mysecret', $log->value);
++        $this->assertStringContainsString('"clientsecret":"********"', $log->value);
++        $this->assertEquals(get_admin()->id, $log->userid);
++
++        // Update the issuer.
++        $data->id = $issuerid;
++        $data->name = 'My renamed issuer';
++        $data->clientid = 'mynewclientid';
++        api::update_issuer($data);
++
++        $log = $DB->get_record('config_log', ['name' => 'oauth2_issuer_updated'], '*', MUST_EXIST);
++        $this->assertStringContainsString("issuer {$issuerid} (My renamed issuer)", $log->oldvalue);
++        $this->assertStringContainsString('"name":"My issuer"', $log->oldvalue);
++        $this->assertStringContainsString('"clientid":"myclientid"', $log->oldvalue);
++        $this->assertStringContainsString('"name":"My renamed issuer"', $log->value);
++        $this->assertStringContainsString('"clientid":"mynewclientid"', $log->value);
++        // Only the changed fields are logged.
++        $this->assertStringNotContainsString('loginscopes', $log->value);
++        $this->assertStringNotContainsString('clientsecret', $log->value);
++
++        // Updating an issuer without changing anything does not log anything.
++        api::update_issuer($data);
++        $this->assertEquals(1, $DB->count_records('config_log', ['name' => 'oauth2_issuer_updated']));
++
++        // Disable and enable the issuer.
++        api::disable_issuer($issuerid);
++        $log = $DB->get_record('config_log', ['name' => 'oauth2_issuer_disabled'], '*', MUST_EXIST);
++        $this->assertStringContainsString('"enabled":"1"', $log->oldvalue);
++        $this->assertStringContainsString('"enabled":0', $log->value);
++        api::enable_issuer($issuerid);
++        $log = $DB->get_record('config_log', ['name' => 'oauth2_issuer_enabled'], '*', MUST_EXIST);
++        $this->assertStringContainsString('"enabled":"0"', $log->oldvalue);
++        $this->assertStringContainsString('"enabled":1', $log->value);
++
++        // Create, update and delete an endpoint.
++        $endpoint = api::create_endpoint((object) [
++            'issuerid' => $issuerid,
++            'name' => 'my_endpoint',
++            'url' => 'https://example.com/my',
++        ]);
++        $endpointid = $endpoint->get('id');
++        $log = $DB->get_record('config_log', ['name' => 'oauth2_endpoint_created'], '*', MUST_EXIST);
++        $this->assertEquals('', $log->oldvalue);
++        $this->assertStringContainsString("endpoint {$endpointid} (my_endpoint)", $log->value);
++        $this->assertStringContainsString('"url":"https://example.com/my"', $log->value);
++
++        api::update_endpoint((object) [
++            'id' => $endpointid,
++            'issuerid' => $issuerid,
++            'name' => 'my_endpoint',
++            'url' => 'https://example.com/other',
++        ]);
++        $log = $DB->get_record('config_log', ['name' => 'oauth2_endpoint_updated'], '*', MUST_EXIST);
++        $this->assertStringContainsString('"url":"https://example.com/my"', $log->oldvalue);
++        $this->assertStringContainsString('"url":"https://example.com/other"', $log->value);
++
++        api::delete_endpoint($endpointid);
++        $log = $DB->get_record('config_log', ['name' => 'oauth2_endpoint_deleted'], '*', MUST_EXIST);
++        $this->assertStringContainsString("endpoint {$endpointid} (my_endpoint)", $log->oldvalue);
++        $this->assertStringContainsString('"url":"https://example.com/other"', $log->oldvalue);
++        $this->assertEquals('', $log->value);
++
++        // Create, update and delete a user field mapping.
++        $mapping = api::create_user_field_mapping((object) [
++            'issuerid' => $issuerid,
++            'externalfield' => 'given_name',
++            'internalfield' => 'firstname',
++        ]);
++        $mappingid = $mapping->get('id');
++        $log = $DB->get_record('config_log', ['name' => 'oauth2_user_field_mapping_created'], '*', MUST_EXIST);
++        $this->assertEquals('', $log->oldvalue);
++        $this->assertStringContainsString("user_field_mapping {$mappingid} (given_name -> firstname)", $log->value);
++
++        api::update_user_field_mapping((object) [
++            'id' => $mappingid,
++            'issuerid' => $issuerid,
++            'externalfield' => 'given_name',
++            'internalfield' => 'lastname',
++        ]);
++        $log = $DB->get_record('config_log', ['name' => 'oauth2_user_field_mapping_updated'], '*', MUST_EXIST);
++        $this->assertStringContainsString('"internalfield":"firstname"', $log->oldvalue);
++        $this->assertStringContainsString('"internalfield":"lastname"', $log->value);
++
++        api::delete_user_field_mapping($mappingid);
++        $log = $DB->get_record('config_log', ['name' => 'oauth2_user_field_mapping_deleted'], '*', MUST_EXIST);
++        $this->assertStringContainsString('"internalfield":"lastname"', $log->oldvalue);
++        $this->assertEquals('', $log->value);
++
++        // Delete the issuer.
++        api::delete_issuer($issuerid);
++        $log = $DB->get_record('config_log', ['name' => 'oauth2_issuer_deleted'], '*', MUST_EXIST);
++        $this->assertStringContainsString("issuer {$issuerid} (My renamed issuer)", $log->oldvalue);
++        $this->assertStringContainsString('"clientid":"mynewclientid"', $log->oldvalue);
++        $this->assertStringNotContainsString('mysecret', $log->oldvalue);
++        $this->assertEquals('', $log->value);
++    }
++
+     /**
+      * Test the alloweddomains for an issuer.
+      */

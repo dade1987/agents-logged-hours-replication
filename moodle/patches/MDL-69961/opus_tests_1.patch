@@ -1,0 +1,113 @@
+diff --git a/public/lib/classes/authentication/password.php b/public/lib/classes/authentication/password.php
+index 2cefe53755f..e168ecaa493 100644
+--- a/public/lib/classes/authentication/password.php
++++ b/public/lib/classes/authentication/password.php
+@@ -221,6 +221,9 @@ class password {
+             $DB->set_field('user', 'password', $hashedpassword, ['id' => $user->id]);
+             $user->password = $hashedpassword;
+ 
++            // Invalidate any outstanding forgotten password reset tokens.
++            $DB->delete_records('user_password_resets', ['userid' => $user->id]);
++
+             // Trigger event.
+             $user = $DB->get_record('user', ['id' => $user->id]);
+             \core\event\user_password_updated::create_from_user($user)->trigger();
+diff --git a/public/lib/classes/user.php b/public/lib/classes/user.php
+index 09c9e0b0627..ef6e9693e8e 100644
+--- a/public/lib/classes/user.php
++++ b/public/lib/classes/user.php
+@@ -1943,6 +1943,11 @@ class user {
+             $updaterecord = (object) $changedattributes;
+             $updaterecord->id = $currentrecord->id;
+             $DB->update_record('user', $updaterecord);
++
++            // Password reset tokens sent to the previous email address must no longer be accepted.
++            if (array_key_exists('email', $changedattributes)) {
++                $DB->delete_records('user_password_resets', ['userid' => $currentrecord->id]);
++            }
+         }
+ 
+         if ($updatepassword) {
+diff --git a/public/login/lib.php b/public/login/lib.php
+index 4d4820fbe17..d1f6021b00d 100644
+--- a/public/login/lib.php
++++ b/public/login/lib.php
+@@ -326,6 +326,10 @@ function core_login_process_password_set($token) {
+  */
+ function core_login_generate_password_reset ($user) {
+     global $DB;
++
++    // Remove any existing password reset tokens for this user, only the newest one should be valid.
++    $DB->delete_records('user_password_resets', ['userid' => $user->id]);
++
+     $resetrecord = new stdClass();
+     $resetrecord->timerequested = time();
+     $resetrecord->userid = $user->id;
+diff --git a/public/login/tests/login_lib_test.php b/public/login/tests/login_lib_test.php
+index ece1da31dcb..949b60631cd 100644
+--- a/public/login/tests/login_lib_test.php
++++ b/public/login/tests/login_lib_test.php
+@@ -448,4 +448,63 @@ final class login_lib_test extends \advanced_testcase {
+         \moodle_phpmailer::$validator = $defaultvalidator;
+     }
+ 
++
++    /**
++     * Generating a new password reset token removes any existing ones for the user.
++     */
++    public function test_core_login_generate_password_reset_removes_existing(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $user = $this->getDataGenerator()->create_user(['auth' => 'manual']);
++        $other = $this->getDataGenerator()->create_user(['auth' => 'manual']);
++
++        $first = core_login_generate_password_reset($user);
++        $otherreset = core_login_generate_password_reset($other);
++        $second = core_login_generate_password_reset($user);
++
++        $records = $DB->get_records('user_password_resets', ['userid' => $user->id]);
++        $this->assertCount(1, $records);
++        $this->assertEquals($second->token, reset($records)->token);
++        $this->assertFalse($DB->record_exists('user_password_resets', ['token' => $first->token]));
++        $this->assertTrue($DB->record_exists('user_password_resets', ['token' => $otherreset->token]));
++    }
++
++    /**
++     * Changing the user email address invalidates password reset tokens.
++     */
++    public function test_password_reset_tokens_removed_on_email_change(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $user = $this->getDataGenerator()->create_user(['auth' => 'manual']);
++        $other = $this->getDataGenerator()->create_user(['auth' => 'manual']);
++        core_login_generate_password_reset($user);
++        core_login_generate_password_reset($other);
++
++        // Updating something other than the email keeps the token.
++        \core\user::update_user((object) ['id' => $user->id, 'firstname' => 'Changed']);
++        $this->assertTrue($DB->record_exists('user_password_resets', ['userid' => $user->id]));
++
++        \core\user::update_user((object) ['id' => $user->id, 'email' => 'newaddress@example.com']);
++        $this->assertFalse($DB->record_exists('user_password_resets', ['userid' => $user->id]));
++        $this->assertTrue($DB->record_exists('user_password_resets', ['userid' => $other->id]));
++    }
++
++    /**
++     * Changing the user password invalidates password reset tokens.
++     */
++    public function test_password_reset_tokens_removed_on_password_change(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $user = $this->getDataGenerator()->create_user(['auth' => 'manual']);
++        $other = $this->getDataGenerator()->create_user(['auth' => 'manual']);
++        core_login_generate_password_reset($user);
++        core_login_generate_password_reset($other);
++
++        update_internal_user_password($user, 'NewPassword!123');
++        $this->assertFalse($DB->record_exists('user_password_resets', ['userid' => $user->id]));
++        $this->assertTrue($DB->record_exists('user_password_resets', ['userid' => $other->id]));
++    }
+ }

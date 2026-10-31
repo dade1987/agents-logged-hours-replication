@@ -1,0 +1,54 @@
+diff --git a/public/lib/classes/oauth2/server/repository/access_token_repository.php b/public/lib/classes/oauth2/server/repository/access_token_repository.php
+index 123d2cd8202..e41486d4f98 100644
+--- a/public/lib/classes/oauth2/server/repository/access_token_repository.php
++++ b/public/lib/classes/oauth2/server/repository/access_token_repository.php
+@@ -70,6 +70,14 @@ class access_token_repository implements AccessTokenRepositoryInterface {
+         $record->timecreated = time();
+ 
+         $DB->insert_record('oauth2_server_client_access_tokens', $record);
++
++        // Record the client's last access time (covers public clients, which have no secret).
++        $DB->set_field(
++            'oauth2_server_clients',
++            'lastaccessed',
++            $record->timecreated,
++            ['clientidentifier' => $record->clientidentifier],
++        );
+     }
+ 
+     #[\Override]
+diff --git a/public/lib/classes/oauth2/server/repository/client_repository.php b/public/lib/classes/oauth2/server/repository/client_repository.php
+index b8ae134a371..f85deba0a7d 100644
+--- a/public/lib/classes/oauth2/server/repository/client_repository.php
++++ b/public/lib/classes/oauth2/server/repository/client_repository.php
+@@ -91,6 +91,9 @@ class client_repository implements ClientRepositoryInterface {
+ 
+         foreach ($secrets as $secret) {
+             if (password_verify($clientsecret, $secret->secret)) {
++                $now = time();
++                $DB->set_field('oauth2_server_client_secrets', 'lastaccessed', $now, ['id' => $secret->id]);
++                $DB->set_field('oauth2_server_clients', 'lastaccessed', $now, ['clientidentifier' => $clientidentifier]);
+                 return true;
+             }
+         }
+diff --git a/public/lib/classes/route/oauth2.php b/public/lib/classes/route/oauth2.php
+index 1a5f41eec62..a52a22b6432 100644
+--- a/public/lib/classes/route/oauth2.php
++++ b/public/lib/classes/route/oauth2.php
+@@ -918,6 +918,16 @@ class oauth2 {
+         // of this form (e.g. a replayed request) could otherwise re-trigger completion.
+         $this->forget_auth_request($requestid);
+ 
++        if ($authrequest->isAuthorizationApproved()) {
++            global $DB;
++            $DB->set_field(
++                'oauth2_server_clients',
++                'lastaccessed',
++                time(),
++                ['clientidentifier' => $authrequest->getClient()->getIdentifier()],
++            );
++        }
++
+         try {
+             return $this->server->completeAuthorizationRequest($authrequest, $response);
+         } catch (OAuthServerException $exception) {

@@ -1,0 +1,20 @@
+diff --git a/sql/sql_path.cc b/sql/sql_path.cc
+index 982fbffa..6779cb5d 100644
+--- a/sql/sql_path.cc
++++ b/sql/sql_path.cc
+@@ -283,6 +283,15 @@ bool Sql_path::from_text(const system_variables &sv, String *str)
+   while (curr < end)
+   {
+     auto len = cs->charlen(curr, end);
++    /*
++      charlen() returns MY_CS_ILSEQ or a negative MY_CS_TOOSMALL* code for
++      a byte sequence that is not a valid character (e.g. a truncated
++      multi-byte sequence at the end of the string). The token loops below
++      use len as a byte count, so such input must be rejected here,
++      otherwise the loops write far beyond the buffer.
++    */
++    if (len <= 0 && state != END)
++      goto err_bad_val;
+ 
+     switch (state)
+     {

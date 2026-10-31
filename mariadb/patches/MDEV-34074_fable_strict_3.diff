@@ -1,0 +1,187 @@
+diff --git a/mysql-test/suite/plugins/r/server_audit_reinstall.result b/mysql-test/suite/plugins/r/server_audit_reinstall.result
+new file mode 100644
+index 00000000..2c9bbe34
+--- /dev/null
++++ b/mysql-test/suite/plugins/r/server_audit_reinstall.result
+@@ -0,0 +1,23 @@
++#
++# MDEV-34074 plugins.thread_pool_server_audit crashes in get_loc_info()
++#            with null pointer dereference
++#
++install plugin server_audit soname 'server_audit';
++uninstall plugin server_audit;
++select 1;
++1
++1
++connect  con1,localhost,root,,;
++show session variables like 'no_such_variable';
++Variable_name	Value
++install plugin server_audit soname 'server_audit';
++select 1;
++1
++1
++set global server_audit_logging=off;
++disconnect con1;
++connection default;
++uninstall plugin server_audit;
++select 1;
++1
++1
+diff --git a/mysql-test/suite/plugins/t/server_audit_reinstall.test b/mysql-test/suite/plugins/t/server_audit_reinstall.test
+new file mode 100644
+index 00000000..f5ef5411
+--- /dev/null
++++ b/mysql-test/suite/plugins/t/server_audit_reinstall.test
+@@ -0,0 +1,36 @@
++--source include/not_embedded.inc
++
++if (!$SERVER_AUDIT_SO) {
++  skip No SERVER_AUDIT plugin;
++}
++
++--echo #
++--echo # MDEV-34074 plugins.thread_pool_server_audit crashes in get_loc_info()
++--echo #            with null pointer dereference
++--echo #
++
++install plugin server_audit soname 'server_audit';
++# The plugin is referenced by this connection, so the uninstall only marks
++# it as deleted. It is reaped (and the global value of its thread-local
++# variables freed) when this connection releases it at the next statement.
++--disable_warnings
++uninstall plugin server_audit;
++--enable_warnings
++select 1;
++
++# A new connection that copies the global dynamic (plugin) variables into
++# its session while server_audit is not loaded gets a NULL copy of
++# server_audit's thread-local variable.
++connect (con1,localhost,root,,);
++show session variables like 'no_such_variable';
++# Installing the plugin again must re-initialize the session copy;
++# the audit event emitted for this statement used to dereference NULL.
++install plugin server_audit soname 'server_audit';
++select 1;
++set global server_audit_logging=off;
++disconnect con1;
++connection default;
++--disable_warnings
++uninstall plugin server_audit;
++--enable_warnings
++select 1;
+diff --git a/sql/sql_plugin.cc b/sql/sql_plugin.cc
+index ebcfe452..5a961b56 100644
+--- a/sql/sql_plugin.cc
++++ b/sql/sql_plugin.cc
+@@ -3134,6 +3134,21 @@ static st_bookmark *register_var(const char *plugin, const char *name,
+       DBUG_ASSERT(0);
+     }
+   }
++  else
++  {
++    /*
++      The variable has already been registered by a previous incarnation
++      of this plugin, that was uninstalled since (or failed to install).
++      The global value was freed in plugin_vars_free_values() back then,
++      and the sessions that synced their dynamic variables while the plugin
++      was not loaded hold a stale (NULL for PLUGIN_VAR_MEMALLOC strings)
++      copy of it. Bump the version so that sync_dynamic_session_variables()
++      re-initializes this variable in such sessions from the global value.
++    */
++    global_system_variables.dynamic_variables_version++;
++    max_system_variables.dynamic_variables_version++;
++    result->version= global_system_variables.dynamic_variables_version;
++  }
+   my_afree(varname);
+   return result;
+ }
+@@ -3142,6 +3157,7 @@ static st_bookmark *register_var(const char *plugin, const char *name,
+ void sync_dynamic_session_variables(THD* thd, bool global_lock)
+ {
+   uint idx;
++  uint old_size= thd->variables.dynamic_variables_size;
+ 
+   thd->variables.dynamic_variables_ptr= (char*)
+     my_realloc(key_memory_THD_variables,
+@@ -3168,14 +3184,33 @@ void sync_dynamic_session_variables(THD* thd, bool global_lock)
+   for (idx= 0; idx < bookmark_hash.records; idx++)
+   {
+     st_bookmark *v= (st_bookmark*) my_hash_element(&bookmark_hash,idx);
++    bool memalloc_str;
+ 
+     if (v->version <= thd->variables.dynamic_variables_version)
+       continue; /* already in thd->variables */
+ 
++    memalloc_str= (v->key[0] & PLUGIN_VAR_TYPEMASK) == PLUGIN_VAR_STR &&
++                  (v->key[0] & BOOKMARK_MEMALLOC);
++
++    if ((uint) v->offset < old_size)
++    {
++      /*
++        The variable was already copied into thd->variables, but has been
++        re-registered since (its plugin was uninstalled and installed
++        again, see register_var()). The session copy is stale, it may be
++        NULL or point to a string of the plugin's previous incarnation,
++        so replace it with the current global value.
++      */
++      char *dst= thd->variables.dynamic_variables_ptr + v->offset;
++      if (memalloc_str)
++        my_free(*(char**) dst);
++      memcpy(dst, global_system_variables.dynamic_variables_ptr + v->offset,
++             var_storage_size(v->key[0] & PLUGIN_VAR_TYPEMASK));
++    }
++
+     /* Here we do anything special that may be required of the data types */
+ 
+-    if ((v->key[0] & PLUGIN_VAR_TYPEMASK) == PLUGIN_VAR_STR &&
+-         v->key[0] & BOOKMARK_MEMALLOC)
++    if (memalloc_str)
+     {
+       char **pp= (char**) (thd->variables.dynamic_variables_ptr + v->offset);
+       if (*pp)
+@@ -3211,10 +3246,14 @@ static void *intern_sys_var_ptr(THD* thd, int offset, bool global_lock)
+     DBUG_RETURN(global_system_variables.dynamic_variables_ptr + offset);
+ 
+   /*
+-    dynamic_variables_head points to the largest valid offset
++    dynamic_variables_head points to the largest valid offset.
++    A version mismatch means that a variable was re-registered (its plugin
++    was installed again) after this session copied it, see register_var().
+   */
+   if (!thd->variables.dynamic_variables_ptr ||
+-      (uint)offset > thd->variables.dynamic_variables_head)
++      (uint)offset > thd->variables.dynamic_variables_head ||
++      thd->variables.dynamic_variables_version <
++      global_system_variables.dynamic_variables_version)
+   {
+     mysql_prlock_rdlock(&LOCK_system_variables_hash);
+     sync_dynamic_session_variables(thd, global_lock);
+@@ -3351,7 +3390,12 @@ static void cleanup_variables(struct system_variables *vars)
+   {
+     v= (st_bookmark*) my_hash_element(&bookmark_hash, idx);
+ 
+-    if (v->version > vars->dynamic_variables_version)
++    /*
++      Check the offset, not the version: a re-registered variable (see
++      register_var()) has a newer version than the session, but its old
++      (and still allocated) value is present in vars.
++    */
++    if ((uint)v->offset >= vars->dynamic_variables_size)
+       continue; /* not in vars */
+ 
+     DBUG_ASSERT((uint)v->offset <= vars->dynamic_variables_head);
+diff --git a/sql/sql_show.cc b/sql/sql_show.cc
+index b4a2a6e2..9012b99e 100644
+--- a/sql/sql_show.cc
++++ b/sql/sql_show.cc
+@@ -8297,7 +8297,9 @@ int fill_variables(THD *thd, TABLE_LIST *tables, COND *cond)
+   if (scope == OPT_SESSION &&
+       (!thd->variables.dynamic_variables_ptr ||
+        global_system_variables.dynamic_variables_head >
+-       thd->variables.dynamic_variables_head))
++       thd->variables.dynamic_variables_head ||
++       global_system_variables.dynamic_variables_version >
++       thd->variables.dynamic_variables_version))
+     sync_dynamic_session_variables(thd, true);
+ 
+   res= show_status_array(thd, wild, enumerate_sys_vars(thd, sorted_vars, scope),

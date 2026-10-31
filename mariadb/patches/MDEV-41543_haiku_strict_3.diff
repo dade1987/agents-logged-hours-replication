@@ -1,0 +1,28 @@
+diff --git a/sql/partition_info.h b/sql/partition_info.h
+index 3a8c3a37..7ffe9adb 100644
+--- a/sql/partition_info.h
++++ b/sql/partition_info.h
+@@ -88,6 +88,10 @@ struct Vers_part_info : public Sql_alloc
+       /* TODO: equivalent intervals like 1 hour and 60 mins should be considered equal */
+       return start == rhs.start && type == rhs.type && !memcmp(&step, &rhs.step, sizeof(INTERVAL));
+     }
++    bool operator!=(const interval_t &rhs) const
++    {
++      return !(*this == rhs);
++    }
+   } interval;
+   ulonglong limit;
+   bool auto_hist;
+diff --git a/sql/sql_partition.cc b/sql/sql_partition.cc
+index 2d1ca554..996f83f1 100644
+--- a/sql/sql_partition.cc
++++ b/sql/sql_partition.cc
+@@ -6096,7 +6096,7 @@ the generated partition syntax in a correct manner.
+       {
+         if (part_info->vers_info->interval.is_set() && (
+             !tab_part_info->vers_info->interval.is_set() ||
+-            part_info->vers_info->interval == tab_part_info->vers_info->interval))
++            part_info->vers_info->interval != tab_part_info->vers_info->interval))
+         {
+           /* If interval is changed we can not do fast alter */
+           tab_part_info= tab_part_info->get_clone(thd);

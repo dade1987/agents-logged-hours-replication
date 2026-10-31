@@ -1,0 +1,101 @@
+You are a software engineer fixing an issue in MariaDB Server (C/C++). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot build MariaDB or run its test suite. Read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update mysql-test tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDEV-41094: KDF() silently reduces large PBKDF2 iteration counts to weak 32-bit aliases
+
+The SQL `KDF()` function reads its PBKDF2 iteration argument as a signed
+64-bit integer and checks only that it is positive. It then narrows the value
+to the 32-bit `int` expected by OpenSSL. As a result, iteration counts that
+differ by 2^32 can derive exactly the same key.
+
+In the reproduced release, requesting 4,294,968,296 iterations silently did
+the work of 1,000 iterations; 4,294,968,297 similarly aliased to 1,001. An
+application can therefore request a very large work factor but receive a key
+derived with a much smaller one without any SQL error or warning.
+
+h3. Steps to reproduce
+
+Run this only against the pinned disposable container. Each high-value query
+has a hard client timeout. Do not replace the values with `INT_MAX`, because
+that would request prohibitive PBKDF2 work on an implementation that accepts it.
+
+{code:sh}
+set -eu
+IMAGE='mariadb@sha256:dd9b303aed4f4890ed09f766d8ca9ddfd176c0c6f6267feff53b3192ec65a979'
+C='mdev-kdf-iteration-repro'
+OWNER="edbf-report-$C-$$"
+cleanup() {
+  if docker inspect --format '{{ index .Config.Labels "io.encryptiondbfuzz.owner" }}' \
+       "$C" 2>/dev/null | grep -Fqx "$OWNER"; then
+    docker rm -f "$C" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT
+
+docker run --detach --name "$C" \
+  --label "io.encryptiondbfuzz.owner=$OWNER" \
+  --env MARIADB_ALLOW_EMPTY_ROOT_PASSWORD=1 "$IMAGE"
+
+READY=0
+for i in $(seq 1 90); do
+  if docker exec "$C" mariadb --protocol=socket -uroot -NBe \
+       "SELECT @@port" 2>/dev/null | grep -qx 3306; then
+    READY=1
+    break
+  fi
+  sleep 1
+done
+test "$READY" -eq 1
+
+query_kdf() {
+  N=$1
+  timeout 10 docker exec "$C" mariadb --protocol=socket -uroot -NBe \
+    "SELECT HEX(KDF('EDBF_FIXED_KEY','EDBF_FIXED_SALT',$N,'pbkdf2_hmac',256))"
+}
+
+K1000=$(query_kdf 1000)
+K1001=$(query_kdf 1001)
+K4294968296=$(query_kdf 4294968296)
+K4294968297=$(query_kdf 4294968297)
+
+printf '1000=%s\n' "$K1000"
+printf '4294968296=%s\n' "$K4294968296"
+printf '1001=%s\n' "$K1001"
+printf '4294968297=%s\n' "$K4294968297"
+test "$K1000" = "$K4294968296"
+test "$K1001" = "$K4294968297"
+test "$K1000" != "$K1001"
+echo 'pairwise_aliases_reproduced=1'
+{code}
+
+h3. Actual result
+
+MariaDB 12.3.3 returned these pairwise-identical values without an error or
+warning:
+
+{noformat}
+1000=09ABD1F6E05EB75D704260E146BEBCF718E23511A62151811D783060A7599EE4
+4294968296=09ABD1F6E05EB75D704260E146BEBCF718E23511A62151811D783060A7599EE4
+1001=E4714A640FBA6A2B02867FAD5555AF3843D26B274633F9F4592F0D74045831FB
+4294968297=E4714A640FBA6A2B02867FAD5555AF3843D26B274633F9F4592F0D74045831FB
+pairwise_aliases_reproduced=1
+{noformat}
+
+As an additional bounded observation, `KDF(...,2147483648,...)` returned
+`NULL` in the isolated run rather than reporting an invalid iteration count.
+That extra value is not needed to reproduce the pairwise aliasing above.
+
+h3. Expected result
+
+`KDF()` should reject a PBKDF2 iteration value that cannot be represented by
+the OpenSSL parameter type, with a clear SQL error or warning. It must not
+silently reinterpret a large positive 64-bit value as a much smaller work
+factor.
+
+

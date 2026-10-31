@@ -1,0 +1,221 @@
+diff --git a/public/lib/classes/oauth2/issuer.php b/public/lib/classes/oauth2/issuer.php
+index c355595799b..9dca2e3d300 100644
+--- a/public/lib/classes/oauth2/issuer.php
++++ b/public/lib/classes/oauth2/issuer.php
+@@ -47,6 +47,12 @@ class issuer extends persistent {
+ 
+     const TABLE = 'oauth2_issuer';
+ 
++    /** @var string[] Properties that are not logged to the config log. */
++    private const CONFIG_LOG_IGNORED_PROPERTIES = ['id', 'timecreated', 'timemodified', 'usermodified'];
++
++    /** @var \stdClass|null The issuer record before an update or delete, used for the config log. */
++    protected $previousrecord = null;
++
+     /**
+      * Return the definition of the properties of this model.
+      *
+@@ -148,6 +154,124 @@ class issuer extends persistent {
+         }
+     }
+ 
++    /**
++     * Hook to execute after a create: log the new issuer settings to the config log.
++     *
++     * @return void
++     */
++    protected function after_create() {
++        $this->log_config_changes(null, $this->to_record());
++    }
++
++    /**
++     * Hook to execute before an update: store the current DB state to log the changes later.
++     *
++     * @return void
++     */
++    protected function before_update() {
++        global $DB;
++        $this->previousrecord = $DB->get_record(static::TABLE, ['id' => $this->raw_get('id')]) ?: null;
++    }
++
++    /**
++     * Hook to execute after an update: log the changed issuer settings to the config log.
++     *
++     * @param bool $result Whether or not the update was successful.
++     * @return void
++     */
++    protected function after_update($result) {
++        if ($result) {
++            $this->log_config_changes($this->previousrecord, $this->to_record());
++        }
++        $this->previousrecord = null;
++    }
++
++    /**
++     * Hook to execute before a delete: store the current state to log the deletion later.
++     *
++     * @return void
++     */
++    protected function before_delete() {
++        global $DB;
++        $this->previousrecord = $DB->get_record(static::TABLE, ['id' => $this->raw_get('id')]) ?: $this->to_record();
++    }
++
++    /**
++     * Hook to execute after a delete: log the removed issuer settings to the config log.
++     *
++     * @param bool $result Whether or not the delete was successful.
++     * @return void
++     */
++    protected function after_delete($result) {
++        if ($result && $this->previousrecord) {
++            $this->log_config_changes($this->previousrecord, null);
++        }
++        $this->previousrecord = null;
++    }
++
++    /**
++     * Add the differences between two states of an issuer to the config log.
++     *
++     * Each changed property is logged as a separate entry named "issuer_{id}_{property}" for the
++     * "core_oauth2" plugin. The client secret value is never stored in the log.
++     *
++     * @param \stdClass|null $oldrecord The previous state of the issuer (null when it is being created).
++     * @param \stdClass|null $newrecord The new state of the issuer (null when it is being deleted).
++     * @return void
++     */
++    protected function log_config_changes(?\stdClass $oldrecord, ?\stdClass $newrecord): void {
++        $id = $newrecord->id ?? $oldrecord->id ?? 0;
++        if (empty($id)) {
++            return;
++        }
++
++        foreach (array_keys(static::properties_definition()) as $property) {
++            if (in_array($property, self::CONFIG_LOG_IGNORED_PROPERTIES)) {
++                continue;
++            }
++
++            $oldvalue = $oldrecord->{$property} ?? null;
++            $newvalue = $newrecord->{$property} ?? null;
++            $oldvalue = self::normalise_config_log_value($oldvalue);
++            $newvalue = self::normalise_config_log_value($newvalue);
++
++            if ($oldvalue === $newvalue) {
++                continue;
++            }
++            if ($oldrecord === null && ($newvalue === null || $newvalue === '')) {
++                // Do not log empty values for a newly created issuer.
++                continue;
++            }
++            if ($newrecord === null && ($oldvalue === null || $oldvalue === '')) {
++                // Do not log empty values for a deleted issuer.
++                continue;
++            }
++
++            if ($property === 'clientsecret') {
++                $oldvalue = ($oldvalue === null || $oldvalue === '') ? $oldvalue : '********';
++                $newvalue = ($newvalue === null || $newvalue === '') ? $newvalue : '********';
++            }
++
++            add_to_config_log('issuer_' . $id . '_' . $property, $oldvalue, $newvalue, 'core_oauth2');
++        }
++    }
++
++    /**
++     * Normalise a property value so that it can be compared and stored in the config log.
++     *
++     * @param mixed $value
++     * @return string|null
++     */
++    private static function normalise_config_log_value($value): ?string {
++        if ($value === null) {
++            return null;
++        }
++        if (is_bool($value)) {
++            return (string) (int) $value;
++        }
++        return (string) $value;
++    }
++
+     /**
+      * Helper the get a named service endpoint.
+      * @param string $type
+diff --git a/public/lib/tests/oauth2_test.php b/public/lib/tests/oauth2_test.php
+index be2f9d736b3..2a475092fd4 100644
+--- a/public/lib/tests/oauth2_test.php
++++ b/public/lib/tests/oauth2_test.php
+@@ -210,6 +210,74 @@ final class oauth2_test extends \advanced_testcase {
+         $this->assertTrue((bool)$check->get('enabled'));
+     }
+ 
++    /**
++     * Tests that creating, updating and deleting an issuer is logged to the config log.
++     *
++     * @covers \core\oauth2\issuer
++     */
++    public function test_issuer_config_log(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $this->setAdminUser();
++
++        // Create.
++        $DB->delete_records('config_log');
++        $data = (object) [
++            'name' => 'Test issuer',
++            'clientid' => 'myclientid',
++            'clientsecret' => 'mysecret',
++            'baseurl' => '',
++        ];
++        $issuer = api::create_issuer($data);
++        $issuerid = $issuer->get('id');
++        $prefix = 'issuer_' . $issuerid . '_';
++
++        $log = $DB->get_record('config_log', ['plugin' => 'core_oauth2', 'name' => $prefix . 'name']);
++        $this->assertNotEmpty($log);
++        $this->assertNull($log->oldvalue);
++        $this->assertEquals('Test issuer', $log->value);
++
++        $log = $DB->get_record('config_log', ['plugin' => 'core_oauth2', 'name' => $prefix . 'clientid']);
++        $this->assertEquals('myclientid', $log->value);
++
++        // The secret must never be stored in clear text.
++        $log = $DB->get_record('config_log', ['plugin' => 'core_oauth2', 'name' => $prefix . 'clientsecret']);
++        $this->assertEquals('********', $log->value);
++        $this->assertFalse($DB->record_exists_select('config_log', $DB->sql_like('value', ':value'),
++            ['value' => '%mysecret%']));
++
++        // Update.
++        $DB->delete_records('config_log');
++        $data = $issuer->to_record();
++        $data->name = 'Renamed issuer';
++        api::update_issuer($data);
++        $logs = $DB->get_records('config_log', ['plugin' => 'core_oauth2']);
++        $this->assertCount(1, $logs);
++        $log = reset($logs);
++        $this->assertEquals($prefix . 'name', $log->name);
++        $this->assertEquals('Test issuer', $log->oldvalue);
++        $this->assertEquals('Renamed issuer', $log->value);
++
++        // Disable.
++        $DB->delete_records('config_log');
++        api::disable_issuer($issuerid);
++        $log = $DB->get_record('config_log', ['plugin' => 'core_oauth2', 'name' => $prefix . 'enabled']);
++        $this->assertEquals('1', $log->oldvalue);
++        $this->assertEquals('0', $log->value);
++
++        // Updating without changes does not log anything.
++        $DB->delete_records('config_log');
++        api::disable_issuer($issuerid);
++        $this->assertEquals(0, $DB->count_records('config_log', ['plugin' => 'core_oauth2']));
++
++        // Delete.
++        api::delete_issuer($issuerid);
++        $log = $DB->get_record('config_log', ['plugin' => 'core_oauth2', 'name' => $prefix . 'name']);
++        $this->assertEquals('Renamed issuer', $log->oldvalue);
++        $this->assertNull($log->value);
++    }
++
+     /**
+      * Test the alloweddomains for an issuer.
+      */

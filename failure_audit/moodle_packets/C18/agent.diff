@@ -1,0 +1,66 @@
+diff --git a/public/mod/bigbluebuttonbn/classes/settings.php b/public/mod/bigbluebuttonbn/classes/settings.php
+index 3d36118ae94..cbb80d5d4ff 100644
+--- a/public/mod/bigbluebuttonbn/classes/settings.php
++++ b/public/mod/bigbluebuttonbn/classes/settings.php
+@@ -391,6 +391,29 @@ class settings {
+                 'statistics' => get_string('view_recording_format_statistics', 'mod_bigbluebuttonbn'),
+                 'video' => get_string('view_recording_format_video', 'mod_bigbluebuttonbn'),
+             ];
++            // Allow additional (non-core) formats to be declared by the administrator.
++            $extraformats = get_config('mod_bigbluebuttonbn', 'recording_safe_formats_extra');
++            if (empty($extraformats)) {
++                $extraformats = get_config('core', 'bigbluebuttonbn_recording_safe_formats_extra');
++            }
++            if (!empty($extraformats)) {
++                foreach (str_getcsv($extraformats, escape: '\\') as $format) {
++                    $format = trim($format);
++                    if ($format !== '' && !isset($recordingsafeformat[$format])) {
++                        $recordingsafeformat[$format] = $format;
++                    }
++                }
++            }
++            // Keep any already selected format available, so it is not lost when saving.
++            $currentformats = get_config('core', 'bigbluebuttonbn_recording_safe_formats');
++            if (!empty($currentformats)) {
++                foreach (str_getcsv($currentformats, escape: '\\') as $format) {
++                    $format = trim($format);
++                    if ($format !== '' && !isset($recordingsafeformat[$format])) {
++                        $recordingsafeformat[$format] = $format;
++                    }
++                }
++            }
+             $item = new configmultiselect(
+                 'bigbluebuttonbn_recording_safe_formats',
+                 get_string('config_recording_safe_formats', 'mod_bigbluebuttonbn'),
+@@ -403,6 +426,18 @@ class settings {
+                 $item,
+                 $recordingsetting
+             );
++            $item = new configtext(
++                'bigbluebuttonbn_recording_safe_formats_extra',
++                get_string('config_recording_safe_formats_extra', 'mod_bigbluebuttonbn'),
++                get_string('config_recording_safe_formats_extra_description', 'mod_bigbluebuttonbn'),
++                '',
++                PARAM_RAW
++            );
++            $this->add_conditional_element(
++                'recording_hide_button_editable',
++                $item,
++                $recordingsetting
++            );
+         }
+         $this->admin->add($this->parent, $recordingsetting);
+     }
+diff --git a/public/mod/bigbluebuttonbn/lang/en/bigbluebuttonbn.php b/public/mod/bigbluebuttonbn/lang/en/bigbluebuttonbn.php
+index fe13f805d51..314456c40fa 100644
+--- a/public/mod/bigbluebuttonbn/lang/en/bigbluebuttonbn.php
++++ b/public/mod/bigbluebuttonbn/lang/en/bigbluebuttonbn.php
+@@ -161,6 +161,8 @@ $string['config_recording_protect_editable_description'] = 'If checked the inter
+ $string['config_recording_refresh_period'] = 'Recording refresh period (in seconds)';
+ $string['config_recording_refresh_period_description'] = 'How often should the BigBlueButton server be queried to refresh remote information for a recording?';
+ $string['config_recording_safe_formats'] = 'Recording formats viewable by everyone';
++$string['config_recording_safe_formats_extra'] = 'Additional recording formats';
++$string['config_recording_safe_formats_extra_description'] = 'Comma-separated list of additional recording format names (for example: transcript) that can be selected as viewable by everyone.';
+ $string['config_recording_safe_formats_description'] = 'Select the formats which are viewable by everyone.
+ All other formats are only viewable by teachers and other users with the mod/bigbluebuttonbn:viewallrecordingformats and
+  mod/bigbluebuttonbn:managerecordings capabilities.';

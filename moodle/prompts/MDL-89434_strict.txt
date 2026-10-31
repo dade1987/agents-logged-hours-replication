@@ -1,0 +1,46 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot run Moodle's test suite. You may run `php -l <file>` and read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-89434: Fix multiple bugs in duration form element handling
+
+*Note:* This ticket was created by an AI agent (GitHub Copilot)
+
+Following [MDL-70346|https://moodle.atlassian.net/browse/MDL-70346], {{disabledIf}}/{{hideIf}} now correctly propagates to the child elements of a {{duration}} form element when it is nested inside a group. This exposed two pre-existing bugs in {{public/lib/form/duration.php}}:
+
+*1.* {{exportValue()}} assumes {{timeunit}} is always submitted.
+A disabled {{<select>}} is not submitted by the browser, so once the child {{timeunit}} control is properly disabled, {{$valuearray['timeunit']}} is missing and PHP raises:
+
+{noformat}Warning: Undefined array key "timeunit" in public/lib/form/duration.php on line 303{noformat}
+
+Stack (from a real failure in the Workplace {{tool_certificate}} Behat suite, see WPOS-203):
+
+{noformat}* line 303 of /public/lib/form/duration.php: call to behat_error_handler()
+* line 247 of /public/lib/form/duration.php: call to MoodleQuickForm_duration->exportValue()
+* line 293 of /public/lib/form/group.php: call to MoodleQuickForm_duration->validateSubmitValue()
+* line 656 of /public/lib/formslib.php: call to MoodleQuickForm_group->validateSubmitValue(){noformat}
+
+{{exportValue()}} should fall back to {{$this->_options['defaultunit']}} (and treat missing {{number}} as {{0}}) when the child controls did not submit values.
+
+*2. Constructor doesn't validate* {{defaultunit}} against the restricted {{units}} set.
+When both {{units}} and {{defaultunit}} options are supplied, the constructor only checks {{defaultunit}} against {{get_units()}} (all units), never against the caller's {{units}} set. A misconfiguration such as:
+
+{code:php}$mform->createElement('duration', 'x', '', [
+    'units' => [DAYSECS, WEEKSECS],
+    // 'defaultunit' silently stays at MINSECS (class default)
+]);{code}
+
+is accepted silently and only manifests as odd behaviour (or, combined with bug 1 above, a fatal warning) at runtime. The constructor should raise a {{coding_exception}} when {{defaultunit}} is not a member of the restricted {{units}} array.
+
+*Reproducer:* A {{duration}} element inside a group with {{hideIf}}/{{disabledIf}} applied, submitted while hidden. Prior to MDL-70346 the DOM never disabled the child {{select}}, hiding this class of bug.
+
+*Suggested fix*
+
+* {{exportValue()}}: guard {{timeunit}}/{{number}} accesses with fallbacks; return {{null}}/{{0}} when nothing was submitted.
+* Constructor: when {{units}} is set, verify {{_options['defaultunit']}} is in it and throw {{coding_exception}} otherwise.
+* Add unit tests for both cases (disabled/missing submit, misconfigured {{defaultunit}}).

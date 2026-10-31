@@ -1,0 +1,140 @@
+diff --git a/public/admin/tool/installaddon/lang/en/deprecated.txt b/public/admin/tool/installaddon/lang/en/deprecated.txt
+new file mode 100644
+index 00000000000..7e0a19d1ca6
+--- /dev/null
++++ b/public/admin/tool/installaddon/lang/en/deprecated.txt
+@@ -0,0 +1 @@
++installfromrepo_help,tool_installaddon
+diff --git a/public/admin/tool/installaddon/lang/en/tool_installaddon.php b/public/admin/tool/installaddon/lang/en/tool_installaddon.php
+index c104eb0b723..41165b36895 100644
+--- a/public/admin/tool/installaddon/lang/en/tool_installaddon.php
++++ b/public/admin/tool/installaddon/lang/en/tool_installaddon.php
+@@ -34,8 +34,9 @@ $string['installaddon'] = 'Install plugin!';
+ $string['installaddons'] = 'Install plugins';
+ $string['installfromrepo'] = 'Install plugins from the Moodle plugins directory';
+ $string['installfromrepo_help'] = 'You will be redirected to the Moodle plugins directory to search for and install a plugin. Note that your site full name, URL and Moodle version will be sent as well, to make the installation process easier for you.';
++$string['installfromrepounavailable'] = 'Installing plugins directly from the <a href="{$a->url}">Moodle plugins directory</a> is currently unavailable. To install a plugin, download its ZIP package from the Moodle plugins directory and upload it using the form below.';
+ $string['installfromzip'] = 'Install plugin from ZIP file';
+-$string['installfromzip_help'] = 'An alternative to installing a plugin directly from the Moodle plugins directory is to upload a ZIP package of the plugin. The ZIP package should have the same structure as a package downloaded from the Moodle plugins directory.';
++$string['installfromzip_help'] = 'Plugins can be installed by uploading a ZIP package of the plugin. The ZIP package should have the same structure as a package downloaded from the Moodle plugins directory.';
+ $string['installfromzipfile'] = 'ZIP package';
+ $string['installfromzipfile_help'] = 'The plugin ZIP package must contain just one directory, named to match the plugin name. The ZIP will be extracted into an appropriate location for the plugin type. If the package has been downloaded from the Moodle plugins directory then it will have this structure.';
+ $string['installfromzipinvalid'] = 'The plugin ZIP package must contain just one directory, named to match the plugin name. The file provided is not a valid plugin ZIP package.';
+diff --git a/public/admin/tool/installaddon/renderer.php b/public/admin/tool/installaddon/renderer.php
+index e69aa6789d5..65147d892fc 100644
+--- a/public/admin/tool/installaddon/renderer.php
++++ b/public/admin/tool/installaddon/renderer.php
+@@ -199,7 +199,13 @@ class tool_installaddon_renderer extends plugin_renderer_base {
+     }
+ 
+     /**
+-     * Renders the widget for browsing the add-on repository
++     * Renders the widget informing about the add-on repository.
++     *
++     * Direct installation from the Moodle plugins directory is currently unavailable, as the
++     * "Sites" functionality that used to send the installation request back to the registered
++     * site has not been migrated to the Moodle Marketplace. Instead of offering a button that
++     * leads to a dead end, a notice is displayed explaining that plugins should be downloaded
++     * from the plugins directory and installed using the ZIP upload form below.
+      *
+      * @return string
+      */
+@@ -207,9 +213,16 @@ class tool_installaddon_renderer extends plugin_renderer_base {
+ 
+         $url = $this->installer->get_addons_repository_url();
+ 
++        $a = (object) [
++            'url' => $url->out(),
++        ];
++
+         $out = $this->box(
+-            $this->output->single_button($url, get_string('installfromrepo', 'tool_installaddon'), 'get').
+-            $this->output->help_icon('installfromrepo', 'tool_installaddon'),
++            $this->output->notification(
++                get_string('installfromrepounavailable', 'tool_installaddon', $a),
++                \core\output\notification::NOTIFY_INFO,
++                false
++            ),
+             'generalbox', 'installfromrepobox'
+         );
+ 
+diff --git a/public/admin/tool/installaddon/tests/renderer_test.php b/public/admin/tool/installaddon/tests/renderer_test.php
+new file mode 100644
+index 00000000000..0a267b71cec
+--- /dev/null
++++ b/public/admin/tool/installaddon/tests/renderer_test.php
+@@ -0,0 +1,62 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace tool_installaddon;
++
++/**
++ * Unit tests for the tool_installaddon renderer.
++ *
++ * @package     tool_installaddon
++ * @category    test
++ * @copyright   2026 Moodle Pty Ltd
++ * @license     http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ * @covers      \tool_installaddon_renderer
++ */
++final class renderer_test extends \advanced_testcase {
++
++    /**
++     * The index page must not advertise direct installation from the plugins directory,
++     * as that route can no longer complete. A notice should be shown instead.
++     */
++    public function test_index_page_does_not_offer_install_from_repository(): void {
++        global $PAGE;
++
++        $this->resetAfterTest();
++        $this->setAdminUser();
++
++        $PAGE->set_url(new \moodle_url('/admin/tool/installaddon/index.php'));
++        $PAGE->set_context(\context_system::instance());
++
++        $installer = \tool_installaddon_installer::instance();
++        $output = $PAGE->get_renderer('tool_installaddon');
++        $output->set_installer_instance($installer);
++
++        $html = $output->index_page();
++
++        // The dead button is gone.
++        $this->assertStringNotContainsString(get_string('installfromrepo', 'tool_installaddon'), $html);
++        $this->assertStringNotContainsString('moodle.org/plugins/get.php" method="get"', $html);
++
++        // A notice explaining that the route is unavailable is shown instead, linking to the plugins directory.
++        $this->assertStringContainsString('installfromrepobox', $html);
++        $this->assertStringContainsString('currently unavailable', $html);
++        $this->assertStringContainsString('moodle.org/plugins/get.php', $html);
++
++        // The ZIP upload route is still offered.
++        $this->assertStringContainsString('installfromzipbox', $html);
++        $this->assertStringContainsString(get_string('installfromzipsubmit', 'tool_installaddon'), $html);
++    }
++}
+diff --git a/public/admin/tool/installaddon/version.php b/public/admin/tool/installaddon/version.php
+index 078de302e6a..e8b92386c59 100644
+--- a/public/admin/tool/installaddon/version.php
++++ b/public/admin/tool/installaddon/version.php
+@@ -24,6 +24,6 @@
+ defined('MOODLE_INTERNAL') || die();
+ 
+ $plugin->component  = 'tool_installaddon';
+-$plugin->version    = 2026042000;
++$plugin->version    = 2026042001;
+ $plugin->requires   = 2026041000;
+ $plugin->maturity   = MATURITY_STABLE;

@@ -1,0 +1,157 @@
+diff --git a/public/mod/assign/locallib.php b/public/mod/assign/locallib.php
+index 2901a49b29a..90de9c5c816 100644
+--- a/public/mod/assign/locallib.php
++++ b/public/mod/assign/locallib.php
+@@ -6656,11 +6656,15 @@ class assign {
+             $userid = $USER->id;
+         }
+ 
++        // Apply any user or group overrides so that the effective dates for this user are used.
++        $this->update_effective_access($userid);
++        $instance = $this->get_instance($userid);
++
+         $time = \core\di::get(\core\clock::class)->time();
+         $dateopen = true;
+         $finaldate = false;
+-        if ($this->get_instance()->cutoffdate) {
+-            $finaldate = $this->get_instance()->cutoffdate;
++        if ($instance->cutoffdate) {
++            $finaldate = $instance->cutoffdate;
+         }
+ 
+         if ($flags === false) {
+@@ -6681,9 +6685,9 @@ class assign {
+         }
+ 
+         if ($finaldate) {
+-            $dateopen = ($this->get_instance()->allowsubmissionsfromdate <= $time && $time <= $finaldate);
++            $dateopen = ($instance->allowsubmissionsfromdate <= $time && $time <= $finaldate);
+         } else {
+-            $dateopen = ($this->get_instance()->allowsubmissionsfromdate <= $time);
++            $dateopen = ($instance->allowsubmissionsfromdate <= $time);
+         }
+ 
+         if (!$dateopen) {
+diff --git a/public/mod/assign/tests/locallib_test.php b/public/mod/assign/tests/locallib_test.php
+index 39dd09e146c..0e63fb6f88e 100644
+--- a/public/mod/assign/tests/locallib_test.php
++++ b/public/mod/assign/tests/locallib_test.php
+@@ -2593,6 +2593,118 @@ You can see it appended to your <a href="' . $assignurl .
+         $this->assertEquals(false, $assign->testable_submissions_open($student->id));
+     }
+ 
++    /**
++     * Test that user and group overrides are taken into account by submissions_open().
++     *
++     * @covers \assign::submissions_open
++     */
++    public function test_submissions_open_with_overrides(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++
++        $course = $this->getDataGenerator()->create_course();
++        $teacher = $this->getDataGenerator()->create_and_enrol($course, 'teacher');
++        $student1 = $this->getDataGenerator()->create_and_enrol($course, 'student');
++        $student2 = $this->getDataGenerator()->create_and_enrol($course, 'student');
++        $student3 = $this->getDataGenerator()->create_and_enrol($course, 'student');
++        $student4 = $this->getDataGenerator()->create_and_enrol($course, 'student');
++
++        $group = $this->getDataGenerator()->create_group(['courseid' => $course->id]);
++        groups_add_member($group, $student3);
++        groups_add_member($group, $student4);
++
++        $now = time();
++        $tomorrow = $now + DAYSECS;
++        $yesterday = $now - DAYSECS;
++        $twodaysago = $now - (2 * DAYSECS);
++
++        // Cut-off date in the past: submissions are closed for everybody by default.
++        $assign = $this->create_instance($course, ['duedate' => $twodaysago, 'cutoffdate' => $yesterday]);
++        $instance = $assign->get_instance();
++
++        $this->setUser($teacher);
++        $this->assertFalse($assign->testable_submissions_open($student1->id));
++        $this->assertFalse($assign->testable_submissions_open($student2->id));
++        $this->assertFalse($assign->testable_submissions_open($student3->id));
++        $this->assertFalse($assign->testable_submissions_open($student4->id));
++
++        // User override: cut-off date in the future for student 1.
++        $DB->insert_record('assign_overrides', (object) [
++            'assignid' => $instance->id,
++            'groupid' => null,
++            'userid' => $student1->id,
++            'sortorder' => null,
++            'allowsubmissionsfromdate' => null,
++            'duedate' => null,
++            'cutoffdate' => $tomorrow,
++            'timelimit' => null,
++        ]);
++        // User override: cut-off date disabled for student 2.
++        $DB->insert_record('assign_overrides', (object) [
++            'assignid' => $instance->id,
++            'groupid' => null,
++            'userid' => $student2->id,
++            'sortorder' => null,
++            'allowsubmissionsfromdate' => null,
++            'duedate' => null,
++            'cutoffdate' => 0,
++            'timelimit' => null,
++        ]);
++        // Group override: cut-off date in the future for the group (students 3 and 4).
++        $DB->insert_record('assign_overrides', (object) [
++            'assignid' => $instance->id,
++            'groupid' => $group->id,
++            'userid' => null,
++            'sortorder' => 1,
++            'allowsubmissionsfromdate' => null,
++            'duedate' => null,
++            'cutoffdate' => $tomorrow,
++            'timelimit' => null,
++        ]);
++        // User override: cut-off date in the past for student 4 takes priority over the group override.
++        $DB->insert_record('assign_overrides', (object) [
++            'assignid' => $instance->id,
++            'groupid' => null,
++            'userid' => $student4->id,
++            'sortorder' => null,
++            'allowsubmissionsfromdate' => null,
++            'duedate' => null,
++            'cutoffdate' => $yesterday,
++            'timelimit' => null,
++        ]);
++
++        $assign = new mod_assign_testable_assign($assign->get_context(), $assign->get_course_module(), $course);
++
++        $this->setUser($teacher);
++        $this->assertTrue($assign->testable_submissions_open($student1->id));
++        $this->assertTrue($assign->testable_submissions_open($student2->id));
++        $this->assertTrue($assign->testable_submissions_open($student3->id));
++        $this->assertFalse($assign->testable_submissions_open($student4->id));
++
++        // Now the other direction: no cut-off date by default, but an override making it earlier.
++        $assign = $this->create_instance($course, ['duedate' => $tomorrow]);
++        $instance = $assign->get_instance();
++        $this->assertTrue($assign->testable_submissions_open($student1->id));
++
++        $DB->insert_record('assign_overrides', (object) [
++            'assignid' => $instance->id,
++            'groupid' => null,
++            'userid' => $student1->id,
++            'sortorder' => null,
++            'allowsubmissionsfromdate' => null,
++            'duedate' => $twodaysago,
++            'cutoffdate' => $yesterday,
++            'timelimit' => null,
++        ]);
++        $assign = new mod_assign_testable_assign($assign->get_context(), $assign->get_course_module(), $course);
++        $this->assertFalse($assign->testable_submissions_open($student1->id));
++
++        // An extension still wins over the override cut-off date.
++        $assign->testable_save_user_extension($student1->id, $tomorrow);
++        $this->assertTrue($assign->testable_submissions_open($student1->id));
++    }
++
+     public function test_get_graders(): void {
+         global $DB;
+ 

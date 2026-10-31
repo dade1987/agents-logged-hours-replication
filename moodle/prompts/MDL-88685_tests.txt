@@ -1,0 +1,61 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You CAN run Moodle's existing PHPUnit tests: `cd {WS} && vendor/bin/phpunit <path/to/some_test.php>` (the test environment is already initialised). You may also run `php -l <file>` and read code with grep/find/cat. Use absolute paths starting with {WS} in every command.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-88685: Themes: Add navigation to manage site Badges in Boost
+
+h2. Summary: 
+
+h2. Themes: Manage Site Badges in Boost
+
+h2. Problem statement:
+
+Currently, the Boost theme does not fully replicate the functionality of the "Navigation" block from the Classic theme. Specifically, the "Site badges" link (badges/index.php?type=1) is missing a direct replacement in Boost for non-admin users. With the removal of the Classic theme in 5.3 ([MDL-83950]), users will lose their primary access point to view badges available at the site level.
+
+h2. Current behaviour:
+
+Admins can manage badges via Site admin > Badges. However, for non-admins, there is no direct link to view available site badges. The "Badges" section of the user profile only appears if the user has been awarded a badge. A Behat test for adding badges currently contains a "hack" (TODO [MDL-57120]) to bypass this missing navigation.
+
+h2. Expected behaviour:
+
+The "Badges" section of the user profile should be updated:
+1. The section should appear if badges are enabled for the site AND the site has at least one badge defined (even if the user hasn't earned any yet).
+2. A link to "Site badges" (pointing to badges/index.php?type=1) should be added to this section.
+
+Mock up of design below (when badges are enabled and at least one badge is defined):
+
+!profile_badges_with_link_to_site_badges.png|width=451,height=183,alt="profile_badges_with_link_to_site_badges.png"!
+
+Current behaviour when there are no badges defined should remain the same (no section shown).
+
+h2. Value:
+
+Ensures site-wide badge visibility remains accessible to all users as the Classic theme is retired.
+
+h2. Scope:
+
+h3. In scope:
+
+* Updating user profile logic to show the Badges section when site badges exist.
+* Adding the "Site badges" link to the user profile badges section.
+* Writing new Behat tests to verify the section visibility and link.
+* Cleaning up the Behat workaround tagged with "TODO MDL-57120" in: badges/tests/behat/add_badge.feature
+* Creating a markdown file summarizing the UI changes for user documentation.
+
+h2. Out of scope:
+
+* Changing the badge management interface.
+* Changing how badges are awarded.
+
+h3. Acceptance criteria:
+
+* The "Badges" section appears on the user profile if the site has at least one badge.
+* A "Site badges" link is present in that section and correctly redirects to badges/index.php?type=1.
+* The section remains hidden if no badges are defined on the site.
+* The Behat workaround is removed and the test is updated.
+* A documentation draft (markdown file) summarizing the UI change is attached to the ticket.

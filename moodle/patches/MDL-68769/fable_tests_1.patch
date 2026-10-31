@@ -1,0 +1,210 @@
+diff --git a/public/course/lib.php b/public/course/lib.php
+index b40dbc83e1b..69ae6824387 100644
+--- a/public/course/lib.php
++++ b/public/course/lib.php
+@@ -897,8 +897,16 @@ function course_module_bulk_update_calendar_events($modulename, $courseid = 0) {
+     }
+ 
+     foreach ($instances as $instance) {
+-        if ($cm = get_coursemodule_from_instance($modulename, $instance->id, $instance->course)) {
+-            course_module_calendar_event_update_process($instance, $cm);
++        try {
++            if ($cm = get_coursemodule_from_instance($modulename, $instance->id, $instance->course)) {
++                course_module_calendar_event_update_process($instance, $cm);
++            }
++        } catch (\moodle_exception $e) {
++            // The module instance, course module or course may have been deleted (or orphaned) between the time this
++            // process was requested and now. Failing here would make the whole task fail (and be retried forever), so
++            // just report the problem and carry on with the remaining instances.
++            mtrace("Unable to refresh calendar events for {$modulename} instance {$instance->id} " .
++                "(course {$instance->course}): " . $e->getMessage());
+         }
+     }
+     return true;
+diff --git a/public/course/tests/courselib_test.php b/public/course/tests/courselib_test.php
+index cbc2d37baa0..9a8315128d4 100644
+--- a/public/course/tests/courselib_test.php
++++ b/public/course/tests/courselib_test.php
+@@ -4447,6 +4447,43 @@ final class courselib_test extends advanced_testcase {
+         $this->assertTrue(course_module_bulk_update_calendar_events('assign', $course->id));
+     }
+ 
++    /**
++     * Test that orphaned module instances do not make the bulk update of calendar events fail (MDL-68769).
++     */
++    public function test_course_module_bulk_update_calendar_events_orphaned(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $this->setAdminUser();
++
++        $course = $this->getDataGenerator()->create_course(['enablecompletion' => COMPLETION_ENABLED]);
++        $course2 = $this->getDataGenerator()->create_course(['enablecompletion' => COMPLETION_ENABLED]);
++        $assign = $this->getDataGenerator()->create_module('assign', [
++            'course' => $course,
++            'completionexpected' => time(),
++            'duedate' => time(),
++        ]);
++        $assign2 = $this->getDataGenerator()->create_module('assign', [
++            'course' => $course2,
++            'completionexpected' => time(),
++            'duedate' => time(),
++        ]);
++
++        // Orphan the first assignment by removing its course and course module records directly.
++        $DB->delete_records('course_modules', ['id' => $assign->cmid]);
++        $DB->delete_records('course', ['id' => $course->id]);
++
++        // Orphan the second assignment by removing its course only, so the course module still points to a
++        // course that does not exist any more.
++        $DB->delete_records('course', ['id' => $course2->id]);
++
++        // This must not throw an exception, it should just report the problem.
++        $this->assertTrue(course_module_bulk_update_calendar_events('assign'));
++        $output = $this->getActualOutputForAssertion();
++        $this->assertStringContainsString('Unable to refresh calendar events for assign instance ' . $assign2->id, $output);
++        $this->assertStringNotContainsString('Unable to refresh calendar events for assign instance ' . $assign->id, $output);
++    }
++
+     /**
+      * Test that a student can view participants in a course they are enrolled in.
+      */
+diff --git a/public/lib/classes/task/refresh_mod_calendar_events_task.php b/public/lib/classes/task/refresh_mod_calendar_events_task.php
+index 3e2641aea06..2aae1daeb83 100644
+--- a/public/lib/classes/task/refresh_mod_calendar_events_task.php
++++ b/public/lib/classes/task/refresh_mod_calendar_events_task.php
+@@ -44,7 +44,7 @@ class refresh_mod_calendar_events_task extends adhoc_task {
+      * Run the task to refresh calendar events.
+      */
+     public function execute() {
+-        global $CFG;
++        global $CFG, $DB;
+ 
+         require_once($CFG->dirroot . '/course/lib.php');
+ 
+@@ -61,6 +61,14 @@ class refresh_mod_calendar_events_task extends adhoc_task {
+             $courseid = 0;
+         }
+ 
++        // If the task is for a specific course, make sure that it still exists. The course may have been deleted
++        // after this task was queued (e.g. a restore followed by a quick deletion), in which case there is nothing
++        // left to refresh. Do not throw an exception here otherwise the task would be retried forever.
++        if ($courseid && !$DB->record_exists('course', ['id' => $courseid])) {
++            mtrace("Course with ID {$courseid} does not exist (any more). Skipping the refresh of calendar events.");
++            return;
++        }
++
+         $pluginmanager = core_plugin_manager::instance();
+         $modplugins = $pluginmanager->get_plugins_of_type('mod');
+         foreach ($modplugins as $plugin) {
+diff --git a/public/lib/tests/task/refresh_mod_calendar_events_task_test.php b/public/lib/tests/task/refresh_mod_calendar_events_task_test.php
+new file mode 100644
+index 00000000000..fa9df08304d
+--- /dev/null
++++ b/public/lib/tests/task/refresh_mod_calendar_events_task_test.php
+@@ -0,0 +1,105 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\task;
++
++/**
++ * Unit tests for the refresh_mod_calendar_events_task adhoc task.
++ *
++ * @package   core
++ * @copyright 2020 Moodle Pty Ltd
++ * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ * @covers    \core\task\refresh_mod_calendar_events_task
++ */
++final class refresh_mod_calendar_events_task_test extends \advanced_testcase {
++    /**
++     * The task refreshes the events of the module instances of a given course.
++     */
++    public function test_execute_for_course(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $this->setAdminUser();
++
++        $course = $this->getDataGenerator()->create_course(['enablecompletion' => \COMPLETION_ENABLED]);
++        $assign = $this->getDataGenerator()->create_module('assign', [
++            'course' => $course,
++            'completionexpected' => time(),
++            'duedate' => time(),
++        ]);
++
++        // Remove the events, the task should recreate them.
++        $DB->delete_records('event', ['modulename' => 'assign', 'instance' => $assign->id]);
++        $this->assertEquals(0, $DB->count_records('event', ['modulename' => 'assign', 'instance' => $assign->id]));
++
++        $task = new refresh_mod_calendar_events_task();
++        $task->set_custom_data(['courseid' => $course->id, 'plugins' => ['assign']]);
++        $task->execute();
++        $this->expectOutputRegex('/Refreshing events for assign/');
++
++        $this->assertGreaterThan(0, $DB->count_records('event', ['modulename' => 'assign', 'instance' => $assign->id]));
++    }
++
++    /**
++     * The task must not fail when the course it was queued for has been deleted in the meantime (MDL-68769).
++     */
++    public function test_execute_for_deleted_course(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $this->setAdminUser();
++
++        $course = $this->getDataGenerator()->create_course(['enablecompletion' => \COMPLETION_ENABLED]);
++        $this->getDataGenerator()->create_module('assign', [
++            'course' => $course,
++            'completionexpected' => time(),
++            'duedate' => time(),
++        ]);
++
++        // Simulate a course that was deleted after the task was queued (leaving orphaned module records behind).
++        $DB->delete_records('course', ['id' => $course->id]);
++
++        $task = new refresh_mod_calendar_events_task();
++        $task->set_custom_data(['courseid' => $course->id]);
++        $task->execute();
++        $this->expectOutputRegex("/Course with ID {$course->id} does not exist/");
++    }
++
++    /**
++     * The task must not fail when it refreshes all the modules of the site and some of them are orphaned (MDL-68769).
++     */
++    public function test_execute_with_orphaned_modules(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $this->setAdminUser();
++
++        $course = $this->getDataGenerator()->create_course(['enablecompletion' => \COMPLETION_ENABLED]);
++        $assign = $this->getDataGenerator()->create_module('assign', [
++            'course' => $course,
++            'completionexpected' => time(),
++            'duedate' => time(),
++        ]);
++
++        // Simulate a course that was deleted leaving orphaned module records behind.
++        $DB->delete_records('course', ['id' => $course->id]);
++
++        $task = new refresh_mod_calendar_events_task();
++        $task->set_custom_data(['plugins' => ['assign']]);
++        $task->execute();
++        $this->expectOutputRegex('/Unable to refresh calendar events for assign instance ' . $assign->id . '/');
++    }
++}

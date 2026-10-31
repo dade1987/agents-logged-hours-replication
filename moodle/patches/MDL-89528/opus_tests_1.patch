@@ -1,0 +1,91 @@
+diff --git a/public/lib/classes/di.php b/public/lib/classes/di.php
+index 46dd11354eb..3d626d28958 100644
+--- a/public/lib/classes/di.php
++++ b/public/lib/classes/di.php
+@@ -89,9 +89,10 @@ class di {
+         // Configure the Container builder.
+         $builder = new \DI\ContainerBuilder();
+ 
+-        // At the moment we are using autowiring, but not automatic attribute injection.
+-        // Automatic attribute injection is a php-di specific feature.
++        // We use autowiring, and attribute-based injection.
++        // Note: Attribute-based injection (e.g. #[\DI\Attribute\Inject]) and injectOn() are php-di specific features.
+         $builder->useAutowiring(true);
++        $builder->useAttributes(true);
+ 
+         if (!$CFG->debugdeveloper) {
+             // Enable compilation of the container and write proxies to disk in production.
+diff --git a/public/lib/tests/classes/di/attribute_injected_class.php b/public/lib/tests/classes/di/attribute_injected_class.php
+new file mode 100644
+index 00000000000..d934cf8a598
+--- /dev/null
++++ b/public/lib/tests/classes/di/attribute_injected_class.php
+@@ -0,0 +1,30 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\tests\di;
++
++/**
++ * Fixture class used to test attribute-based property injection.
++ *
++ * @package   core
++ * @copyright 2025 Moodle Pty Ltd
++ * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class attribute_injected_class {
++    /** @var \core\hook\manager The hook manager */
++    #[\DI\Attribute\Inject]
++    public \core\hook\manager $hookmanager;
++}
+diff --git a/public/lib/tests/di_test.php b/public/lib/tests/di_test.php
+index b99707f5aeb..ba16d36e337 100644
+--- a/public/lib/tests/di_test.php
++++ b/public/lib/tests/di_test.php
+@@ -159,4 +159,33 @@ final class di_test extends \advanced_testcase {
+             $stringmanager,
+         );
+     }
++
++    /**
++     * Test that attribute-based property injection works via injectOn.
++     */
++    public function test_inject_on_with_attributes(): void {
++        $instance = new class () {
++            /** @var \core_string_manager The string manager */
++            #[\DI\Attribute\Inject]
++            public \core_string_manager $stringmanager;
++
++            /**
++             * Constructor.
++             */
++            public function __construct() {
++                \core\di::get_container()->injectOn($this);
++            }
++        };
++
++        $this->assertSame(get_string_manager(), $instance->stringmanager);
++    }
++
++    /**
++     * Test that attribute-based property injection works when fetching from the container.
++     */
++    public function test_get_with_attribute_injection(): void {
++        $instance = di::get(\core\tests\di\attribute_injected_class::class);
++        $this->assertInstanceOf(hook\manager::class, $instance->hookmanager);
++        $this->assertSame(hook\manager::get_instance(), $instance->hookmanager);
++    }
+ }

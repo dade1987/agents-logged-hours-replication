@@ -1,0 +1,310 @@
+diff --git a/public/lib/UPGRADING.md b/public/lib/UPGRADING.md
+index 87a4a2b9497..0127c75303b 100644
+--- a/public/lib/UPGRADING.md
++++ b/public/lib/UPGRADING.md
+@@ -4,6 +4,11 @@
+ 
+ ### Added
+ 
++- A new ad-hoc task `\core\task\delete_block_instances_task` has been added. It deletes all the instances (and related data) of a given block plugin in the background, and can be created with `\core\task\delete_block_instances_task::instance($blockname)`.
++
++  When a block plugin whose code is no longer present on disk is uninstalled (for example when a block is removed from core and uninstalled during an upgrade), `\core\plugininfo\block::uninstall_cleanup()` now queues this task to delete the block instances after the upgrade has completed instead of deleting them synchronously.
++
++  For more information see [MDL-89289](https://tracker.moodle.org/browse/MDL-89289)
+ - `email_to_user()` now emits a hook `before_email_to_user`. This hook allows any subscriber to modify the email contents, add additional headers, or add reasons to block the email. If any block reasons are added, the email is stopped from being sent and the reasons are output.
+ 
+   For more information see [MDL-69724](https://tracker.moodle.org/browse/MDL-69724)
+diff --git a/public/lib/classes/plugininfo/block.php b/public/lib/classes/plugininfo/block.php
+index 14f7af4de7a..594a1f50e0d 100644
+--- a/public/lib/classes/plugininfo/block.php
++++ b/public/lib/classes/plugininfo/block.php
+@@ -170,12 +170,21 @@ class block extends base {
+             $blockobject = block_instance($block->name);
+             if ($blockobject) {
+                 $blockobject->before_delete();  // Only if we can create instance, block might have been already removed.
+-            }
+ 
+-            // First delete instances and related contexts.
+-            $instances = $DB->get_records('block_instances', ['blockname' => $block->name]);
+-            foreach ($instances as $instance) {
+-                blocks_delete_instance($instance);
++                // The block code is still available, so delete the instances and related contexts right away
++                // in order to give the block the chance to perform its own instance cleanup.
++                $instances = $DB->get_records('block_instances', ['blockname' => $block->name]);
++                foreach ($instances as $instance) {
++                    blocks_delete_instance($instance);
++                }
++            } else if ($DB->record_exists('block_instances', ['blockname' => $block->name])) {
++                // The block code is no longer available (e.g. the plugin has been removed from core during an upgrade).
++                // Deleting the instances can be a lengthy process on large sites, so defer it to an ad-hoc task which
++                // will run after the upgrade (or uninstallation) has completed.
++                \core\task\manager::queue_adhoc_task(
++                    \core\task\delete_block_instances_task::instance($block->name),
++                    true,
++                );
+             }
+ 
+             // Delete block.
+diff --git a/public/lib/classes/task/delete_block_instances_task.php b/public/lib/classes/task/delete_block_instances_task.php
+new file mode 100644
+index 00000000000..7a59dda0091
+--- /dev/null
++++ b/public/lib/classes/task/delete_block_instances_task.php
+@@ -0,0 +1,127 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\task;
++
++use core\local\cli\shutdown;
++
++/**
++ * Ad-hoc task to delete all block instances (and related data) belonging to a block plugin.
++ *
++ * This is used by the upgrade process when a block plugin has been removed from core, so that the
++ * potentially lengthy removal of its instances can happen in the background after the upgrade has
++ * completed rather than synchronously during the upgrade itself.
++ *
++ * @package   core
++ * @copyright 2026 onwards Moodle Pty Ltd
++ * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class delete_block_instances_task extends adhoc_task {
++    use stored_progress_task_trait;
++
++    /** @var int The number of block instances processed per batch. */
++    const BATCH_SIZE = 1000;
++
++    /**
++     * Create a new instance of the task for the given block.
++     *
++     * @param string $blockname The name of the block plugin (without the 'block_' prefix), e.g. 'section_links'.
++     * @return static
++     */
++    public static function instance(string $blockname): static {
++        $task = new static();
++        $task->set_custom_data((object) [
++            'blockname' => $blockname,
++        ]);
++
++        return $task;
++    }
++
++    /**
++     * Get the name of the block whose instances are to be deleted.
++     *
++     * @return string
++     */
++    public function get_blockname(): string {
++        $data = $this->get_custom_data();
++        if (empty($data) || empty($data->blockname)) {
++            return '';
++        }
++
++        return (string) $data->blockname;
++    }
++
++    #[\Override]
++    public function execute(): void {
++        global $CFG, $DB;
++        require_once($CFG->libdir . '/blocklib.php');
++
++        $blockname = $this->get_blockname();
++        if ($blockname === '') {
++            mtrace('No block name specified, nothing to do.');
++            return;
++        }
++
++        $this->start_stored_progress();
++        $progress = $this->get_progress();
++
++        $total = $DB->count_records('block_instances', ['blockname' => $blockname]);
++        mtrace("Deleting {$total} instances of block '{$blockname}'.");
++
++        $progress->start_progress('', $total);
++        $done = 0;
++        $rescheduled = false;
++
++        // Process the instances in batches so that very large sites do not have to hold all records in memory
++        // and so that the deletion can be interrupted gracefully.
++        while (true) {
++            $instanceids = array_keys($DB->get_records(
++                'block_instances',
++                ['blockname' => $blockname],
++                'id ASC',
++                'id',
++                0,
++                self::BATCH_SIZE,
++            ));
++
++            if (empty($instanceids)) {
++                break;
++            }
++
++            $transaction = $DB->start_delegated_transaction();
++            blocks_delete_instances($instanceids);
++            $transaction->allow_commit();
++
++            $count = count($instanceids);
++            $done += $count;
++            $progress->increment_progress($count);
++
++            // The task might be running for a long time. If a graceful exit is requested, queue this task again.
++            if (shutdown::should_gracefully_exit()) {
++                manager::queue_adhoc_task(static::instance($blockname), true);
++                mtrace("Graceful exit requested, rescheduled deletion of the remaining instances of block '{$blockname}'.");
++                $rescheduled = true;
++                break;
++            }
++        }
++
++        $progress->end_progress();
++
++        if (!$rescheduled) {
++            mtrace("Deleted {$done} instances of block '{$blockname}'.");
++        }
++    }
++}
+diff --git a/public/lib/tests/task/delete_block_instances_task_test.php b/public/lib/tests/task/delete_block_instances_task_test.php
+new file mode 100644
+index 00000000000..86498bb663a
+--- /dev/null
++++ b/public/lib/tests/task/delete_block_instances_task_test.php
+@@ -0,0 +1,124 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\task;
++
++/**
++ * Tests for the delete_block_instances_task ad-hoc task.
++ *
++ * @package   core
++ * @copyright 2026 onwards Moodle Pty Ltd
++ * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ * @covers    \core\task\delete_block_instances_task
++ */
++final class delete_block_instances_task_test extends \advanced_testcase {
++    /**
++     * Test that the task is created with the correct custom data.
++     */
++    public function test_instance(): void {
++        $task = delete_block_instances_task::instance('online_users');
++
++        $this->assertInstanceOf(delete_block_instances_task::class, $task);
++        $this->assertInstanceOf(adhoc_task::class, $task);
++        $this->assertEquals('online_users', $task->get_blockname());
++        $this->assertEquals('core', $task->get_component());
++    }
++
++    /**
++     * Test that the task deletes all instances of the given block, and only those.
++     */
++    public function test_execute(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++
++        $course = $this->getDataGenerator()->create_course();
++        $coursecontext = \context_course::instance($course->id);
++        $generator = $this->getDataGenerator();
++
++        $todelete = [];
++        for ($i = 0; $i < 3; $i++) {
++            $todelete[] = $generator->create_block('online_users', [
++                'parentcontextid' => $coursecontext->id,
++                'pagetypepattern' => 'course-view-*',
++            ]);
++        }
++        $tokeep = $generator->create_block('html', [
++            'parentcontextid' => $coursecontext->id,
++            'pagetypepattern' => 'course-view-*',
++        ]);
++
++        // Add a block position and some user preferences for one of the instances to be deleted.
++        $user = $generator->create_user();
++        $DB->insert_record('block_positions', (object) [
++            'blockinstanceid' => $todelete[0]->id,
++            'contextid' => $coursecontext->id,
++            'pagetype' => 'course-view-topics',
++            'subpage' => '',
++            'visible' => 1,
++            'region' => 'side-pre',
++            'weight' => 0,
++        ]);
++        set_user_preference('block' . $todelete[0]->id . 'hidden', 1, $user);
++        set_user_preference('docked_block_instance_' . $todelete[0]->id, 1, $user);
++
++        $this->assertEquals(3, $DB->count_records('block_instances', ['blockname' => 'online_users']));
++        $this->assertEquals(1, $DB->count_records('block_instances', ['blockname' => 'html']));
++
++        $task = delete_block_instances_task::instance('online_users');
++        manager::queue_adhoc_task($task);
++
++        $this->expectOutputRegex("/Deleted 3 instances of block 'online_users'/");
++        $this->runAdhocTasks(delete_block_instances_task::class);
++
++        $this->assertEquals(0, $DB->count_records('block_instances', ['blockname' => 'online_users']));
++        $this->assertEquals(0, $DB->count_records('block_positions', ['blockinstanceid' => $todelete[0]->id]));
++        $this->assertEmpty(get_user_preferences('block' . $todelete[0]->id . 'hidden', null, $user));
++        $this->assertEmpty(get_user_preferences('docked_block_instance_' . $todelete[0]->id, null, $user));
++        foreach ($todelete as $instance) {
++            $this->assertFalse($DB->record_exists('context', [
++                'contextlevel' => CONTEXT_BLOCK,
++                'instanceid' => $instance->id,
++            ]));
++        }
++
++        // The other block instance must not have been touched.
++        $this->assertTrue($DB->record_exists('block_instances', ['id' => $tokeep->id]));
++        $this->assertTrue($DB->record_exists('context', [
++            'contextlevel' => CONTEXT_BLOCK,
++            'instanceid' => $tokeep->id,
++        ]));
++    }
++
++    /**
++     * Test that the task does nothing when there are no instances of the block.
++     */
++    public function test_execute_no_instances(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++
++        $count = $DB->count_records('block_instances');
++
++        $task = delete_block_instances_task::instance('online_users');
++        manager::queue_adhoc_task($task);
++
++        $this->expectOutputRegex("/Deleted 0 instances of block 'online_users'/");
++        $this->runAdhocTasks(delete_block_instances_task::class);
++
++        $this->assertEquals($count, $DB->count_records('block_instances'));
++    }
++}

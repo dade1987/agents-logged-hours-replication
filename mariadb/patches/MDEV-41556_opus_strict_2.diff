@@ -1,0 +1,73 @@
+diff --git a/plugin/type_assoc_array/mysql-test/type_assoc_array/sp-assoc-array-bugs.result b/plugin/type_assoc_array/mysql-test/type_assoc_array/sp-assoc-array-bugs.result
+index 18ba5ce0..c69e597c 100644
+--- a/plugin/type_assoc_array/mysql-test/type_assoc_array/sp-assoc-array-bugs.result
++++ b/plugin/type_assoc_array/mysql-test/type_assoc_array/sp-assoc-array-bugs.result
+@@ -20,4 +20,17 @@ SHOW WARNINGS;
+ Level	Code	Message
+ Error	1235	This version of MariaDB doesn't yet support 'LIMIT & IN/ALL/ANY/SOME subquery'
+ Error	1305	FUNCTION arr.t does not exist
++#
++# MDEV-41556 Unexpected error: Incorrect ASSOCIATIVE ARRAY KEY value
++#
++DECLARE
++TYPE t IS TABLE OF INT INDEX BY BIGINT;
++a t;
++BEGIN
++a(-9223372036854775807-1):= 10;
++SELECT a(-9223372036854775807-1) AS c1, a.FIRST AS c2;
++END;
++$$
++c1	c2
++10	-9223372036854775808
+ # End of 12.1 bugs
+diff --git a/plugin/type_assoc_array/mysql-test/type_assoc_array/sp-assoc-array-bugs.test b/plugin/type_assoc_array/mysql-test/type_assoc_array/sp-assoc-array-bugs.test
+index df4191c0..45d5ff1f 100644
+--- a/plugin/type_assoc_array/mysql-test/type_assoc_array/sp-assoc-array-bugs.test
++++ b/plugin/type_assoc_array/mysql-test/type_assoc_array/sp-assoc-array-bugs.test
+@@ -23,4 +23,19 @@ $$
+ DELIMITER ;$$
+ SHOW WARNINGS;
+ 
++--echo #
++--echo # MDEV-41556 Unexpected error: Incorrect ASSOCIATIVE ARRAY KEY value
++--echo #
++
++DELIMITER $$;
++DECLARE
++  TYPE t IS TABLE OF INT INDEX BY BIGINT;
++  a t;
++BEGIN
++  a(-9223372036854775807-1):= 10;
++  SELECT a(-9223372036854775807-1) AS c1, a.FIRST AS c2;
++END;
++$$
++DELIMITER ;$$
++
+ --echo # End of 12.1 bugs
+diff --git a/plugin/type_assoc_array/sql_type_assoc_array.cc b/plugin/type_assoc_array/sql_type_assoc_array.cc
+index 7a6969a5..7bee05b6 100644
+--- a/plugin/type_assoc_array/sql_type_assoc_array.cc
++++ b/plugin/type_assoc_array/sql_type_assoc_array.cc
+@@ -1302,7 +1302,7 @@ bool Field_assoc_array::copy_and_convert_key(const String &key,
+       Convert the key to a number to perform range check
+     */
+     char *endptr;
+-    int error;
++    int error= 0;
+ 
+     longlong key_ll;
+     ulonglong key_ull;
+diff --git a/strings/ctype-simple.c b/strings/ctype-simple.c
+index 5d1313d8..fae47f40 100644
+--- a/strings/ctype-simple.c
++++ b/strings/ctype-simple.c
+@@ -1893,8 +1893,7 @@ my_strntoull10rnd_8bit(CHARSET_INFO *cs __attribute__((unused)),
+     {
+       if (ull >= (ulonglong) LONGLONG_MIN)
+       {
+-        if (ull != (ulonglong) LONGLONG_MIN)
+-          *error= MY_ERRNO_ERANGE;
++        *error= ull != (ulonglong) LONGLONG_MIN ? MY_ERRNO_ERANGE : 0;
+         return (ulonglong) LONGLONG_MIN;
+       }
+       *error= 0;

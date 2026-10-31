@@ -1,0 +1,35 @@
+diff --git a/plugin/qc_info/qc_info.cc b/plugin/qc_info/qc_info.cc
+index a46e2d9f..2eb6d6ce 100644
+--- a/plugin/qc_info/qc_info.cc
++++ b/plugin/qc_info/qc_info.cc
+@@ -230,9 +230,27 @@ static int qc_info_fill_table(THD *thd, TABLE_LIST *tables,
+     /* The database against which the statement is executed is part of the
+        query cache query key
+      */
+-    compile_time_assert(QUERY_CACHE_DB_LENGTH_SIZE == 2); 
+-    db= key + statement_text_length + 1 + QUERY_CACHE_DB_LENGTH_SIZE;
+-    db_length= uint2korr(db - QUERY_CACHE_DB_LENGTH_SIZE);
++    compile_time_assert(QUERY_CACHE_DB_LENGTH_SIZE == 2);
++    {
++      /*
++        The query text may itself contain \0 bytes, in which case strlen()
++        does not give the real query length and the offsets above are
++        unreliable. Never read past the db name end, which is bounded by
++        the flags stored at the end of the key.
++      */
++      size_t db_len_offset= statement_text_length + 1;
++
++      db= key;
++      db_length= 0;
++      if (db_len_offset + QUERY_CACHE_DB_LENGTH_SIZE <= flags_length)
++      {
++        size_t room= flags_length - db_len_offset - QUERY_CACHE_DB_LENGTH_SIZE;
++        db_length= uint2korr(key + db_len_offset);
++        db= key + db_len_offset + QUERY_CACHE_DB_LENGTH_SIZE;
++        if (db_length > room)
++          db_length= room;
++      }
++    }
+ 
+     table->field[COLUMN_STATEMENT_SCHEMA]->store(db, db_length, scs);
+ 

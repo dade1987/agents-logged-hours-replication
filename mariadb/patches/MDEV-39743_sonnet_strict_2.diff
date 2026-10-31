@@ -1,0 +1,89 @@
+diff --git a/mysql-test/main/func_json_notembedded.result b/mysql-test/main/func_json_notembedded.result
+index cf895da6..7c970c06 100644
+--- a/mysql-test/main/func_json_notembedded.result
++++ b/mysql-test/main/func_json_notembedded.result
+@@ -48,6 +48,10 @@ select json_set(@arr,'$[1000]',1);
+ ERROR 70100: Query was interrupted: execution time limit 0.0001 sec exceeded
+ select ST_AsTEXT(ST_GeomFromGeoJSON(JSON_OBJECT("type", "Point", "coordinates", @arr),2)) as exp;
+ ERROR 70100: Query was interrupted: execution time limit 0.0001 sec exceeded
++select @arr is json;
++ERROR 70100: Query was interrupted: execution time limit 0.0001 sec exceeded
++select @obj is json with unique keys;
++ERROR 70100: Query was interrupted: execution time limit 0.0001 sec exceeded
+ SET debug_dbug= @old_debug;
+ disconnect u;
+ connection default;
+diff --git a/mysql-test/main/func_json_notembedded.test b/mysql-test/main/func_json_notembedded.test
+index bf5cc4d9..f870734e 100644
+--- a/mysql-test/main/func_json_notembedded.test
++++ b/mysql-test/main/func_json_notembedded.test
+@@ -37,6 +37,8 @@ select json_remove(@obj,'$.foo');
+ select json_replace(@obj,'$.foo',1);
+ select json_set(@arr,'$[1000]',1);
+ select ST_AsTEXT(ST_GeomFromGeoJSON(JSON_OBJECT("type", "Point", "coordinates", @arr),2)) as exp;
++select @arr is json;
++select @obj is json with unique keys;
+ enable_abort_on_error;
+ SET debug_dbug= @old_debug;
+ disconnect u;
+diff --git a/sql/item_jsonfunc.cc b/sql/item_jsonfunc.cc
+index 3f49b122..32fd3a4e 100644
+--- a/sql/item_jsonfunc.cc
++++ b/sql/item_jsonfunc.cc
+@@ -6499,6 +6499,10 @@ bool Item_func_is_json::val_bool()
+ {
+   bool result= true;
+   bool unique_keys= true;
++  THD *thd= current_thd;
++
++  JSON_DO_PAUSE_EXECUTION(thd, 0.0002);
++
+   String *js= args[0]->val_json(&tmp_value);
+ 
+   if ((null_value= args[0]->null_value))
+@@ -6506,9 +6510,14 @@ bool Item_func_is_json::val_bool()
+ 
+   json_scan_start(&je, js->charset(), (const uchar*)js->ptr(),
+                   (const uchar*)js->end());
++  je.killed_ptr= (uint32_t *) &thd->killed;
+ 
+   if (json_read_value(&je))
++  {
++    if (je.s.error == JE_KILLED)
++      goto js_error;
+     return negated;
++  }
+ 
+   switch (type_constraint)
+   {
+@@ -6536,17 +6545,30 @@ bool Item_func_is_json::val_bool()
+       unique_keys= handle_nested_value(&je);
+ 
+     if (je.s.error)
++    {
++      if (je.s.error == JE_KILLED)
++        goto js_error;
+       return negated;
++    }
+   }
+   else
+   {
+     // verify JSON is well-formed
+     while (json_scan_next(&je) == 0) {}
+     if (je.s.error)
++    {
++      if (je.s.error == JE_KILLED)
++        goto js_error;
+       return negated;
++    }
+   }
+ 
+   return negated ? !(result && unique_keys) : (result && unique_keys);
++
++js_error:
++  report_json_error(js, &je, 0);
++  null_value= 1;
++  return 0;
+ }
+ 
+ 

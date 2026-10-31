@@ -1,0 +1,123 @@
+diff --git a/public/lib/classes/check/manager.php b/public/lib/classes/check/manager.php
+index 417907106b4..937ca2d589f 100644
+--- a/public/lib/classes/check/manager.php
++++ b/public/lib/classes/check/manager.php
+@@ -132,6 +132,7 @@ class manager {
+             new security\crawlers(),
+             new security\passwordpolicy(),
+             new security\emailchangeconfirmation(),
++            new security\newloginnotification(),
+             new security\webcron(),
+             new http\cookiesecure(),
+             new access\riskadmin(),
+diff --git a/public/lib/classes/check/security/newloginnotification.php b/public/lib/classes/check/security/newloginnotification.php
+new file mode 100644
+index 00000000000..eb1173c5906
+--- /dev/null
++++ b/public/lib/classes/check/security/newloginnotification.php
+@@ -0,0 +1,74 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\check\security;
++
++use core\check\check;
++use core\check\result;
++
++/**
++ * Verifies that new login notifications are forced on.
++ *
++ * @package    core
++ * @category   check
++ * @copyright  2026 Moodle
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class newloginnotification extends check {
++
++    #[\Override]
++    public function get_name(): string {
++        return get_string('check_newloginnotification_name', 'report_security');
++    }
++
++    #[\Override]
++    public function get_action_link(): ?\action_link {
++        return new \action_link(
++            new \moodle_url('/admin/message.php'),
++            get_string('defaultmessageoutputs', 'message'),
++        );
++    }
++
++    #[\Override]
++    public function get_result(): result {
++        $details = get_string('check_newloginnotification_details', 'report_security');
++
++        if ($this->is_forced_on()) {
++            return new result(result::OK, get_string('check_newloginnotification_ok', 'report_security'), $details);
++        }
++        return new result(result::WARNING, get_string('check_newloginnotification_error', 'report_security'), $details);
++    }
++
++    /**
++     * Is the new login notification forced on for at least one processor?
++     *
++     * @return bool
++     */
++    protected function is_forced_on(): bool {
++        $prefs = get_config('message');
++        if (!empty($prefs->moodle_newlogin_disable)) {
++            return false;
++        }
++        $enabled = explode(',', $prefs->message_provider_moodle_newlogin_enabled ?? '');
++        foreach (get_message_processors(true) as $name => $processor) {
++            $lockedname = $name . '_provider_moodle_newlogin_locked';
++            if (!empty($prefs->$lockedname) && in_array($name, $enabled)) {
++                return true;
++            }
++        }
++        return false;
++    }
++}
+diff --git a/public/lib/db/messages.php b/public/lib/db/messages.php
+index bf803ce1d1c..4a716d372aa 100644
+--- a/public/lib/db/messages.php
++++ b/public/lib/db/messages.php
+@@ -37,8 +37,8 @@ $messageproviders = array (
+ 
+     'newlogin' => array (
+         'defaults' => [
+-            'popup' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
+-            'email' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
++            'popup' => MESSAGE_FORCED,
++            'email' => MESSAGE_FORCED,
+             'airnotifier' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
+         ],
+     ),
+diff --git a/public/report/security/lang/en/report_security.php b/public/report/security/lang/en/report_security.php
+index dbfc33d7607..762f94eaab2 100644
+--- a/public/report/security/lang/en/report_security.php
++++ b/public/report/security/lang/en/report_security.php
+@@ -50,6 +50,11 @@ $string['check_emailchangeconfirmation_details'] = '<p>It is recommended that an
+ <p>Email field may be also locked from authentication plugins, this possibility is not considered here.</p>';
+ $string['check_emailchangeconfirmation_error'] = 'Users may enter any email address.';
+ $string['check_emailchangeconfirmation_info'] = 'Users may enter email addresses from allowed domains only.';
++$string['check_newloginnotification_details'] = '<p>New login notifications alert users when their account is accessed from a new location, helping them to spot unauthorised logins. It is recommended that they are forced on for at least one notification method (web or email) so that users cannot opt out.</p>
++<p>This can be changed in Site administration / Messaging / Notification settings.</p>';
++$string['check_newloginnotification_error'] = 'New login notifications are not forced on.';
++$string['check_newloginnotification_name'] = 'New login notifications';
++$string['check_newloginnotification_ok'] = 'New login notifications are forced on.';
+ $string['check_emailchangeconfirmation_name'] = 'Email change confirmation';
+ $string['check_emailchangeconfirmation_ok'] = 'Confirmation of change of email address in user profile.';
+ $string['check_embed_details'] = '<p>Unlimited object embedding is very dangerous - any registered user may launch an XSS attack against other server users. This setting should be disabled on production servers.</p>';

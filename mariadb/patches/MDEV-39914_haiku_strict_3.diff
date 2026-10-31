@@ -1,0 +1,24 @@
+diff --git a/sql/item_cmpfunc.cc b/sql/item_cmpfunc.cc
+index eaa70564..b8de32d2 100644
+--- a/sql/item_cmpfunc.cc
++++ b/sql/item_cmpfunc.cc
+@@ -3898,6 +3898,19 @@ in_string::~in_string()
+ bool in_string::set(uint pos, Item *item)
+ {
+   String *str=((String*) base)+pos;
++  /*
++    The slot is zero-initialized, so its charset is not set yet. Set it
++    before calling val_str(): functions like Item_func_simplify write into
++    the buffer passed to them and may use charset() (e.g. through
++    String::append()), which must not dereference a NULL charset.
++  */
++  if (!str->charset())
++  {
++    CHARSET_INFO *cs;
++    if (!(cs= item->collation.collation))
++      cs= &my_charset_bin;		// Should never happen for STR items
++    str->set_charset(cs);
++  }
+   String *res=item->val_str(str);
+   if (res && res != str)
+   {

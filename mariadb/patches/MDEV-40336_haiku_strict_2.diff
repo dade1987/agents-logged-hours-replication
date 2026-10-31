@@ -1,0 +1,71 @@
+diff --git a/mysql-test/main/set_authorization.result b/mysql-test/main/set_authorization.result
+index 71194c22..3a60fe8d 100644
+--- a/mysql-test/main/set_authorization.result
++++ b/mysql-test/main/set_authorization.result
+@@ -148,4 +148,11 @@ set session authorization root@localhost;
+ -- Tracker : SESSION_TRACK_SCHEMA
+ -- 
+ 
++#
++# MDEV-40336 SET SESSION AUTHORIZATION un-expires passwords
++#
++select 3;
++3
++3
++
+ # End of 12.0 tests
+diff --git a/mysql-test/main/set_authorization.test b/mysql-test/main/set_authorization.test
+index d13ee4aa..a981ca49 100644
+--- a/mysql-test/main/set_authorization.test
++++ b/mysql-test/main/set_authorization.test
+@@ -143,4 +143,22 @@ enable_session_track_info;
+ set session authorization root@localhost;
+ disable_session_track_info;
+ 
++--echo #
++--echo # MDEV-40336 SET SESSION AUTHORIZATION un-expires passwords
++--echo #
++
++create user u1@localhost;
++alter user u1@localhost password expire;
++connect con1,localhost,u1;
++--error ER_MUST_CHANGE_PASSWORD
++select 1;
++set session authorization u1@localhost;
++--error ER_MUST_CHANGE_PASSWORD
++select 2;
++set password=password('');
++select 3;
++disconnect con1;
++connection default;
++drop user u1@localhost;
++
+ --echo # End of 12.0 tests
+diff --git a/sql/sql_acl.cc b/sql/sql_acl.cc
+index de8a27c9..d1c506b4 100644
+--- a/sql/sql_acl.cc
++++ b/sql/sql_acl.cc
+@@ -12818,6 +12818,8 @@ bool Sql_cmd_grant_table::execute(THD *thd)
+ }
+ 
+ 
++static bool check_password_lifetime(THD *thd, const ACL_USER &acl_user);
++
+ int acl_setauthorization(THD *thd, const LEX_USER *user)
+ {
+   if (!initialized)
+@@ -12888,6 +12890,14 @@ int acl_setauthorization(THD *thd, const LEX_USER *user)
+     return 1;
+   }
+ 
++  /*
++    The session now runs as the target user, so its password expiration
++    state applies (as it would on a regular login). sctx->init() above has
++    cleared the flag, so it must be recomputed here.
++  */
++  sctx->password_expired= acl_user->password_expired ||
++                          check_password_lifetime(thd, *acl_user);
++
+   mysql_audit_notify_connection_change_user(thd, &save_security_ctx);
+   save_security_ctx.destroy();
+   return 0;

@@ -1,0 +1,124 @@
+Evaluation: the agent's diff (without its own mysql-test changes) was applied on the parent commit, the developers' mysql-test files from the fix were added, the server was built (debug) and the fix's mtr tests were run: ['versioning.partition']
+On the parent commit these tests FAIL; with the human fix they PASS.
+
+AGENT RESULT: FAIL
+versioning.partition 'heap'              w4 [ fail ]
+        Test ended at 2026-10-29 05:13:49
+
+CURRENT_TEST: versioning.partition
+mysqltest: At line 2767: query 'alter table `t1` partition by system_time interval 7 year ' failed: ER_VERS_WRONG_PARTS (4128): Wrong partitions for `t1`: must have at least one HISTORY and exactly one last CURRENT
+
+The result from queries just before the failure was:
+< snip >
+begin
+replace into t select * from t;
+return 0;
+end $
+set timestamp= @@timestamp + 61;
+select f();
+f()
+0
+drop table t;
+drop function f;
+#
+# MDEV-33370 Assertion `!is_set() || (m_status == DA_OK_BULK &&
+#            is_bulk_op())' failed after ALTER TABLE of versioned table
+#
+create table t1 (i int) with system versioning
+partition by system_time interval 1 month (
+partition ver_p1 history,
+partition ver_p2 history,
+partition ver_pn current);
+alter table `t1` partition by system_time interval 7 year ;
+
+More results from queries before failure can be found in /home/mtr/var/t/4/log/partition,heap.log
+
+ - saving '/home/mtr/var/t/4/log/versioning.partition-heap/' to '/home/mtr/var/t/log/versioning.partition-heap/'
+***Warnings generated in error logs during shutdown after running tests: versioning.partition
+
+2026-10-29  5:13:48 0 [Warning] Plugin 'test_versioning' is of maturity level experimental while the server is stable
+2026-10-29  5:13:48 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:48 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:48 4 [Warning] mariadbd: Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of INTERVAL, need more HISTORY partitions
+2026-10-29  5:13:48 4 [Warning] mariadbd: Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of INTERVAL, need more HISTORY partitions
+2026-10-29  5:13:48 4 [Warning] mariadbd: Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of INTERVAL, need more HISTORY partitions
+2026-10-29  5:13:48 4 [Warning] mariadbd: Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of INTERVAL, need more HISTORY partitions
+2026-10-29  5:13:48 4 [Warning] mariadbd: Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of INTERVAL, need more HISTORY partitions
+2026-10-29  5:13:48 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:48 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:48 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p2`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:48 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:48 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:48 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p2`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:48 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p2`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:48 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p2`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:48 4 [Warning] mariadbd: Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of INTERVAL, need more HISTORY partitions
+2026-10-29  5:13:49 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p2`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:49 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:49 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:49 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:49 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:49 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:49 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:49 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:49 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p4`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:49 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p2`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:49 4 [ERROR] InnoDB: Operating system error number 17 in a file operation.
+2026-10-29  5:13:49 4 [ERROR] InnoDB: Error number 17 means 'File exists'
+2026-10-29  5:13:49 4 [ERROR] InnoDB: The file './test/t1#P#p1.ibd' already exists though the corresponding table did not exist in the InnoDB data dictionary. You can resolve the problem by removing the file.
+2026-10-29  5:13:49 4 [Warning] mariadbd: Versioned table `test`.`t1`: last HISTORY partition (`p0`) is out of INTERVAL, need more HISTORY partitions
+2026-10-29  5:13:49 4 [Warning] mariadbd: Versioned table `test`.`t1`: last HISTORY partition (`p0`) is out of INTERVAL, need more HISTORY partitions
+
+versioning.partition 'traditional'       w2 [ fail ]
+        Test ended at 2026-10-29 05:13:50
+
+CURRENT_TEST: versioning.partition
+mysqltest: At line 2767: query 'alter table `t1` partition by system_time interval 7 year ' failed: ER_VERS_WRONG_PARTS (4128): Wrong partitions for `t1`: must have at least one HISTORY and exactly one last CURRENT
+
+The result from queries just before the failure was:
+< snip >
+begin
+replace into t select * from t;
+return 0;
+end $
+set timestamp= @@timestamp + 61;
+select f();
+f()
+0
+drop table t;
+drop function f;
+#
+# MDEV-33370 Assertion `!is_set() || (m_status == DA_OK_BULK &&
+#            is_bulk_op())' failed after ALTER TABLE of versioned table
+#
+create table t1 (i int) with system versioning
+partition by system_time interval 1 month (
+partition ver_p1 history,
+partition ver_p2 history,
+partition ver_pn current);
+alter table `t1` partition by system_time interval 7 year ;
+
+More results from queries before failure can be found in /home/mtr/var/t/2/log/partition.log
+
+ - saving '/home/mtr/var/t/2/log/versioning.partition-traditional/' to '/home/mtr/var/t/log/versioning.partition-traditional/'
+***Warnings generated in error logs during shutdown after running tests: versioning.partition
+
+2026-10-29  5:13:48 0 [Warning] Plugin 'test_versioning' is of maturity level experimental while the server is stable
+2026-10-29  5:13:48 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:48 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:48 4 [Warning] mariadbd: Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of INTERVAL, need more HISTORY partitions
+2026-10-29  5:13:48 4 [Warning] mariadbd: Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of INTERVAL, need more HISTORY partitions
+2026-10-29  5:13:48 4 [Warning] mariadbd: Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of INTERVAL, need more HISTORY partitions
+2026-10-29  5:13:48 4 [Warning] mariadbd: Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of INTERVAL, need more HISTORY partitions
+2026-10-29  5:13:48 4 [Warning] mariadbd: Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of INTERVAL, need more HISTORY partitions
+2026-10-29  5:13:48 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:48 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:48 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p2`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:48 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:48 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:49 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p2`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:49 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p2`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:49 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p2`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:49 4 [Warning] mariadbd: Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of INTERVAL, need more HISTORY partitions
+2026-10-29  5:13:49 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p2`) is out of LIMIT, need more HISTORY partitions
+2026-10-29  5:13:49 4 [Warning] Versioned table `test`.`t1`: last HISTORY partition (`p1`) is out of LIMIT, need more HISTORY partitions

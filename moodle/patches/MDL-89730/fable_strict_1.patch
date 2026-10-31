@@ -1,0 +1,77 @@
+diff --git a/public/mod/quiz/lib.php b/public/mod/quiz/lib.php
+index 708b6ec8711..3e96ccf6278 100644
+--- a/public/mod/quiz/lib.php
++++ b/public/mod/quiz/lib.php
+@@ -992,6 +992,12 @@ function quiz_process_options($quiz) {
+         $quiz->name = trim($quiz->name);
+     }
+ 
++    // The due date is optional. Third-party code (e.g. web services or other plugins)
++    // may create or update a quiz without setting it, so default it to 0 (no due date).
++    if (!isset($quiz->duedate)) {
++        $quiz->duedate = 0;
++    }
++
+     // Password field - different in form to stop browsers that remember passwords
+     // getting confused.
+     $quiz->password = $quiz->quizpassword;
+@@ -1232,7 +1238,7 @@ function quiz_update_events($quiz, $override = null) {
+         $userid    = isset($current->userid)? $current->userid : 0;
+         $timeopen  = isset($current->timeopen)?  $current->timeopen : $quiz->timeopen;
+         $timeclose = isset($current->timeclose)? $current->timeclose : $quiz->timeclose;
+-        $duedate = isset($current->duedate) ? $current->duedate : $quiz->duedate;
++        $duedate = isset($current->duedate) ? $current->duedate : ($quiz->duedate ?? 0);
+ 
+         // Only add open/close/duedate events for an override if they differ from the quiz default.
+         $addopen  = empty($current->id) || !empty($current->timeopen);
+diff --git a/public/mod/quiz/tests/lib_test.php b/public/mod/quiz/tests/lib_test.php
+index c4f933eb09d..1bb7d1c17fc 100644
+--- a/public/mod/quiz/tests/lib_test.php
++++ b/public/mod/quiz/tests/lib_test.php
+@@ -399,6 +399,46 @@ final class lib_test extends \advanced_testcase {
+         $this->assertEquals($quiz2->id, $attempt->quiz);
+     }
+ 
++    /**
++     * Test that a quiz can be created and updated without a duedate being supplied.
++     *
++     * Third-party code (e.g. web services) may call quiz_add_instance() or
++     * quiz_update_instance() without setting duedate, which should then default to 0.
++     *
++     * @covers ::quiz_process_options
++     * @covers ::quiz_update_events
++     */
++    public function test_add_and_update_instance_without_duedate(): void {
++        global $DB;
++        $this->resetAfterTest();
++
++        $course = $this->getDataGenerator()->create_course();
++        /** @var \mod_quiz_generator $quizgen */
++        $quizgen = $this->getDataGenerator()->get_plugin_generator('mod_quiz');
++
++        // quiz_process_options() should default a missing duedate to 0.
++        $data = (object) ['name' => 'Missing duedate', 'quizpassword' => '', 'grade' => 100];
++        $this->assertNull(quiz_process_options($data));
++        $this->assertSame(0, $data->duedate);
++
++        // Create a quiz, then update it without passing duedate (as a web service might).
++        $quiz = $quizgen->create_instance(['course' => $course->id, 'duedate' => 0]);
++        $cm = get_coursemodule_from_instance('quiz', $quiz->id);
++
++        $update = clone $quiz;
++        $update->instance = $quiz->id;
++        $update->coursemodule = $cm->id;
++        $update->quizpassword = '';
++        $update->name = 'Updated name';
++        unset($update->id, $update->cmid, $update->duedate);
++
++        // This must not trigger any debugging or PHP warnings about an undefined duedate property.
++        $this->assertTrue(quiz_update_instance($update, null));
++
++        $this->assertEquals('Updated name', $DB->get_field('quiz', 'name', ['id' => $quiz->id]));
++        $this->assertEquals(0, $DB->get_field('quiz', 'duedate', ['id' => $quiz->id]));
++    }
++
+     /**
+      * Test for quiz_get_group_override_priorities().
+      */

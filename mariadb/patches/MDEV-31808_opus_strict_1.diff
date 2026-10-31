@@ -1,0 +1,89 @@
+diff --git a/mysql-test/suite/sql_sequence/default.result b/mysql-test/suite/sql_sequence/default.result
+index a6f6d127..051ce775 100644
+--- a/mysql-test/suite/sql_sequence/default.result
++++ b/mysql-test/suite/sql_sequence/default.result
+@@ -347,3 +347,21 @@ id1	id2
+ drop table t1,t2,t3;
+ drop sequence s1,s2;
+ # End of 10.6 tests
++#
++# MDEV-31808 Server crash upon altering table with NEXTVAL for
++# default under exclusive lock
++#
++CREATE SEQUENCE s;
++CREATE TABLE t (a INT DEFAULT(NEXTVAL(s)), b INT);
++INSERT INTO t (b) VALUES (1),(2);
++ALTER TABLE t FORCE, ALGORITHM=COPY, LOCK=EXCLUSIVE;
++ALTER TABLE t ADD c INT, ALGORITHM=COPY, LOCK=EXCLUSIVE;
++INSERT INTO t (b) VALUES (3);
++SELECT * FROM t;
++a	b	c
++1	1	NULL
++2	2	NULL
++3	3	NULL
++DROP TABLE t;
++DROP SEQUENCE s;
++# End of 10.6 tests (MDEV-31808)
+diff --git a/mysql-test/suite/sql_sequence/default.test b/mysql-test/suite/sql_sequence/default.test
+index 45ef4b31..123af8ec 100644
+--- a/mysql-test/suite/sql_sequence/default.test
++++ b/mysql-test/suite/sql_sequence/default.test
+@@ -264,3 +264,19 @@ drop table t1,t2,t3;
+ drop sequence s1,s2;
+ 
+ --echo # End of 10.6 tests
++
++--echo #
++--echo # MDEV-31808 Server crash upon altering table with NEXTVAL for
++--echo # default under exclusive lock
++--echo #
++CREATE SEQUENCE s;
++CREATE TABLE t (a INT DEFAULT(NEXTVAL(s)), b INT);
++INSERT INTO t (b) VALUES (1),(2);
++ALTER TABLE t FORCE, ALGORITHM=COPY, LOCK=EXCLUSIVE;
++ALTER TABLE t ADD c INT, ALGORITHM=COPY, LOCK=EXCLUSIVE;
++INSERT INTO t (b) VALUES (3);
++SELECT * FROM t;
++DROP TABLE t;
++DROP SEQUENCE s;
++
++--echo # End of 10.6 tests (MDEV-31808)
+diff --git a/sql/sql_base.cc b/sql/sql_base.cc
+index 379337af..d6877cdb 100644
+--- a/sql/sql_base.cc
++++ b/sql/sql_base.cc
+@@ -4994,8 +4994,16 @@ bool open_and_lock_internal_tables(TABLE *table, bool lock_table)
+   TABLE_LIST *tmp= table->internal_tables;
+   DML_prelocking_strategy prelocking_strategy;
+ 
+-  if (open_tables(thd, thd->lex->create_info, &tmp, &counter, 0,
+-                  &prelocking_strategy))
++  /*
++    The caller (like ALTER TABLE ... LOCK=EXCLUSIVE) may already have
++    flushed the table it is operating on (it is first in thd->open_tables).
++    That would make open_tables() request a back-off and reopen of all
++    tables, which closes and unlocks the tables of the caller.
++    Use MYSQL_OPEN_IGNORE_FLUSH to avoid that, as the caller holds the
++    needed metadata locks.
++  */
++  if (open_tables(thd, thd->lex->create_info, &tmp, &counter,
++                  MYSQL_OPEN_IGNORE_FLUSH, &prelocking_strategy))
+     goto err;
+ 
+   if (lock_table)
+@@ -5004,9 +5012,14 @@ bool open_and_lock_internal_tables(TABLE *table, bool lock_table)
+     thd->lock= 0;
+     if (lock_tables(thd, table->internal_tables, counter,
+                     MYSQL_LOCK_USE_MALLOC))
++    {
++      thd->lock= save_lock;
+       goto err;
++    }
+ 
+-    if (!(new_lock= mysql_lock_merge(save_lock, thd->lock)))
++    if (!save_lock)
++      new_lock= thd->lock;
++    else if (!(new_lock= mysql_lock_merge(save_lock, thd->lock)))
+     {
+       thd->lock= save_lock;
+       mysql_unlock_tables(thd, save_lock, 1);

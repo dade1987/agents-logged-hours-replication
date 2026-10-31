@@ -1,0 +1,87 @@
+diff --git a/mysql-test/suite/versioning/r/partition.result b/mysql-test/suite/versioning/r/partition.result
+index 99daa433..e8482635 100644
+--- a/mysql-test/suite/versioning/r/partition.result
++++ b/mysql-test/suite/versioning/r/partition.result
+@@ -3641,5 +3641,33 @@ Table	Op	Msg_type	Msg_text
+ test.t	repair	status	OK
+ drop table t;
+ set timestamp=default;
++#
++# MDEV-41543 Changing INTERVAL of SYSTEM_TIME partitioning does not
++#            move history to the new partitions
++#
++set @@session.time_zone='+00:00';
++create table t1 (x int,
++row_start timestamp(6) as row start invisible,
++row_end timestamp(6) as row end invisible,
++period for system_time (row_start, row_end)) with system versioning
++partition by system_time interval 1 hour
++starts '2000-01-01 00:00:00' partitions 4;
++set timestamp= unix_timestamp('2000-01-01 00:30:00');
++insert t1 values (0);
++set timestamp= unix_timestamp('2000-01-01 01:30:00');
++update t1 set x= 1;
++set timestamp= unix_timestamp('2000-01-01 02:30:00');
++update t1 set x= 2;
++alter table t1 partition by system_time interval 2 hour
++starts '2000-01-01 00:00:00';
++select x, row_end from t1 partition (p0);
++x	row_end
++0	2000-01-01 01:30:00.000000
++select x, row_end from t1 partition (p1);
++x	row_end
++1	2000-01-01 02:30:00.000000
++drop table t1;
++set timestamp= default;
++set @@session.time_zone= default;
+ # End of 10.11 tests
+ set global innodb_stats_persistent= @save_persistent;
+diff --git a/mysql-test/suite/versioning/t/partition.test b/mysql-test/suite/versioning/t/partition.test
+index 0cb6cc14..628a23b5 100644
+--- a/mysql-test/suite/versioning/t/partition.test
++++ b/mysql-test/suite/versioning/t/partition.test
+@@ -2868,6 +2868,31 @@ repair table t;
+ drop table t;
+ set timestamp=default;
+ 
++--echo #
++--echo # MDEV-41543 Changing INTERVAL of SYSTEM_TIME partitioning does not
++--echo #            move history to the new partitions
++--echo #
++set @@session.time_zone='+00:00';
++create table t1 (x int,
++  row_start timestamp(6) as row start invisible,
++  row_end timestamp(6) as row end invisible,
++  period for system_time (row_start, row_end)) with system versioning
++partition by system_time interval 1 hour
++starts '2000-01-01 00:00:00' partitions 4;
++set timestamp= unix_timestamp('2000-01-01 00:30:00');
++insert t1 values (0);
++set timestamp= unix_timestamp('2000-01-01 01:30:00');
++update t1 set x= 1;
++set timestamp= unix_timestamp('2000-01-01 02:30:00');
++update t1 set x= 2;
++alter table t1 partition by system_time interval 2 hour
++starts '2000-01-01 00:00:00';
++select x, row_end from t1 partition (p0);
++select x, row_end from t1 partition (p1);
++drop table t1;
++set timestamp= default;
++set @@session.time_zone= default;
++
+ --echo # End of 10.11 tests
+ 
+ set global innodb_stats_persistent= @save_persistent;
+diff --git a/sql/sql_partition.cc b/sql/sql_partition.cc
+index 2d1ca554..4c94f43a 100644
+--- a/sql/sql_partition.cc
++++ b/sql/sql_partition.cc
+@@ -6096,7 +6096,7 @@ the generated partition syntax in a correct manner.
+       {
+         if (part_info->vers_info->interval.is_set() && (
+             !tab_part_info->vers_info->interval.is_set() ||
+-            part_info->vers_info->interval == tab_part_info->vers_info->interval))
++            !(part_info->vers_info->interval == tab_part_info->vers_info->interval)))
+         {
+           /* If interval is changed we can not do fast alter */
+           tab_part_info= tab_part_info->get_clone(thd);

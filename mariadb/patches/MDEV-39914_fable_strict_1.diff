@@ -1,0 +1,65 @@
+diff --git a/mysql-test/main/spatial_utility_function_simplify.result b/mysql-test/main/spatial_utility_function_simplify.result
+index 43544702..56de277f 100644
+--- a/mysql-test/main/spatial_utility_function_simplify.result
++++ b/mysql-test/main/spatial_utility_function_simplify.result
+@@ -559,3 +559,22 @@ SELECT ST_ASTEXT(ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((0 0,0 10,10 10,10 0,0 0,0
+ ERROR 42S22: Unknown column 'a' in 'SELECT'
+ # Clean up
+ DROP TABLE gis_geometrycollection;
++#
++# MDEV-39914 MariaDB crash triggered by INFORMATION_SCHEMA query with
++#            ROW_NUMBER and GIS simplify
++#
++SELECT 'a' IN ('b', ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((10 2,5 2,5 10,-5 10,-5 2,-10 2,-10 -2,-5 -2,-5 -10,5 -10,5 -2,10 -2,10 2))'), 3), 'c') AS c;
++c
++0
++SELECT 'a' IN ('b', ST_SIMPLIFY(ST_GEOMFROMTEXT('MULTIPOLYGON(((0 0,0 10,10 10,10 0,0 0)))'), 1), 'c') AS c;
++c
++0
++SELECT 'a' IN ('b', ST_SIMPLIFY(ST_GEOMFROMTEXT('MULTILINESTRING((0 0,1 1,2 2,3 3))'), 1), 'c') AS c;
++c
++0
++SELECT 'a' IN ('b', ST_SIMPLIFY(ST_GEOMFROMTEXT('GEOMETRYCOLLECTION(LINESTRING(0 0,1 1,2 2,3 3))'), 1), 'c') AS c;
++c
++0
++SELECT TABLE_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='performance_schema' AND 'MULTIPOINT(1 189.7654,41,-1032.34324 9,6.4 1,4 9)' IN ('accounts', 'cond_instances', ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((10 2,5 2,5 10,-5 10,-5 2,-10 2,-10 -2,-5 -2,-5 -10,5 -10,5 -2,10 -2,10 2))'), 3), 'global_status');
++TABLE_NAME
++# End of 11.8 tests
+diff --git a/mysql-test/main/spatial_utility_function_simplify.test b/mysql-test/main/spatial_utility_function_simplify.test
+index 8ef99c7e..6f7b01c0 100644
+--- a/mysql-test/main/spatial_utility_function_simplify.test
++++ b/mysql-test/main/spatial_utility_function_simplify.test
+@@ -499,3 +499,15 @@ SELECT ST_ASTEXT(ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((0 0,0 10,10 10,10 0,0 0,0
+ 
+ --echo # Clean up
+ DROP TABLE gis_geometrycollection;
++
++--echo #
++--echo # MDEV-39914 MariaDB crash triggered by INFORMATION_SCHEMA query with
++--echo #            ROW_NUMBER and GIS simplify
++--echo #
++# ST_SIMPLIFY() result stored into an uninitialized IN-list String
++SELECT 'a' IN ('b', ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((10 2,5 2,5 10,-5 10,-5 2,-10 2,-10 -2,-5 -2,-5 -10,5 -10,5 -2,10 -2,10 2))'), 3), 'c') AS c;
++SELECT 'a' IN ('b', ST_SIMPLIFY(ST_GEOMFROMTEXT('MULTIPOLYGON(((0 0,0 10,10 10,10 0,0 0)))'), 1), 'c') AS c;
++SELECT 'a' IN ('b', ST_SIMPLIFY(ST_GEOMFROMTEXT('MULTILINESTRING((0 0,1 1,2 2,3 3))'), 1), 'c') AS c;
++SELECT 'a' IN ('b', ST_SIMPLIFY(ST_GEOMFROMTEXT('GEOMETRYCOLLECTION(LINESTRING(0 0,1 1,2 2,3 3))'), 1), 'c') AS c;
++SELECT TABLE_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='performance_schema' AND 'MULTIPOINT(1 189.7654,41,-1032.34324 9,6.4 1,4 9)' IN ('accounts', 'cond_instances', ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((10 2,5 2,5 10,-5 10,-5 2,-10 2,-10 -2,-5 -2,-5 -10,5 -10,5 -2,10 -2,10 2))'), 3), 'global_status');
++--echo # End of 11.8 tests
+diff --git a/sql/item_geofunc.cc b/sql/item_geofunc.cc
+index 307f198c..49764dfa 100644
+--- a/sql/item_geofunc.cc
++++ b/sql/item_geofunc.cc
+@@ -2321,6 +2321,13 @@ String *Item_func_simplify::val_str(String *str)
+     }
+   }
+ 
++  /*
++    The result buffer may come from a caller that has not initialized its
++    character set (e.g. the String elements of in_string are calloc'ed).
++    The simplify() methods below use String::append(), which dereferences
++    the character set, so it must be set before calling them.
++  */
++  str->set_charset(&my_charset_bin);
+   if (geometry->simplify(str, max_distance))
+   {
+     null_value= 1;

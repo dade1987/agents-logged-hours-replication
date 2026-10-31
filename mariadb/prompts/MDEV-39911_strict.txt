@@ -1,0 +1,36 @@
+You are a software engineer fixing an issue in MariaDB Server (C/C++). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot build MariaDB or run its test suite. Read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update mysql-test tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDEV-39911: MariaDB crash triggered by ST_CONVEXHULL and ST_SIMPLIFY string concatenation
+
+~~~sql
+SELECT ST_ASTEXT ( ST_CONVEXHULL ( ST_GEOMFROMTEXT ( x ) ) ) ; SELECT ST_ASTEXT ( ST_CONVEXHULL ( ST_GEOMFROMTEXT ( x ) ) ) ; SELECT ST_ASTEXT ( ST_CONVEXHULL ( ST_GEOMFROMTEXT ( 'LINESTRING(0 0,-0.00 0,0.0 0)' ) ) ) ; SELECT ST_ASTEXT ( ST_CONVEXHULL ( ST_GEOMFROMTEXT ( 'LINESTRING(0 0,0 5,5 5,5 0,0 0)' ) ) ) ; SELECT CONCAT_WS ( ST_SIMPLIFY ( ST_GEOMFROMTEXT ( 'MULTILINESTRING((0 0,5 5,0 10),(0 0,-5 5,0 10))' ) , 5 ) , 7 , 5 ) ;
+~~~
+
+## Expected result
+The server should either execute the query or return a normal SQL error without crashing.
+
+## Actual result
+The fuzzing run observed a server crash. The deduplicated stack signature is:
+~~~
+stack:pthread_kill|raise|abort|__fsetlocking|__fortify_fail|__stack_chk_fail|_ZN19Item_func_concat_ws7val_strEP6String|_ZNK12Type_handler13Item_send_strEP4ItemP8ProtocolP8st_value
+~~~
+
+Top frames:
+~~~
+pthread_kill
+raise
+abort
+__fsetlocking
+__fortify_fail
+__stack_chk_fail
+_ZN19Item_func_concat_ws7val_strEP6String
+_ZNK12Type_handler13Item_send_strEP4ItemP8ProtocolP8st_value
+~~~
+

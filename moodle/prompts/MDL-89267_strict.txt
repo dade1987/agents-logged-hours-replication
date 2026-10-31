@@ -1,0 +1,112 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot run Moodle's test suite. You may run `php -l <file>` and read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-89267: Restoring deleted question versions can split them across question bank entries
+
+h2. Background
+
+When restoring a backup on its original site, backed up question versions that have since been deleted should be restored into the original question bank entry when other versions of that question still exist.
+
+Restore currently determines the destination question bank entry while processing individual question versions. However, the order of sibling versions in the backup is not guaranteed because they are selected without an ORDER BY.
+
+If a missing version is processed first, restore creates a new question bank entry for it. If a surviving version is processed later, restore identifies the original question bank entry but does not correct the destination already selected. The question versions are consequently split across two entries.
+
+This issue can manifest sporadically in {{core_question\backup_test::test_restore_backup_containing_deleted_versions_using_nextversion}} but it’s also possible to hit it through the UI.
+
+h2. Replication
+
+h3. PHPUnit
+
+The issue is difficult to replicate “organically” with PHPUnit because it depends on physical table state, previous update, query plan, etc. But a small PHPUnit bootstrap can demonstrate it deterministically. Save the following as *bootstrap.php* in your Moodle root:
+
+{code:php}<?php
+
+require_once __DIR__ . '/public/lib/phpunit/bootstrap.php';
+
+final class question_order_repro_observer {
+    public static function slot_version_updated(\mod_quiz\event\slot_version_updated $event): void {
+        global $DB;
+
+        $reference = $DB->get_record('question_references', [
+            'usingcontextid' => $event->get_context()->id,
+            'component' => 'mod_quiz',
+            'questionarea' => 'slot',
+            'itemid' => $event->objectid,
+        ]);
+
+        $versions = array_values($DB->get_records(
+            'question_versions',
+            ['questionbankentryid' => $reference->questionbankentryid],
+            'version ASC',
+        ));
+
+        if (count($versions) !== 4) {
+            return;
+        }
+
+        // Move versions 1 and 2 later in PostgreSQL's physical row order.
+        foreach (array_slice($versions, 0, 2) as $version) {
+            $DB->update_record('question_versions', $version);
+        }
+  }
+}
+
+// Preserve Moodle's existing observers while adding the reproduction observer.
+$observers = [];
+foreach (\core\event\manager::get_all_observers() as $eventname => $eventobservers) {
+    foreach ($eventobservers as $observer) {
+        $definition = [
+            'eventname' => $eventname,
+            'callback' => $observer->callable,
+            'priority' => $observer->priority,
+            'internal' => $observer->internal,
+        ];
+
+        if ($observer->includefile) {
+            $definition['includefile'] = substr(
+                $observer->includefile,
+                strlen($CFG->dirroot),
+            );
+        }
+
+        $observers[] = $definition;
+    }
+}
+
+$observers[] = [
+    'eventname' => '\mod_quiz\event\slot_version_updated',
+    'callback' => [
+        question_order_repro_observer::class,
+        'slot_version_updated',
+    ],
+    'internal' => true,
+];
+
+\core\event\manager::phpunit_replace_observers($observers);{code}
+
+Run the test with the bootstrap:
+
+{noformat}vendor/bin/phpunit \
+  --bootstrap bootstrap.php \
+  --filter 'test_restore_backup_containing_deleted_versions_using_nextversion' \
+  public/question/tests/backup_test.php{noformat}
+
+h3. Manually
+
+# Create a course containing a question bank and a quiz
+# Create a question in the question bank (this is version 1)
+# Edit the question and save it as a new version (this creates version 2)
+# Add the question to the quiz
+# Create a backup of the quiz activity
+# Open the question's history and delete version 1, leaving version 2 in the original question bank entry
+# Restore the quiz backup into the same course
+# Inspect the question bank and the question history
+
+*Expected*: Version 1 is restored into the original question bank entry alongside version 2.
+*Actual*: Version 1 can be restored into a newly created question bank entry, leaving the versions split across two entries.

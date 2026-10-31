@@ -1,0 +1,69 @@
+diff --git a/public/admin/tool/customlang/locallib.php b/public/admin/tool/customlang/locallib.php
+index c76ff7829fb..96f12bb3c69 100644
+--- a/public/admin/tool/customlang/locallib.php
++++ b/public/admin/tool/customlang/locallib.php
+@@ -34,7 +34,9 @@ class tool_customlang_utils {
+ 
+     /**
+      * Rough number of strings that are being processed during a full checkout.
+-     * This is used to estimate the progress of the checkout.
++     *
++     * @deprecated since Moodle 6.0 MDL-89494 - the checkout progress is now calculated from the real
++     *     number of components and strings being processed. This constant is no longer used.
+      */
+     const ROUGH_NUMBER_OF_STRINGS = 33000;
+ 
+@@ -126,13 +128,14 @@ class tool_customlang_utils {
+         }
+         unset($current);
+ 
+-        // initialize the progress counter - stores the number of processed strings
+-        $done = 0;
+         $strinprogress = get_string('checkoutinprogress', 'tool_customlang');
+ 
+         // reload components and fetch their strings
+         $stringman  = get_string_manager();
+         $components = $DB->get_records('tool_customlang_components');
++        $totalcomponents = count($components);
++        $componentsdone = 0;
++        $lastpercent = -1;
+         foreach ($components as $component) {
+             $sql = "SELECT stringid, id, lang, componentid, original, master, local, timemodified, timecustomized, outdated, modified
+                       FROM {tool_customlang} s
+@@ -146,6 +149,8 @@ class tool_customlang_utils {
+                 $master = $stringman->load_component_strings($component->name, $lang, true, true);
+             }
+             $local = $stringman->load_component_strings($component->name, $lang, true, false);
++            $componentstrings = count($english);
++            $componentstringsdone = 0;
+ 
+             foreach ($english as $stringid => $stringoriginal) {
+                 $stringmaster = isset($master[$stringid]) ? $master[$stringid] : null;
+@@ -153,9 +158,16 @@ class tool_customlang_utils {
+                 $now = time();
+ 
+                 if (!is_null($progressbar)) {
+-                    $done++;
+-                    $donepercent = floor(min($done, self::ROUGH_NUMBER_OF_STRINGS) / self::ROUGH_NUMBER_OF_STRINGS * 100);
+-                    $progressbar->update_full($donepercent, $strinprogress);
++                    $componentstringsdone++;
++                    // Calculate the progress from the real workload: the number of components already
++                    // processed plus the processed fraction of the current component. Never report 100%
++                    // while still processing - that is reported only once the whole checkout is done.
++                    $progress = ($componentsdone + ($componentstringsdone / $componentstrings)) / $totalcomponents;
++                    $donepercent = (int) min(99, floor($progress * 100));
++                    if ($donepercent !== $lastpercent) {
++                        $lastpercent = $donepercent;
++                        $progressbar->update_full($donepercent, $strinprogress);
++                    }
+                 }
+ 
+                 if (isset($current[$stringid])) {
+@@ -208,6 +220,7 @@ class tool_customlang_utils {
+                     $DB->insert_record('tool_customlang', $record);
+                 }
+             }
++            $componentsdone++;
+         }
+ 
+         if (!is_null($progressbar)) {

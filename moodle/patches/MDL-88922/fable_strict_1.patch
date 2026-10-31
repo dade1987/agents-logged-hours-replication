@@ -1,0 +1,292 @@
+diff --git a/public/completion/classes/progress.php b/public/completion/classes/progress.php
+index 48c8c2bf63f..5e55f1e6182 100644
+--- a/public/completion/classes/progress.php
++++ b/public/completion/classes/progress.php
+@@ -69,6 +69,34 @@ class progress {
+             return 100;
+         }
+ 
++        // The activity based calculation is expensive (availability and capability resolution per module), and it
++        // is frequently requested several times for the same course and user within a single request (e.g. one
++        // course_summary_exporter per calendar event or per dashboard block). Memoise the result for the request.
++        // The key includes the course cacherev so that any structural change to the course (module or section
++        // visibility, availability, groupings...) invalidates the cached value; completion state changes purge it
++        // explicitly (see completion_info::internal_set_data()).
++        $cacherev = get_fast_modinfo($course)->get_course()->cacherev;
++        $cachekey = "{$course->id}_{$userid}_{$cacherev}";
++        $cache = self::get_request_cache();
++        $cached = $cache->get($cachekey);
++        if ($cached !== false) {
++            return $cached['percentage'];
++        }
++
++        $percentage = self::calculate_activity_progress_percentage($completion, $userid);
++        $cache->set($cachekey, ['percentage' => $percentage]);
++
++        return $percentage;
++    }
++
++    /**
++     * Calculates the percentage of user visible activities with completion enabled that the user has completed.
++     *
++     * @param \completion_info $completion Completion info for the course.
++     * @param int $userid The user id.
++     * @return null|float The percentage, or null if there are no activities that support completion.
++     */
++    protected static function calculate_activity_progress_percentage(\completion_info $completion, int $userid): ?float {
+         // Get the number of modules that support completion.
+         $modules = $completion->get_user_activities_with_completion($userid);
+         $count = count($modules);
+@@ -81,4 +109,23 @@ class progress {
+ 
+         return ($totalcompleted / $count) * 100;
+     }
++
++    /**
++     * Returns the request cache used to memoise course progress percentages.
++     *
++     * @return \cache_application|\cache_session|\cache_request
++     */
++    protected static function get_request_cache() {
++        return \cache::make_from_params(\cache_store::MODE_REQUEST, 'core_completion', 'courseprogress');
++    }
++
++    /**
++     * Purges the request cache of course progress percentages.
++     *
++     * Must be called whenever activity completion data changes so that further calls to
++     * get_course_progress_percentage() within the same request reflect the new state.
++     */
++    public static function purge_request_cache(): void {
++        self::get_request_cache()->purge();
++    }
+ }
+diff --git a/public/completion/tests/progress_test.php b/public/completion/tests/progress_test.php
+index 32d8fe5fb5d..3a8bcd3b59a 100644
+--- a/public/completion/tests/progress_test.php
++++ b/public/completion/tests/progress_test.php
+@@ -577,4 +577,132 @@ final class progress_test extends \advanced_testcase {
+         $completion->update_state($cm2, COMPLETION_COMPLETE, $user2->id);
+         $this->assertEquals(100, \core_completion\progress::get_course_progress_percentage($course, $user2->id));
+     }
++    /**
++     * Tests course progress percentage with a group restriction on the section containing the activities.
++     */
++    public function test_course_progress_percentage_with_section_group_restrictions(): void {
++        global $DB;
++
++        set_config('enableavailability', 1);
++
++        // Create a course with completion enabled and two sections.
++        $course = $this->getDataGenerator()->create_course([
++            'enablecompletion' => 1,
++            'numsections' => 2,
++            'format' => 'topics',
++        ]);
++
++        // Create and enrol two students in the course.
++        $user1 = $this->getDataGenerator()->create_user();
++        $user2 = $this->getDataGenerator()->create_user();
++        $studentrole = $DB->get_record('role', ['shortname' => 'student']);
++        $this->getDataGenerator()->enrol_user($user1->id, $course->id, $studentrole->id);
++        $this->getDataGenerator()->enrol_user($user2->id, $course->id, $studentrole->id);
++
++        // Create a group and add user1.
++        $group1 = $this->getDataGenerator()->create_group(['courseid' => $course->id]);
++        $this->getDataGenerator()->create_group_member(['groupid' => $group1->id, 'userid' => $user1->id]);
++
++        /** @var \mod_assign_generator $assigngenerator */
++        $assigngenerator = $this->getDataGenerator()->get_plugin_generator('mod_assign');
++
++        // Activity 1: in section 1, which is restricted to group1 (the activity itself has no restriction).
++        $activity1 = $assigngenerator->create_instance([
++            'course' => $course->id,
++            'section' => 1,
++            'completion' => COMPLETION_ENABLED,
++        ]);
++        $availabilityjson = json_encode(tree::get_root_json(
++            [
++                \availability_group\condition::get_json($group1->id),
++            ],
++            tree::OP_AND,
++            false,
++        ));
++        $DB->set_field('course_sections', 'availability', $availabilityjson,
++            ['course' => $course->id, 'section' => 1]);
++
++        // Activity 2: in section 2, visible to all users.
++        $activity2 = $assigngenerator->create_instance([
++            'course' => $course->id,
++            'section' => 2,
++            'completion' => COMPLETION_ENABLED,
++        ]);
++        rebuild_course_cache($course->id, true);
++
++        $cm1 = get_coursemodule_from_id('assign', $activity1->cmid);
++        $cm2 = get_coursemodule_from_id('assign', $activity2->cmid);
++
++        // User1 (in group1) sees both activities.
++        $this->setUser($user1);
++        $completion = new \completion_info($course);
++        $this->assertEquals(0, \core_completion\progress::get_course_progress_percentage($course, $user1->id));
++        $completion->update_state($cm1, COMPLETION_COMPLETE, $user1->id);
++        $this->assertEquals(50, \core_completion\progress::get_course_progress_percentage($course, $user1->id));
++        $completion->update_state($cm2, COMPLETION_COMPLETE, $user1->id);
++        $this->assertEquals(100, \core_completion\progress::get_course_progress_percentage($course, $user1->id));
++
++        // User2 (not in group1) only sees activity 2.
++        $this->setUser($user2);
++        $completion = new \completion_info($course);
++        $this->assertEquals(0, \core_completion\progress::get_course_progress_percentage($course, $user2->id));
++        $completion->update_state($cm2, COMPLETION_COMPLETE, $user2->id);
++        $this->assertEquals(100, \core_completion\progress::get_course_progress_percentage($course, $user2->id));
++    }
++
++    /**
++     * Tests that the course progress percentage memoised within a request is refreshed when things change.
++     */
++    public function test_course_progress_percentage_request_cache(): void {
++        global $DB;
++
++        $course = $this->getDataGenerator()->create_course([
++            'enablecompletion' => 1,
++            'numsections' => 2,
++            'format' => 'topics',
++        ]);
++
++        $user = $this->getDataGenerator()->create_user();
++        $studentrole = $DB->get_record('role', ['shortname' => 'student']);
++        $this->getDataGenerator()->enrol_user($user->id, $course->id, $studentrole->id);
++
++        /** @var \mod_assign_generator $assigngenerator */
++        $assigngenerator = $this->getDataGenerator()->get_plugin_generator('mod_assign');
++        $activity1 = $assigngenerator->create_instance([
++            'course' => $course->id,
++            'section' => 1,
++            'completion' => COMPLETION_ENABLED,
++        ]);
++        $activity2 = $assigngenerator->create_instance([
++            'course' => $course->id,
++            'section' => 2,
++            'completion' => COMPLETION_ENABLED,
++        ]);
++        $this->setUser($user);
++        $completion = new \completion_info($course);
++
++        // Repeated calls return the same value.
++        $this->assertEquals(0, \core_completion\progress::get_course_progress_percentage($course, $user->id));
++        $this->assertEquals(0, \core_completion\progress::get_course_progress_percentage($course, $user->id));
++
++        // A completion state change is reflected straight away.
++        $cm1 = get_coursemodule_from_id('assign', $activity1->cmid);
++        $completion->update_state($cm1, COMPLETION_COMPLETE, $user->id);
++        $this->assertEquals(50, \core_completion\progress::get_course_progress_percentage($course, $user->id));
++        $this->assertEquals(50, \core_completion\progress::get_course_progress_percentage($course, $user->id));
++
++        // A structural change (hiding the section containing the incomplete activity) is reflected straight away,
++        // even when a course object with an outdated cacherev is reused.
++        $sectioninfo = get_fast_modinfo($course->id)->get_section_info(2);
++        \core_courseformat\formatactions::section($course->id)->set_visibility($sectioninfo, false);
++        $this->assertEquals(100, \core_completion\progress::get_course_progress_percentage($course, $user->id));
++
++        // Resetting all completion data of the course is reflected straight away.
++        $completion->delete_all_completion_data();
++        $this->assertEquals(0, \core_completion\progress::get_course_progress_percentage($course, $user->id));
++
++        // Explicitly purging the request cache keeps results consistent.
++        \core_completion\progress::purge_request_cache();
++        $this->assertEquals(0, \core_completion\progress::get_course_progress_percentage($course, $user->id));
++    }
+ }
+diff --git a/public/lib/completionlib.php b/public/lib/completionlib.php
+index 34405342e66..2ba7a24d9a9 100644
+--- a/public/lib/completionlib.php
++++ b/public/lib/completionlib.php
+@@ -894,6 +894,7 @@ class completion_info {
+         // Difficult to find affected users, just purge all completion cache.
+         cache::make('core', 'completion')->purge();
+         cache::make('core', 'coursecompletion')->purge();
++        \core_completion\progress::purge_request_cache();
+     }
+ 
+     /**
+@@ -948,6 +949,7 @@ class completion_info {
+         // Difficult to find affected users, just purge all completion cache.
+         cache::make('core', 'completion')->purge();
+         cache::make('core', 'coursecompletion')->purge();
++        \core_completion\progress::purge_request_cache();
+     }
+ 
+     /**
+@@ -1270,6 +1272,9 @@ class completion_info {
+         }
+         $transaction->allow_commit();
+ 
++        // Completion state changed: make sure course progress computed earlier in this request is not reused.
++        \core_completion\progress::purge_request_cache();
++
+         $cmcontext = context_module::instance($data->coursemoduleid);
+ 
+         $completioncache = cache::make('core', 'completion');
+@@ -1370,6 +1375,8 @@ class completion_info {
+      * @return array Array of user visible activities with completion enabled.
+      */
+     public function get_user_activities_with_completion($userid): array {
++        global $CFG;
++
+         $visible = [];
+         $activities = $this->get_activities();
+ 
+@@ -1379,7 +1386,16 @@ class completion_info {
+                 continue;
+             }
+ 
+-            // Step 2: Check if the user is excluded by group or grouping style restrictions.
++            // Step 2a: Fast path. When availability is disabled site-wide, or the module (and its section) carries
++            // no availability restriction at all, every enrolled user can access it, so there is no need to build
++            // the availability info and resolve capabilities for the module (which is expensive when repeated for
++            // many modules across many courses, e.g. on the Dashboard).
++            if (empty($CFG->enableavailability) || $this->is_module_unrestricted($cm)) {
++                $visible[$cm->id] = 1;
++                continue;
++            }
++
++            // Step 2b: Check if the user is excluded by group or grouping style restrictions.
+             $info = new \core_availability\info_module($cm);
+ 
+             $users = [$userid => (object)['id' => $userid]];
+@@ -1397,6 +1413,34 @@ class completion_info {
+         return $visible;
+     }
+ 
++    /**
++     * Checks whether a course module carries no restriction that could exclude a user from its user list.
++     *
++     * A module without an availability rule (on the module itself and on its section), not in separate groups
++     * mode and without a grouping restriction is accessible to every enrolled user, so the result of
++     * \core_availability\info_module::filter_user_list() would always be the unfiltered user list.
++     *
++     * @param cm_info $cm The course module.
++     * @return bool True if the module is unrestricted, false if the full availability check is required.
++     */
++    protected function is_module_unrestricted(cm_info $cm): bool {
++        if (!empty($cm->availability)) {
++            return false;
++        }
++        if ($cm->groupmode == SEPARATEGROUPS) {
++            return false;
++        }
++        if (!empty($cm->groupingid)) {
++            return false;
++        }
++        // Section restrictions are applied on top of the module ones, so the section must be unrestricted too.
++        $section = $cm->get_modinfo()->get_section_info($cm->sectionnum);
++        if ($section === null || !empty($section->availability)) {
++            return false;
++        }
++        return true;
++    }
++
+     /**
+      * Checks to see if the userid supplied has a tracked role in
+      * this course

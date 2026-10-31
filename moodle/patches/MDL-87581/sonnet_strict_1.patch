@@ -1,0 +1,40 @@
+diff --git a/public/admin/tool/uploadcourse/classes/course.php b/public/admin/tool/uploadcourse/classes/course.php
+index b4a35053d3a..cd76297aa12 100644
+--- a/public/admin/tool/uploadcourse/classes/course.php
++++ b/public/admin/tool/uploadcourse/classes/course.php
+@@ -911,9 +911,21 @@ class tool_uploadcourse_course {
+ 
+         // Restore a course.
+         if (!empty($this->restoredata)) {
++            $overwriteconf = false;
+             $rc = new restore_controller($this->restoredata, $course->id, backup::INTERACTIVE_NO,
+                 backup::MODE_IMPORT, $USER->id, backup::TARGET_CURRENT_ADDING);
+ 
++            // Enable overwrite_conf so the course structure step runs and the template course configuration,
++            // including the summary and overview files, is restored into the destination course.
++            $plan = $rc->get_plan();
++            if ($plan->setting_exists('overwrite_conf')) {
++                $overwrite = $plan->get_setting('overwrite_conf');
++                if ($overwrite->get_status() == \backup_setting::NOT_LOCKED) {
++                    $overwrite->set_value(true);
++                    $overwriteconf = true;
++                }
++            }
++
+             // Check if the format conversion must happen first.
+             if ($rc->get_status() == backup::STATUS_REQUIRE_CONV) {
+                 $rc->convert();
+@@ -925,6 +937,13 @@ class tool_uploadcourse_course {
+                 $this->error('errorwhilerestoringcourse', new lang_string('errorwhilerestoringcourse', 'tool_uploadcourse'));
+             }
+             $rc->destroy();
++
++            // Restoring the course configuration overwrites the values set from the CSV file, apply them again.
++            if ($overwriteconf && $this->do !== self::DO_DELETE) {
++                $coursedata = (object) $this->data;
++                $coursedata->id = $course->id;
++                update_course($coursedata);
++            }
+         }
+ 
+         // Proceed with enrolment data.

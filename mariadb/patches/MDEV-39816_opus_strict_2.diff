@@ -1,0 +1,25 @@
+diff --git a/storage/myisam/mi_open.c b/storage/myisam/mi_open.c
+index 414e483a..8da465fa 100644
+--- a/storage/myisam/mi_open.c
++++ b/storage/myisam/mi_open.c
+@@ -371,6 +371,20 @@ MI_INFO *mi_open(const char *name, int mode, uint open_flags)
+             my_errno= HA_ERR_CRASHED;
+             goto err;
+           }
++          /*
++            A key segment that is not packed is stored with its full
++            length in the key buffer, so it can never be longer than
++            the maximum key length. Fulltext key segments describe the
++            source column and are not copied to the key as is.
++          */
++          if (!(keyinfo->flag & HA_FULLTEXT) &&
++              !(pos->flag & (HA_SPACE_PACK | HA_VAR_LENGTH_PART |
++                             HA_BLOB_PART)) &&
++              pos->length > HA_MAX_KEY_LENGTH)
++          {
++            my_errno= HA_ERR_CRASHED;
++            goto err;
++          }
+ 	  if (pos->type == HA_KEYTYPE_TEXT ||
+               pos->type == HA_KEYTYPE_VARTEXT1 ||
+               pos->type == HA_KEYTYPE_VARTEXT2)

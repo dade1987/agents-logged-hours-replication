@@ -1,0 +1,58 @@
+diff --git a/public/lib/classes/task/refresh_mod_calendar_events_task.php b/public/lib/classes/task/refresh_mod_calendar_events_task.php
+index 3e2641aea06..98ea2836509 100644
+--- a/public/lib/classes/task/refresh_mod_calendar_events_task.php
++++ b/public/lib/classes/task/refresh_mod_calendar_events_task.php
+@@ -56,7 +56,7 @@ class refresh_mod_calendar_events_task extends adhoc_task {
+ 
+         // Is course id set?
+         if (isset($this->get_custom_data()->courseid)) {
+-            $courseid = $this->get_custom_data()->courseid;
++            $courseid = (int) $this->get_custom_data()->courseid;
+         } else {
+             $courseid = 0;
+         }
+@@ -71,7 +71,43 @@ class refresh_mod_calendar_events_task extends adhoc_task {
+             }
+             // Refresh events.
+             mtrace('Refreshing events for ' . $plugin->name);
+-            course_module_bulk_update_calendar_events($plugin->name, $courseid);
++            $this->refresh_plugin_events($plugin->name, $courseid);
++        }
++    }
++
++    /**
++     * Refresh the calendar events of all instances of a given module plugin.
++     *
++     * Any error encountered while refreshing the events of a single instance (e.g. the course module or the course
++     * having been deleted in the meantime) is reported and skipped, so that the task does not fail and get re-queued
++     * forever with an increasing fail delay.
++     *
++     * @param string $modulename The module name.
++     * @param int $courseid Optional course ID. If 0, all instances of the module will be refreshed.
++     */
++    protected function refresh_plugin_events(string $modulename, int $courseid = 0): void {
++        global $DB;
++
++        try {
++            $params = $courseid ? ['course' => $courseid] : [];
++            $instances = $DB->get_records($modulename, $params);
++        } catch (\Throwable $e) {
++            mtrace('Error fetching instances of ' . $modulename . ': ' . $e->getMessage());
++            return;
++        }
++
++        foreach ($instances as $instance) {
++            try {
++                $cm = get_coursemodule_from_instance($modulename, $instance->id, $instance->course);
++                if (!$cm || !empty($cm->deletioninprogress)) {
++                    // The course module no longer exists (or is being deleted), there is nothing to refresh.
++                    continue;
++                }
++                course_module_calendar_event_update_process($instance, $cm);
++            } catch (\Throwable $e) {
++                mtrace('Error refreshing events for ' . $modulename . ' instance ' . $instance->id . ': ' .
++                    $e->getMessage());
++            }
+         }
+     }
+ }

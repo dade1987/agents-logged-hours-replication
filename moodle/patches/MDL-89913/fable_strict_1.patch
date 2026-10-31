@@ -1,0 +1,426 @@
+diff --git a/public/lib/classes/oauth2/server/repository/client_repository.php b/public/lib/classes/oauth2/server/repository/client_repository.php
+index b8ae134a371..ae919aaee87 100644
+--- a/public/lib/classes/oauth2/server/repository/client_repository.php
++++ b/public/lib/classes/oauth2/server/repository/client_repository.php
+@@ -91,10 +91,47 @@ class client_repository implements ClientRepositoryInterface {
+ 
+         foreach ($secrets as $secret) {
+             if (password_verify($clientsecret, $secret->secret)) {
++                // Record which secret authenticated the client, and that the client was used.
++                $this->log_secret_access((int) $secret->id);
++                $this->log_client_access($clientidentifier);
+                 return true;
+             }
+         }
+ 
+         return false;
+     }
++
++    /**
++     * Record that a client was just successfully used in an OAuth2 flow.
++     *
++     * @param string $clientidentifier The client identifier.
++     * @return void
++     */
++    public function log_client_access(string $clientidentifier): void {
++        global $DB;
++
++        $DB->set_field(
++            'oauth2_server_clients',
++            'lastaccessed',
++            \core\di::get(\core\clock::class)->time(),
++            ['clientidentifier' => $clientidentifier],
++        );
++    }
++
++    /**
++     * Record that a client secret was just successfully used to authenticate a client.
++     *
++     * @param int $secretid The client secret ID.
++     * @return void
++     */
++    public function log_secret_access(int $secretid): void {
++        global $DB;
++
++        $DB->set_field(
++            'oauth2_server_client_secrets',
++            'lastaccessed',
++            \core\di::get(\core\clock::class)->time(),
++            ['id' => $secretid],
++        );
++    }
+ }
+diff --git a/public/lib/classes/route/oauth2.php b/public/lib/classes/route/oauth2.php
+index 1a5f41eec62..6e899872f6f 100644
+--- a/public/lib/classes/route/oauth2.php
++++ b/public/lib/classes/route/oauth2.php
+@@ -16,6 +16,7 @@
+ 
+ namespace core\route;
+ 
++use core\oauth2\server\repository\client_repository;
+ use core\oauth2\server\repository\user_repository;
+ use core\oauth2\server\token_revoker;
+ use core\output\renderable;
+@@ -174,7 +175,7 @@ class oauth2 {
+     ): ResponseInterface {
+         try {
+             // Try to respond to the request.
+-            return $this->server->respondToAccessTokenRequest($request, $response);
++            return $this->respond_to_access_token_request($request, $response);
+         } catch (OAuthServerException $exception) {
+             // All instances of OAuthServerException can be formatted into a HTTP response.
+             return $exception->generateHttpResponse($response);
+@@ -205,7 +206,7 @@ class oauth2 {
+     ): ResponseInterface {
+         try {
+             // Try to respond to the request.
+-            return $this->server->respondToAccessTokenRequest($request, $response);
++            return $this->respond_to_access_token_request($request, $response);
+         } catch (OAuthServerException $exception) {
+             // All instances of OAuthServerException can be formatted into a HTTP response.
+             return $exception->generateHttpResponse($response);
+@@ -268,6 +269,9 @@ class oauth2 {
+                 throw OAuthServerException::invalidClient($request);
+             }
+ 
++            // The client has identified (and, where confidential, authenticated) itself.
++            $this->log_client_access($clientidentifier);
++
+             $token = $this->get_string_parameter($body, 'token');
+ 
+             if ($token === null || $token === '') {
+@@ -630,7 +634,7 @@ class oauth2 {
+         ServerRequestInterface $request,
+         ResponseInterface $response,
+     ): ResponseInterface {
+-        return $this->server->respondToAccessTokenRequest($request, $response);
++        return $this->respond_to_access_token_request($request, $response);
+     }
+ 
+     /**
+@@ -925,6 +929,60 @@ class oauth2 {
+         }
+     }
+ 
++    /**
++     * Respond to an access token request, recording the client's use on success.
++     *
++     * The OAuth2 server throws on any failure, so reaching the logging step means the client
++     * was identified (and, where confidential, authenticated) and a token was issued to it.
++     *
++     * @param ServerRequestInterface $request
++     * @param ResponseInterface $response
++     * @return ResponseInterface
++     */
++    private function respond_to_access_token_request(
++        ServerRequestInterface $request,
++        ResponseInterface $response,
++    ): ResponseInterface {
++        $response = $this->server->respondToAccessTokenRequest($request, $response);
++
++        $clientidentifier = $this->get_token_request_client_identifier($request);
++        if ($clientidentifier !== null && $clientidentifier !== '') {
++            $this->log_client_access($clientidentifier);
++        }
++
++        return $response;
++    }
++
++    /**
++     * Record that a client was successfully used in an OAuth2 flow.
++     *
++     * @param string $clientidentifier
++     * @return void
++     */
++    private function log_client_access(string $clientidentifier): void {
++        if ($this->clientrepository instanceof client_repository) {
++            $this->clientrepository->log_client_access($clientidentifier);
++        }
++    }
++
++    /**
++     * Read the client identifier from a token request, the same way the OAuth2 server does:
++     * HTTP Basic credentials first, then the client_id request parameter.
++     *
++     * @param ServerRequestInterface $request
++     * @return string|null The client identifier, or null if none was supplied.
++     */
++    private function get_token_request_client_identifier(ServerRequestInterface $request): ?string {
++        $body = $request->getParsedBody();
++        if (!is_array($body)) {
++            $body = $this->get_form_parameters($request);
++        }
++
++        [$clientidentifier] = $this->get_client_credentials($request, $body);
++
++        return $clientidentifier;
++    }
++
+     /**
+      * Read the form-urlencoded parameters from a request body.
+      *
+@@ -1013,6 +1071,9 @@ class oauth2 {
+         // query string, so there is no need to look either of them up again here.
+         $authrequest = $this->server->validateAuthorizationRequest($request);
+ 
++        // The client has successfully started an authorization flow.
++        $this->log_client_access($authrequest->getClient()->getIdentifier());
++
+         $requestid = \core\uuid::generate();
+         $this->store_auth_request($requestid, $authrequest);
+ 
+diff --git a/public/lib/tests/oauth2/server/repository/client_repository_test.php b/public/lib/tests/oauth2/server/repository/client_repository_test.php
+index b60e5764a89..18107313759 100644
+--- a/public/lib/tests/oauth2/server/repository/client_repository_test.php
++++ b/public/lib/tests/oauth2/server/repository/client_repository_test.php
+@@ -197,6 +197,97 @@ final class client_repository_test extends \advanced_testcase {
+         );
+     }
+ 
++    /**
++     * A successful validateClient() records the last access time on both the client and the
++     * secret that authenticated it, while a failed one leaves both untouched.
++     */
++    public function test_validate_client_logs_last_access(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $clock = $this->mock_clock_with_frozen(1700000000);
++
++        $repository = new client_repository();
++
++        $clientid = $DB->insert_record('oauth2_server_clients', (object) [
++            'name' => 'Confidential Client',
++            'clientidentifier' => 'client-conf',
++            'ownercontext' => \context_system::instance()->id,
++            'status' => client_entity::STATUS_ACTIVE,
++            'isconfidential' => 1,
++            'granttypes' => client_entity::GRANT_TYPE_AUTHORIZATION_CODE,
++            'timecreated' => $clock->time(),
++            'scopes' => '',
++        ]);
++        $usedsecretid = $DB->insert_record('oauth2_server_client_secrets', (object) [
++            'clientidentifier' => 'client-conf',
++            'secret' => password_hash('supersecret', PASSWORD_DEFAULT),
++            'revoked' => client_entity::SECRET_REVOKED_NO,
++            'expirytime' => $clock->time() + 3600,
++            'timecreated' => $clock->time(),
++        ]);
++        $othersecretid = $DB->insert_record('oauth2_server_client_secrets', (object) [
++            'clientidentifier' => 'client-conf',
++            'secret' => password_hash('othersecret', PASSWORD_DEFAULT),
++            'revoked' => client_entity::SECRET_REVOKED_NO,
++            'expirytime' => $clock->time() + 3600,
++            'timecreated' => $clock->time(),
++        ]);
++
++        // A failed authentication does not count as an access.
++        $this->assertFalse($repository->validateClient('client-conf', 'wrong', client_entity::GRANT_TYPE_AUTHORIZATION_CODE));
++        $this->assertNull($DB->get_field('oauth2_server_clients', 'lastaccessed', ['id' => $clientid]));
++        $this->assertNull($DB->get_field('oauth2_server_client_secrets', 'lastaccessed', ['id' => $usedsecretid]));
++        $this->assertNull($DB->get_field('oauth2_server_client_secrets', 'lastaccessed', ['id' => $othersecretid]));
++
++        $clock->bump(60);
++        $this->assertTrue($repository->validateClient('client-conf', 'supersecret', client_entity::GRANT_TYPE_AUTHORIZATION_CODE));
++
++        $this->assertEquals(1700000060, $DB->get_field('oauth2_server_clients', 'lastaccessed', ['id' => $clientid]));
++        $this->assertEquals(1700000060, $DB->get_field('oauth2_server_client_secrets', 'lastaccessed', ['id' => $usedsecretid]));
++        // Only the secret that was actually used to authenticate is updated.
++        $this->assertNull($DB->get_field('oauth2_server_client_secrets', 'lastaccessed', ['id' => $othersecretid]));
++    }
++
++    /**
++     * log_client_access() records the current time against the named client only.
++     */
++    public function test_log_client_access(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $clock = $this->mock_clock_with_frozen(1700000000);
++
++        $repository = new client_repository();
++
++        $ids = [];
++        foreach (['client-a', 'client-b'] as $identifier) {
++            $ids[$identifier] = $DB->insert_record('oauth2_server_clients', (object) [
++                'name' => $identifier,
++                'clientidentifier' => $identifier,
++                'ownercontext' => \context_system::instance()->id,
++                'status' => client_entity::STATUS_ACTIVE,
++                'isconfidential' => 0,
++                'granttypes' => client_entity::GRANT_TYPE_AUTHORIZATION_CODE,
++                'timecreated' => $clock->time(),
++                'scopes' => '',
++            ]);
++        }
++
++        $repository->log_client_access('client-a');
++
++        $this->assertEquals(1700000000, $DB->get_field('oauth2_server_clients', 'lastaccessed', ['id' => $ids['client-a']]));
++        $this->assertNull($DB->get_field('oauth2_server_clients', 'lastaccessed', ['id' => $ids['client-b']]));
++
++        $clock->bump(30);
++        $repository->log_client_access('client-a');
++        $this->assertEquals(1700000030, $DB->get_field('oauth2_server_clients', 'lastaccessed', ['id' => $ids['client-a']]));
++
++        // An unknown client is ignored.
++        $repository->log_client_access('client-missing');
++        $this->assertNull($DB->get_field('oauth2_server_clients', 'lastaccessed', ['id' => $ids['client-b']]));
++    }
++
+     /**
+      * Data provider for validateClient tests.
+      *
+diff --git a/public/lib/tests/route/oauth2_test.php b/public/lib/tests/route/oauth2_test.php
+index 7ac46ecb2b7..28c87899ebf 100644
+--- a/public/lib/tests/route/oauth2_test.php
++++ b/public/lib/tests/route/oauth2_test.php
+@@ -1071,6 +1071,147 @@ final class oauth2_test extends \advanced_testcase {
+         $this->assertDebuggingCalled();
+     }
+ 
++    /**
++     * A successful token exchange records the last access time against the calling client,
++     * whether it identifies itself via HTTP Basic credentials or the client_id parameter.
++     *
++     * @param string $method
++     * @param bool $usebasicauth
++     */
++    #[\PHPUnit\Framework\Attributes\DataProvider('token_route_logs_client_access_provider')]
++    public function test_token_routes_log_client_access(string $method, bool $usebasicauth): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $clock = $this->mock_clock_with_frozen(1700000000);
++
++        $client = $this->make_client_entity();
++        $this->assertNull($DB->get_field('oauth2_server_clients', 'lastaccessed', ['id' => $client->get_id()]));
++
++        $server = $this->createMock(AuthorizationServer::class);
++        $server->method('respondToAccessTokenRequest')
++            ->willReturn(new Response(200, [], 'the-token-response'));
++
++        $route = $this->get_route($server, new \core\oauth2\server\repository\client_repository());
++
++        $clock->bump(60);
++        $request = new ServerRequest('POST', '/' . $method);
++        if ($usebasicauth) {
++            $request = $request->withHeader(
++                'Authorization',
++                'Basic ' . base64_encode($client->getIdentifier() . ':secret'),
++            );
++        } else {
++            $request = $request->withParsedBody(['client_id' => $client->getIdentifier()]);
++        }
++
++        $response = $route->{$method}($request, new Response());
++
++        $this->assertEquals(200, $response->getStatusCode());
++        $this->assertEquals(
++            1700000060,
++            $DB->get_field('oauth2_server_clients', 'lastaccessed', ['id' => $client->get_id()]),
++        );
++    }
++
++    /**
++     * Data provider for test_token_routes_log_client_access().
++     *
++     * @return \Generator
++     */
++    public static function token_route_logs_client_access_provider(): \Generator {
++        foreach (['token', 'access_token', 'refresh'] as $method) {
++            yield "{$method} with basic auth" => [$method, true];
++            yield "{$method} with client_id parameter" => [$method, false];
++        }
++    }
++
++    /**
++     * A failed token exchange does not record a client access.
++     */
++    public function test_token_routes_do_not_log_client_access_on_failure(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++
++        $client = $this->make_client_entity();
++
++        $server = $this->createMock(AuthorizationServer::class);
++        $server->method('respondToAccessTokenRequest')
++            ->willThrowException(OAuthServerException::invalidCredentials());
++
++        $route = $this->get_route($server, new \core\oauth2\server\repository\client_repository());
++
++        $route->token(
++            (new ServerRequest('POST', '/token'))->withParsedBody(['client_id' => $client->getIdentifier()]),
++            new Response(),
++        );
++
++        $this->assertNull($DB->get_field('oauth2_server_clients', 'lastaccessed', ['id' => $client->get_id()]));
++    }
++
++    /**
++     * A valid authorization request records the last access time against the client.
++     */
++    public function test_authorize_logs_client_access(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $clock = $this->mock_clock_with_frozen(1700000000);
++
++        $client = $this->make_client_entity();
++        $authrequest = $this->make_auth_request($client);
++
++        $server = $this->createMock(AuthorizationServer::class);
++        $server->method('validateAuthorizationRequest')
++            ->willReturn($authrequest);
++
++        $route = $this->get_route($server, new \core\oauth2\server\repository\client_repository());
++
++        $clock->bump(60);
++        $route->authorize(
++            (new ServerRequest('GET', '/authorize'))->withQueryParams([
++                'client_id' => $client->getIdentifier(),
++            ]),
++            new Response(),
++            new user_repository(),
++            $this->make_granted_scopes_repository_stub(),
++        );
++
++        $this->assertEquals(
++            1700000060,
++            $DB->get_field('oauth2_server_clients', 'lastaccessed', ['id' => $client->get_id()]),
++        );
++    }
++
++    /**
++     * An invalid authorization request does not record a client access.
++     */
++    public function test_authorize_does_not_log_client_access_on_failure(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++
++        $client = $this->make_client_entity();
++
++        $server = $this->createMock(AuthorizationServer::class);
++        $server->method('validateAuthorizationRequest')
++            ->willThrowException(OAuthServerException::invalidCredentials());
++
++        $route = $this->get_route($server, new \core\oauth2\server\repository\client_repository());
++
++        $route->authorize(
++            (new ServerRequest('GET', '/authorize'))->withQueryParams([
++                'client_id' => $client->getIdentifier(),
++            ]),
++            new Response(),
++            new user_repository(),
++            $this->make_granted_scopes_repository_stub(),
++        );
++
++        $this->assertNull($DB->get_field('oauth2_server_clients', 'lastaccessed', ['id' => $client->get_id()]));
++    }
++
+     /**
+      * refresh() passes through directly to the OAuth2 server.
+      */

@@ -1,0 +1,99 @@
+diff --git a/public/admin/tool/messageinbound/classes/manager.php b/public/admin/tool/messageinbound/classes/manager.php
+index a0d1137276c..08d50f1f1bf 100644
+--- a/public/admin/tool/messageinbound/classes/manager.php
++++ b/public/admin/tool/messageinbound/classes/manager.php
+@@ -734,56 +734,71 @@ class manager {
+             $messagedata = reset($messages);
+ 
+             // Parse encoding.
+-            $encoding = array_search(
+-                needle: strtoupper($partstructure[5]),
+-                haystack: utils::get_body_encoding(),
+-            );
++            // Note: The body structure may be incomplete, so each element must be checked before use.
++            $encoding = false;
++            if (isset($partstructure[5]) && is_string($partstructure[5])) {
++                $encoding = array_search(
++                    needle: strtoupper($partstructure[5]),
++                    haystack: utils::get_body_encoding(),
++                );
++            }
+ 
+             // Parse subtype.
+-            $subtype = strtoupper($partstructure[1]);
++            $subtype = '';
++            if (isset($partstructure[1]) && is_string($partstructure[1])) {
++                $subtype = strtoupper($partstructure[1]);
++            }
+ 
+             // Section part may be encoded, even plain text messages, so check everything.
++            $bodypart = $messagedata->bodypart[$section] ?? '';
+             if ($encoding == utils::ENCQUOTEDPRINTABLE) {
+-                $data = quoted_printable_decode($messagedata->bodypart[$section]);
++                $data = quoted_printable_decode($bodypart);
+             } else if ($encoding == utils::ENCBASE64) {
+-                $data = base64_decode($messagedata->bodypart[$section]);
++                $data = base64_decode($bodypart);
+             } else {
+-                $data = $messagedata->bodypart[$section];
++                $data = $bodypart;
+             }
+ 
+             // Parse parameters.
++            $attributes = isset($partstructure[2]) && is_array($partstructure[2]) ? $partstructure[2] : [];
+             $parameters = $this->process_message_body_structure_parameters(
+-                attributes: $partstructure[2],
++                attributes: $attributes,
+                 parameters: $parameters,
+             );
+ 
++            // Parse charset, defaulting to UTF-8 when none has been specified.
++            $charset = 'UTF-8';
++            if (!empty($parameters['CHARSET']) && is_string($parameters['CHARSET'])) {
++                $charset = $parameters['CHARSET'];
++            }
++
+             // Parse content id.
+             $contentid = '';
+-            if (!empty($partstructure[3])) {
++            if (!empty($partstructure[3]) && is_string($partstructure[3])) {
+                 $contentid = htmlentities($partstructure[3]);
+             }
+ 
+             // Parse description.
+             $description = '';
+-            if (!empty($partstructure[4])) {
++            if (!empty($partstructure[4]) && is_string($partstructure[4])) {
+                 $description = $partstructure[4];
+             }
+ 
+             // Parse size of contents in bytes.
+-            $bytes = intval($partstructure[6]);
++            $bytes = isset($partstructure[6]) ? intval($partstructure[6]) : 0;
+ 
+             // PLAIN text.
+             if ($subtype == 'PLAIN') {
+                 $contentplain = $this->process_message_part_body(
+                     bodycontent: $data,
+-                    charset: $parameters['CHARSET'],
++                    charset: $charset,
+                 );
+             }
+             // HTML.
+             if ($subtype == 'HTML') {
+                 $contenthtml = $this->process_message_part_body(
+                     bodycontent: $data,
+-                    charset: $parameters['CHARSET'],
++                    charset: $charset,
+                 );
+             }
+             // ATTACHMENT.
+@@ -800,7 +815,7 @@ class manager {
+                 ) {
+                     // Parse disposition.
+                     $disposition = null;
+-                    if (is_array($partstructure[8])) {
++                    if (isset($partstructure[8]) && is_array($partstructure[8]) && isset($partstructure[8][0])) {
+                         $disposition = strtolower($partstructure[8][0]);
+                     }
+                     $disposition = $disposition == 'inline' ? 'inline' : 'attachment';

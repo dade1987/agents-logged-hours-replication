@@ -1,0 +1,118 @@
+diff --git a/public/mod/assign/locallib.php b/public/mod/assign/locallib.php
+index 5e81ebf5ab4..ccb33dd4550 100644
+--- a/public/mod/assign/locallib.php
++++ b/public/mod/assign/locallib.php
+@@ -187,6 +187,9 @@ class assign {
+     /** @var bool whether to exclude users with inactive enrolment */
+     private $showonlyactiveenrol = null;
+ 
++    /** @var array cache of whether users are suspended at system level, keyed by user id */
++    private $systemsuspendedusers = [];
++
+     /** @var string A key used to identify userlists created by this object. */
+     private $useridlistid = null;
+ 
+@@ -2454,8 +2457,13 @@ class assign {
+                 }
+             }
+ 
+-            // Exclude suspended users from the list of participants.
+-            $additionalfilters .= " AND u.suspended = 0 AND u.auth <> 'nologin'";
++            // Exclude users suspended at system level (or who can never log in) from the list of participants,
++            // but only when we are showing active users only. This keeps the behaviour consistent with users
++            // whose enrolment is suspended at course level, so that a teacher who chooses to view suspended
++            // participants can still see and grade submissions made before the user was suspended.
++            if ($onlyactive) {
++                $additionalfilters .= " AND u.suspended = 0 AND u.auth <> 'nologin'";
++            }
+ 
+             $sql = "SELECT $fields
+                       FROM {user} u
+@@ -10158,7 +10166,20 @@ class assign {
+      * @return bool true is user is active in course.
+      */
+     public function is_active_user($userid) {
+-        return !in_array($userid, get_suspended_userids($this->context, true));
++        global $DB;
++
++        // Users whose enrolment is suspended at course level are not active.
++        if (in_array($userid, get_suspended_userids($this->context, true))) {
++            return false;
++        }
++
++        // Users suspended at system level (or who can never log in) are treated the same way as users
++        // whose enrolment is suspended at course level.
++        if (!isset($this->systemsuspendedusers[$userid])) {
++            $user = $DB->get_record('user', ['id' => $userid], 'id, suspended, auth');
++            $this->systemsuspendedusers[$userid] = $user && (!empty($user->suspended) || $user->auth === 'nologin');
++        }
++        return !$this->systemsuspendedusers[$userid];
+     }
+ 
+     /**
+diff --git a/public/mod/assign/tests/locallib_test.php b/public/mod/assign/tests/locallib_test.php
+index b66825705c6..09c87c9a587 100644
+--- a/public/mod/assign/tests/locallib_test.php
++++ b/public/mod/assign/tests/locallib_test.php
+@@ -1967,6 +1967,61 @@ final class locallib_test extends \advanced_testcase {
+         $this->assertCount(2, $assign->testable_get_grading_userid_list());
+     }
+ 
++    /**
++     * Test that users suspended at system level are treated the same way as users whose enrolment is suspended
++     * at course level: hidden when only active users are shown, visible (and flagged as suspended) otherwise.
++     *
++     * @covers \assign::list_participants
++     * @covers \assign::is_active_user
++     */
++    public function test_list_participants_system_suspended_users(): void {
++        $this->resetAfterTest();
++
++        $course = $this->getDataGenerator()->create_course();
++        $teacher = $this->getDataGenerator()->create_and_enrol($course, 'editingteacher');
++        $student = $this->getDataGenerator()->create_and_enrol($course, 'student');
++        $coursesuspendedstudent = $this->getDataGenerator()->create_and_enrol(
++            $course,
++            'student',
++            null,
++            'manual',
++            0,
++            0,
++            ENROL_USER_SUSPENDED
++        );
++        $systemsuspendedstudent = $this->getDataGenerator()->create_and_enrol($course, 'student', ['suspended' => 1]);
++        $nologinstudent = $this->getDataGenerator()->create_and_enrol($course, 'student', ['auth' => 'nologin']);
++
++        $this->setUser($teacher);
++        $assign = $this->create_instance($course);
++
++        // Only active users: all kinds of suspended users are hidden.
++        set_user_preference('grade_report_showonlyactiveenrol', true);
++        $participants = $assign->list_participants(0, true);
++        $this->assertEquals([$student->id], array_keys($participants));
++        $this->assertCount(1, $assign->testable_get_grading_userid_list());
++
++        // Explicitly requesting only active users behaves the same.
++        $participants = $assign->list_participants(0, true, false, true);
++        $this->assertEquals([$student->id], array_keys($participants));
++
++        // All users: suspended users (at course or system level) are shown so they can be graded.
++        $participants = $assign->list_participants(0, true, false, false);
++        $this->assertEqualsCanonicalizing(
++            [$student->id, $coursesuspendedstudent->id, $systemsuspendedstudent->id, $nologinstudent->id],
++            array_keys($participants)
++        );
++
++        // Suspended users are flagged as not active, whatever the level they are suspended at.
++        $this->assertTrue($assign->is_active_user($student->id));
++        $this->assertFalse($assign->is_active_user($coursesuspendedstudent->id));
++        $this->assertFalse($assign->is_active_user($systemsuspendedstudent->id));
++        $this->assertFalse($assign->is_active_user($nologinstudent->id));
++
++        // The teacher can view the submission of a system suspended user as they can view suspended users.
++        $this->assertTrue($assign->can_view_submission($systemsuspendedstudent->id));
++    }
++
+     public function test_cron(): void {
+         global $PAGE;
+         $this->resetAfterTest();

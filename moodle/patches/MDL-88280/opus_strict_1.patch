@@ -1,0 +1,74 @@
+diff --git a/public/question/classes/local/bank/question_bank_helper.php b/public/question/classes/local/bank/question_bank_helper.php
+index f6b6befbc72..1a03b3c47b1 100644
+--- a/public/question/classes/local/bank/question_bank_helper.php
++++ b/public/question/classes/local/bank/question_bank_helper.php
+@@ -269,6 +269,7 @@ class question_bank_helper {
+         // Build the left joins for all modules of the type requested i.e. those that do or do not share questions.
+         $pluginjoins = [];
+         $pluginfields = [];
++        $pluginidfields = [];
+         foreach ($plugins as $key => $plugin) {
+             $join = "LEFT JOIN {{$plugin}} p{$key} ON p{$key}.id = cm.instance
+                      AND m.name = '{$plugin}'";
+@@ -277,8 +278,12 @@ class question_bank_helper {
+             }
+             $pluginjoins[] = $join;
+             $pluginfields[] = "p{$key}.name";
++            $pluginidfields[] = "p{$key}.id IS NOT NULL";
+         }
+         $pluginjoinsql = implode(' ', $pluginjoins);
++        // Only include course modules that matched one of the plugin joins. This excludes the preview qbank, which is
++        // filtered out by the join condition above and must never be returned.
++        $pluginmatchsql = 'AND (' . implode(' OR ', $pluginidfields) . ')';
+ 
+         // Build the SQL to filter by module name and exclude deleted course modules.
+         [$modulenamesql, $modulenameparams] = $DB->get_in_or_equal($plugins, SQL_PARAMS_NAMED, 'modname');
+@@ -329,7 +334,7 @@ class question_bank_helper {
+                 {$pluginjoinsql}
+                 {$contextsql}
+                 {$catsql}
+-                WHERE 1=1 {$wheremodulesql} {$notincoursesql} {$incoursesql} {$searchsql}
++                WHERE 1=1 {$wheremodulesql} {$pluginmatchsql} {$notincoursesql} {$incoursesql} {$searchsql}
+                 GROUP BY cm.id, cm.course {$contextgroupby}
+                 {$orderbysql}";
+ 
+diff --git a/public/question/tests/external/search_shared_banks_test.php b/public/question/tests/external/search_shared_banks_test.php
+index 145f67466ec..24f52daca15 100644
+--- a/public/question/tests/external/search_shared_banks_test.php
++++ b/public/question/tests/external/search_shared_banks_test.php
+@@ -214,4 +214,35 @@ final class search_shared_banks_test extends \advanced_testcase {
+             $lastresult
+         );
+     }
++
++    /**
++     * The preview question bank must never be returned, even to an admin.
++     */
++    public function test_search_excludes_preview_bank(): void {
++        $this->resetAfterTest();
++        [
++            ,
++            ,
++            ,
++            ,
++            $quizcontext,
++            $qbank1,
++            $qbank2,
++            $qbank3,
++            $qbank4,
++        ] = $this->create_banks();
++
++        $previewbank = \core_question\local\bank\question_bank_helper::get_preview_open_instance_type(true);
++        $this->assertNotNull($previewbank);
++
++        $this->setAdminUser();
++        $result = search_shared_banks::execute($quizcontext->id);
++
++        $values = array_column($result['sharedbanks'], 'value');
++        $this->assertNotContains((int) $previewbank->id, array_map('intval', $values));
++        $this->assertEqualsCanonicalizing(
++            [$qbank1->cmid, $qbank2->cmid, $qbank3->cmid, $qbank4->cmid],
++            $values,
++        );
++    }
+ }

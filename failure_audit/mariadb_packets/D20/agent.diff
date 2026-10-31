@@ -1,0 +1,30 @@
+diff --git a/sql/item.cc b/sql/item.cc
+index c667ab01..dfc2d11f 100644
+--- a/sql/item.cc
++++ b/sql/item.cc
+@@ -2642,6 +2642,25 @@ bool DTCollation::aggregate(const DTCollation &dt, uint flags)
+         set(dt);
+         return 0;
+       }
++      /*
++        Same character set, different collations, same derivation
++        (e.g. a COERCIBLE string literal in @@collation_connection
++        vs. a COERCIBLE user variable holding a utf8mb3_unicode_ci value).
++        An ASCII-only operand can be reinterpreted in any collation of the
++        same character set without data loss, so the other operand's
++        collation wins, the same way as it is done for different character
++        sets (see left_is_superset()).
++      */
++      if (flags & MY_COLL_ALLOW_SUPERSET_CONV)
++      {
++        if (left_is_superset(this, &dt))
++          return 0;                       /* Do nothing */
++        if (left_is_superset(&dt, this))
++        {
++          set(dt);
++          return 0;
++        }
++      }
+       THD *thd = current_thd;
+       myf utf8_flag= thd ? thd->get_utf8_flag()
+         : global_system_variables.old_behavior & OLD_MODE_UTF8_IS_UTF8MB3;

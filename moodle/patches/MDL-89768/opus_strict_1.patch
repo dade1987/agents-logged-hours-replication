@@ -1,0 +1,139 @@
+diff --git a/.upgradenotes/MDL-89768-2026102400000000.yml b/.upgradenotes/MDL-89768-2026102400000000.yml
+new file mode 100644
+index 00000000000..5001f592f50
+--- /dev/null
++++ b/.upgradenotes/MDL-89768-2026102400000000.yml
+@@ -0,0 +1,9 @@
++issueNumber: MDL-89768
++notes:
++  mod_wiki:
++    - message: >-
++        The external function `mod_wiki_new_page` now requires the
++        `mod/wiki:createpage` capability. The external function
++        `mod_wiki_get_subwikis` now returns a new `cancreatepages` field per
++        subwiki, indicating whether the current user can create new pages in it.
++      type: changed
+diff --git a/public/mod/wiki/classes/external.php b/public/mod/wiki/classes/external.php
+index ec0f9e72a74..d5377ae2e9c 100644
+--- a/public/mod/wiki/classes/external.php
++++ b/public/mod/wiki/classes/external.php
+@@ -353,8 +353,10 @@ class mod_wiki_external extends external_api {
+         require_capability('mod/wiki:viewpage', $context);
+ 
+         $returnedsubwikis = wiki_get_visible_subwikis($wiki, $cm, $context);
++        $cancreatepages = wiki_can_create_pages($context);
+         foreach ($returnedsubwikis as $subwiki) {
+             $subwiki->canedit = wiki_user_can_edit($subwiki);
++            $subwiki->cancreatepages = $subwiki->canedit && $cancreatepages;
+         }
+ 
+         $result = array();
+@@ -380,6 +382,8 @@ class mod_wiki_external extends external_api {
+                             'groupid' => new external_value(PARAM_RAW, 'Group ID.'),
+                             'userid' => new external_value(PARAM_INT, 'User ID.'),
+                             'canedit' => new external_value(PARAM_BOOL, 'True if user can edit the subwiki.'),
++                            'cancreatepages' => new external_value(PARAM_BOOL,
++                                'True if user can create new pages in the subwiki.', VALUE_OPTIONAL),
+                         ), 'Subwikis'
+                     )
+                 ),
+@@ -989,6 +993,11 @@ class mod_wiki_external extends external_api {
+             $context = context_module::instance($cm->id);
+             self::validate_context($context);
+ 
++            // The user needs the createpage capability to create new pages.
++            if (!wiki_can_create_pages($context)) {
++                throw new moodle_exception('nocreatepermission', 'wiki');
++            }
++
+         } else {
+             if (!$wiki = wiki_get_wiki($params['wikiid'])) {
+                 throw new moodle_exception('incorrectwikiid', 'wiki');
+@@ -999,6 +1008,11 @@ class mod_wiki_external extends external_api {
+             $context = context_module::instance($cm->id);
+             self::validate_context($context);
+ 
++            // The user needs the createpage capability to create new pages.
++            if (!wiki_can_create_pages($context)) {
++                throw new moodle_exception('nocreatepermission', 'wiki');
++            }
++
+             // Determine groupid and userid to use.
+             list($groupid, $userid) = self::determine_group_and_user($cm, $wiki, $params['groupid'], $params['userid']);
+ 
+diff --git a/public/mod/wiki/tests/externallib_test.php b/public/mod/wiki/tests/externallib_test.php
+index 93ba3f73af1..7d1edcf6c44 100644
+--- a/public/mod/wiki/tests/externallib_test.php
++++ b/public/mod/wiki/tests/externallib_test.php
+@@ -540,7 +540,8 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+                 'wikiid' => $this->wiki->id,
+                 'groupid' => 0,
+                 'userid' => 0,
+-                'canedit' => true
++                'canedit' => true,
++                'cancreatepages' => true,
+             );
+         $expectedsubwikis[] = $expectedsubwiki;
+ 
+@@ -549,6 +550,16 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+         $this->assertEquals($expectedsubwikis, $result['subwikis']);
+         $this->assertCount(0, $result['warnings']);
+ 
++        // Test user without the createpage capability.
++        assign_capability('mod/wiki:createpage', CAP_PROHIBIT, $this->studentrole->id, $this->context->id);
++        accesslib_clear_all_caches_for_unit_testing();
++
++        $expectedsubwikis[0]['cancreatepages'] = false;
++        $result = mod_wiki_external::get_subwikis($this->wiki->id);
++        $result = external_api::clean_returnvalue(mod_wiki_external::get_subwikis_returns(), $result);
++        $this->assertEquals($expectedsubwikis, $result['subwikis']);
++        $this->assertCount(0, $result['warnings']);
++
+         // Test user with no capabilities.
+         // We need a explicit prohibit since this capability is allowed for students by default.
+         assign_capability('mod/wiki:viewpage', CAP_PROHIBIT, $this->studentrole->id, $this->context->id);
+@@ -1442,6 +1453,44 @@ final class externallib_test extends \core_external\tests\externallib_testcase {
+ 
+     }
+ 
++    /**
++     * Test new_page without the createpage capability.
++     */
++    public function test_new_page_without_createpage_capability(): void {
++        $this->create_individual_wikis_with_groups();
++
++        $pagetitle = 'Page Title';
++        $pagecontent = 'Page content';
++
++        // Prohibit the createpage capability for students, keeping editpage.
++        $contextcourse = \context_course::instance($this->course->id);
++        assign_capability('mod/wiki:createpage', CAP_PROHIBIT, $this->studentrole->id, $contextcourse->id);
++        accesslib_clear_all_caches_for_unit_testing();
++
++        $this->setUser($this->student);
++
++        // Test on existing subwiki.
++        try {
++            mod_wiki_external::new_page($pagetitle, $pagecontent, 'html', $this->fpsepg1indstu->subwikiid);
++            $this->fail('Exception expected due to missing createpage capability.');
++        } catch (\moodle_exception $e) {
++            $this->assertEquals('nocreatepermission', $e->errorcode);
++        }
++
++        // Test on non existing subwiki.
++        $this->getDataGenerator()->create_group_member(['userid' => $this->student->id, 'groupid' => $this->group2->id]);
++        try {
++            mod_wiki_external::new_page($pagetitle, $pagecontent, 'html', null, $this->wikisepind->id, $this->student->id,
++                $this->group2->id);
++            $this->fail('Exception expected due to missing createpage capability.');
++        } catch (\moodle_exception $e) {
++            $this->assertEquals('nocreatepermission', $e->errorcode);
++        }
++
++        // Check that no subwiki was created.
++        $this->assertFalse(wiki_get_subwiki_by_group($this->wikisepind->id, $this->group2->id, $this->student->id));
++    }
++
+     /**
+      * Test edit_page. We won't test all the possible cases because that's already
+      * done in the tests for wiki_save_section / wiki_save_page.

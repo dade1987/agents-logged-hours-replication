@@ -1,0 +1,146 @@
+You are a software engineer fixing an issue in MariaDB Server (C/C++). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot build MariaDB or run its test suite. Read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update mysql-test tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDEV-40673: CONCAT silently returns the wrong string, dropping its first argument's value, when that argument is JSON_TYPE() or GET_FORMAT()
+
+CONCAT() returns a string with its first argument's value missing
+entirely when that argument is JSON_TYPE() or GET_FORMAT(). No error
+and no warning is raised, so the wrong answer is silent.
+
+{code:sql}
+SELECT JSON_TYPE('{"a":1}');                    -- OBJECT
+SELECT CONCAT(JSON_TYPE('{"a":1}'), 'X');       -- X          <-- wrong
+SELECT GET_FORMAT(DATE, 'USA');                 -- %m.%d.%Y
+SELECT CONCAT(GET_FORMAT(DATE, 'USA'), 'X');    -- X          <-- wrong
+{code}
+
+Only the first argument position is affected. The same functions
+anywhere else in the argument list answer correctly, which is what
+makes the bug easy to miss:
+
+{code:sql}
+SELECT CONCAT('P', JSON_TYPE('{"a":1}'));       -- POBJECT    <-- right
+SELECT CONCAT(JSON_TYPE('{"a":1}'),
+              JSON_TYPE('[1]'));                -- ARRAY      <-- wrong
+{code}
+
+h2. It is not limited to literals
+
+The same happens over ordinary table data, so this reaches real
+queries and not only hand-written examples:
+
+{code:sql}
+CREATE TABLE t (j JSON);
+INSERT INTO t VALUES ('{"a":1}'), ('[1,2]');
+SELECT CONCAT(JSON_TYPE(j), '.') AS c FROM t;
+{code}
+
+{noformat}
++------+
+| c    |
++------+
+| .    |
+| .    |
++------+
+{noformat}
+
+Expected OBJECT. and ARRAY. respectively.
+
+h2. How far it goes
+
+Affected, every line below giving the wrong answer:
+
+{code:sql}
+SELECT CONCAT(JSON_TYPE('{"a":1}'), 'A', 'B');     -- AB
+SELECT LENGTH(CONCAT(JSON_TYPE('{"a":1}'), 'X'));  -- 1
+SELECT CONCAT(JSON_TYPE('{"a":1}'), '');           -- empty string
+
+SET sql_mode='ORACLE';
+SELECT JSON_TYPE('{"a":1}') || 'X';                -- X
+SET sql_mode=DEFAULT;
+{code}
+
+Appending an empty string is enough to lose the value, which is the
+smallest form of the bug. LENGTH() shows the bytes are genuinely gone
+rather than merely not displayed. The Oracle-mode concatenation
+operator is a separate implementation and is affected as well.
+
+Not affected:
+
+{code:sql}
+SELECT CONCAT_WS('-', JSON_TYPE('{"a":1}'), 'X');  -- OBJECT-X
+SELECT CONCAT(ENCRYPT('abc', 'ab'), 'X');          -- abFZSxKKdq5s6X
+{code}
+
+CONCAT_WS accumulates differently. ENCRYPT finishes the same way as
+the two affected functions but then copies the bytes into a buffer of
+its own before returning. Either affected function on its own, outside
+CONCAT, answers correctly.
+
+h2. Where it comes from
+
+Both affected functions finish by pointing the output buffer they were
+handed at bytes they do not own, and returning that same buffer:
+
+{code:cpp}
+  /* Item_func_json_type::val_str() */
+  str->set(type, strlen(type), &my_charset_utf8mb3_general_ci);
+  return str;
+{code}
+
+String::set() re-points the buffer at a static string, so afterwards
+its allocated length is 0 while its length is 6.
+
+Item_func_concat::val_str() then sees that the value it got back is
+the very buffer it passed in, and therefore skips the copy_or_move()
+call that would have given its accumulator bytes of its own. Appending
+the next argument reaches Item_func_concat::realloc_result(), which
+tests the allocated length, finds 0, and calls alloc() rather than
+realloc(). Binary_string::real_alloc() sets str_length to 0 - its
+declaration says so outright, "Empties old string" - so the six bytes
+are dropped and the append lands at offset 0.
+
+The test for an allocated length of 0 reads as "therefore empty",
+which holds for CONCAT's own fresh buffer and does not hold once an
+argument has handed the buffer back pointing at borrowed bytes.
+
+h2. Affected versions
+
+Verified by execution:
+
+* 10.11.19
+* 13.1.0
+
+Verified by inspection, all three code sites above being unchanged:
+10.5, 10.6, 10.11, 11.4, 11.8 and main. 12.x was not checked
+separately and is listed on the strength of lying between two that
+were.
+
+h2. How to repeat
+
+{code:sql}
+SELECT JSON_TYPE('{"a":1}');
+SELECT CONCAT(JSON_TYPE('{"a":1}'), 'X');
+SELECT CONCAT('P', JSON_TYPE('{"a":1}'));
+
+SELECT GET_FORMAT(DATE, 'USA');
+SELECT CONCAT(GET_FORMAT(DATE, 'USA'), 'X');
+
+CREATE TABLE t (j JSON);
+INSERT INTO t VALUES ('{"a":1}'), ('[1,2]');
+SELECT CONCAT(JSON_TYPE(j), '.') AS c FROM t;
+DROP TABLE t;
+{code}
+
+Expected, in order: OBJECTX, POBJECT, %m.%d.%YX, and OBJECT. / ARRAY.
+from the table.
+
+Got, in order: X, POBJECT, X, and . / . from the table.
+
+

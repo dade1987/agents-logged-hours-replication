@@ -1,0 +1,140 @@
+diff --git a/sql/item_jsonfunc.cc b/sql/item_jsonfunc.cc
+index cfe244dc..f772541c 100644
+--- a/sql/item_jsonfunc.cc
++++ b/sql/item_jsonfunc.cc
+@@ -704,7 +704,9 @@ bool Item_func_json_exists::val_bool()
+   if (!path.parsed)
+   {
+     String *s_p= args[1]->val_str(&tmp_path);
+-    if (s_p &&
++    if (!s_p)
++      goto err_return;
++    if (
+         json_path_setup(&path.p, s_p->charset(), (const uchar *) s_p->ptr(),
+                         (const uchar *) s_p->ptr() + s_p->length()))
+       goto err_return;
+@@ -774,14 +776,18 @@ bool Json_path_extractor::extract(String *str, Item *item_js, Item *item_jp,
+ 
+     if (allow_wildcard)
+     {
+-      if (s_p &&
++      if (!s_p)
++        return true;
++      if (
+         json_path_setup(&p, s_p->charset(), (const uchar *) s_p->ptr(),
+                        (const uchar *) s_p->ptr() + s_p->length()))
+         error= true;
+     }
+     else
+     {
+-      if (s_p &&
++      if (!s_p)
++        return true;
++      if (
+         path_setup_nwc(&p, s_p->charset(), (const uchar *) s_p->ptr(),
+                        (const uchar *) s_p->ptr() + s_p->length()))
+         error= true;
+@@ -1164,7 +1170,8 @@ String *Item_func_json_extract::read_json(String *str,
+     {
+       c_path->p.types_used= JSON_PATH_KEY_NULL;
+       String *s_p= args[n_arg]->val_str(tmp_paths + (n_arg-1));
+-      if (s_p)
++      if (!s_p)
++        goto return_null;
+       {
+        if (json_path_setup(&c_path->p,s_p->charset(),(const uchar *) s_p->ptr(),
+                           (const uchar *) s_p->ptr() + s_p->length()))
+@@ -1603,7 +1610,9 @@ bool Item_func_json_contains::val_bool()
+     if (!path.parsed)
+     {
+       String *s_p= args[2]->val_str(&tmp_path);
+-      if (s_p &&
++      if (!s_p)
++        goto return_null;
++      if (
+           path_setup_nwc(&path.p,s_p->charset(),(const uchar *) s_p->ptr(),
+                          (const uchar *) s_p->end()))
+       {
+@@ -1746,7 +1755,8 @@ longlong Item_func_json_contains_path::val_int()
+     if (!c_path->parsed)
+     {
+       String *s_p= args[n_arg]->val_str(tmp_paths + (n_arg-2));
+-      if (s_p)
++      if (!s_p)
++        goto return_null;
+       {
+        if (json_path_setup(&c_path->p,s_p->charset(),(const uchar *) s_p->ptr(),
+                           (const uchar *) s_p->ptr() + s_p->length()))
+@@ -1830,7 +1840,8 @@ bool Item_func_json_contains_path::val_bool()
+     if (!c_path->parsed)
+     {
+       String *s_p= args[n_arg]->val_str(tmp_paths + (n_arg-2));
+-      if (s_p)
++      if (!s_p)
++        goto null_return;
+       {
+        if (json_path_setup(&c_path->p,s_p->charset(),(const uchar *) s_p->ptr(),
+                           (const uchar *) s_p->ptr() + s_p->length()))
+@@ -2164,7 +2175,9 @@ String *Item_func_json_array_append::val_str(String *str)
+     if (!c_path->parsed)
+     {
+       String *s_p= args[n_arg]->val_str(tmp_paths+n_path);
+-      if (s_p &&
++      if (!s_p)
++        goto return_null;
++      if (
+           path_setup_nwc(&c_path->p,s_p->charset(),(const uchar *) s_p->ptr(),
+                          (const uchar *) s_p->ptr() + s_p->length()))
+       {
+@@ -3165,7 +3178,9 @@ longlong Item_func_json_length::val_int()
+     if (!path.parsed)
+     {
+       String *s_p= args[1]->val_str(&tmp_path);
+-      if (s_p &&
++      if (!s_p)
++        goto null_return;
++      if (
+           path_setup_nwc(&path.p, s_p->charset(), (const uchar *) s_p->ptr(),
+                          (const uchar *) s_p->ptr() + s_p->length()))
+       {
+@@ -3408,7 +3423,8 @@ String *Item_func_json_insert::val_str(String *str)
+     if (!c_path->parsed)
+     {
+       String *s_p= args[n_arg]->val_str(tmp_paths+n_path);
+-      if (s_p)
++      if (!s_p)
++        goto return_null;
+       {
+         if (path_setup_nwc(&c_path->p,s_p->charset(),
+                            (const uchar *) s_p->ptr(),
+@@ -3673,7 +3689,8 @@ String *Item_func_json_remove::val_str(String *str)
+     if (!c_path->parsed)
+     {
+       String *s_p= args[n_arg]->val_str(tmp_paths+n_path);
+-      if (s_p)
++      if (!s_p)
++        goto null_return;
+       {
+         if (path_setup_nwc(&c_path->p,s_p->charset(),
+                            (const uchar *) s_p->ptr(),
+@@ -3905,7 +3922,9 @@ String *Item_func_json_keys::val_str(String *str)
+   if (!path.parsed)
+   {
+     String *s_p= args[1]->val_str(&tmp_path);
+-    if (s_p &&
++    if (!s_p)
++      goto null_return;
++    if (
+         path_setup_nwc(&path.p, s_p->charset(), (const uchar *) s_p->ptr(),
+                        (const uchar *) s_p->ptr() + s_p->length()))
+       {
+@@ -4133,7 +4152,8 @@ String *Item_func_json_search::val_str(String *str)
+     if (!c_path->parsed)
+     {
+       String *s_p= args[n_arg]->val_str(tmp_paths + (n_arg-4));
+-      if (s_p)
++      if (!s_p)
++        goto null_return;
+       {
+        if (json_path_setup(&c_path->p,s_p->charset(),(const uchar *) s_p->ptr(),
+                           (const uchar *) s_p->ptr() + s_p->length()))

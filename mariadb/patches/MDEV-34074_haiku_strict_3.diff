@@ -1,0 +1,37 @@
+diff --git a/plugin/server_audit/server_audit.c b/plugin/server_audit/server_audit.c
+index 5d37186a..38502c13 100644
+--- a/plugin/server_audit/server_audit.c
++++ b/plugin/server_audit/server_audit.c
+@@ -839,6 +839,12 @@ static struct connection_info *get_loc_info(MYSQL_THD thd)
+   return (struct connection_info *) THDVAR(thd, loc_info);
+   */
+   struct connection_info *ci= (struct connection_info *) THDVAR(thd, loc_info);
++  /*
++    THDVAR() can return NULL (e.g. when the plugin is being installed and
++    its thread-local storage is not set up yet). Callers must handle NULL.
++  */
++  if (!ci)
++    return NULL;
+   if ((size_t) ci->user_length > sizeof(ci->user))
+   {
+     ci->user_length= 0;
+@@ -2073,7 +2079,9 @@ void auditing(MYSQL_THD thd, unsigned int event_class, const void *ev)
+     cn= get_loc_info(thd);
+   }
+ 
+-  update_connection_info(thd, cn, event_class, ev, &after_action);
++  /* cn is NULL if there is no per-connection storage (see get_loc_info) */
++  if (cn)
++    update_connection_info(thd, cn, event_class, ev, &after_action);
+ 
+   if (!logging)
+   {
+@@ -2631,7 +2639,7 @@ static void log_current_query(MYSQL_THD thd)
+   if (!thd)
+     return;
+   cn= get_loc_info(thd);
+-  if (!ci_needs_setup(cn) && cn->query_length)
++  if (cn && !ci_needs_setup(cn) && cn->query_length)
+   {
+     cn->log_always= 1;
+     log_statement_ex(cn, cn->query_time, thd_get_thread_id(thd),

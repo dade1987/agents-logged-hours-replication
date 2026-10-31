@@ -1,0 +1,182 @@
+diff --git a/mysql-test/main/select_into_row.result b/mysql-test/main/select_into_row.result
+index 98315c11..8ab5dcd5 100644
+--- a/mysql-test/main/select_into_row.result
++++ b/mysql-test/main/select_into_row.result
+@@ -137,4 +137,69 @@ CALL p1;
+ ERROR HY000: Row variable 'r0' does not have a field 'b1_non_existing'
+ DROP PROCEDURE p1;
+ DROP TABLE t1;
++#
++# MDEV-41265 SELECT/ UPDATE RETURNING INTO a single row-field fails with ER_WRONG_NUMBER_OF_COLUMNS_IN_SELECT, even though the column count matches
++#
++CREATE TABLE t1 (a INT, b VARCHAR(10));
++INSERT INTO t1 VALUES (10,'b10');
++CREATE PROCEDURE p1()
++BEGIN
++DECLARE r0 ROW (a INT, b VARCHAR(10));
++SELECT a INTO r0.a FROM t1;
++SELECT r0.a;
++END;
++$$
++CALL p1;
++r0.a
++10
++DROP PROCEDURE p1;
++CREATE PROCEDURE p2()
++BEGIN
++DECLARE r0 ROW (a INT, b VARCHAR(10));
++UPDATE t1 SET a=a+1 RETURNING a INTO r0.a;
++SELECT r0.a;
++END;
++$$
++CALL p2;
++r0.a
++11
++DROP PROCEDURE p2;
++# Wrong column count into a single ROW field
++CREATE PROCEDURE p3()
++BEGIN
++DECLARE r0 ROW (a INT, b VARCHAR(10));
++SELECT a,b INTO r0.a FROM t1;
++END;
++$$
++CALL p3;
++ERROR 21000: The used SELECT statements have a different number of columns
++DROP PROCEDURE p3;
++# Into a `ROW TYPE OF cursor1` single field
++CREATE PROCEDURE p4()
++BEGIN
++DECLARE c1 CURSOR FOR SELECT * FROM t1;
++BEGIN
++DECLARE r0 ROW TYPE OF c1;
++SELECT a INTO r0.a FROM t1;
++SELECT r0.a;
++END;
++END;
++$$
++CALL p4;
++r0.a
++11
++DROP PROCEDURE p4;
++CREATE PROCEDURE p5()
++BEGIN
++DECLARE c1 CURSOR FOR SELECT * FROM t1;
++BEGIN
++DECLARE r0 ROW TYPE OF c1;
++SELECT a,b INTO r0.a FROM t1;
++END;
++END;
++$$
++CALL p5;
++ERROR 21000: The used SELECT statements have a different number of columns
++DROP PROCEDURE p5;
++DROP TABLE t1;
+ # End of 12.3 tests
+diff --git a/mysql-test/main/select_into_row.test b/mysql-test/main/select_into_row.test
+index 79127eca..9d1493e4 100644
+--- a/mysql-test/main/select_into_row.test
++++ b/mysql-test/main/select_into_row.test
+@@ -171,4 +171,81 @@ CALL p1;
+ DROP PROCEDURE p1;
+ DROP TABLE t1;
+ 
++--echo #
++--echo # MDEV-41265 SELECT/ UPDATE RETURNING INTO a single row-field fails with ER_WRONG_NUMBER_OF_COLUMNS_IN_SELECT, even though the column count matches
++--echo #
++
++CREATE TABLE t1 (a INT, b VARCHAR(10));
++INSERT INTO t1 VALUES (10,'b10');
++
++DELIMITER $$;
++CREATE PROCEDURE p1()
++BEGIN
++  DECLARE r0 ROW (a INT, b VARCHAR(10));
++  SELECT a INTO r0.a FROM t1;
++  SELECT r0.a;
++END;
++$$
++DELIMITER ;$$
++CALL p1;
++DROP PROCEDURE p1;
++
++DELIMITER $$;
++CREATE PROCEDURE p2()
++BEGIN
++  DECLARE r0 ROW (a INT, b VARCHAR(10));
++  UPDATE t1 SET a=a+1 RETURNING a INTO r0.a;
++  SELECT r0.a;
++END;
++$$
++DELIMITER ;$$
++CALL p2;
++DROP PROCEDURE p2;
++
++--echo # Wrong column count into a single ROW field
++DELIMITER $$;
++CREATE PROCEDURE p3()
++BEGIN
++  DECLARE r0 ROW (a INT, b VARCHAR(10));
++  SELECT a,b INTO r0.a FROM t1;
++END;
++$$
++DELIMITER ;$$
++--error ER_WRONG_NUMBER_OF_COLUMNS_IN_SELECT
++CALL p3;
++DROP PROCEDURE p3;
++
++--echo # Into a `ROW TYPE OF cursor1` single field
++DELIMITER $$;
++CREATE PROCEDURE p4()
++BEGIN
++  DECLARE c1 CURSOR FOR SELECT * FROM t1;
++  BEGIN
++    DECLARE r0 ROW TYPE OF c1;
++    SELECT a INTO r0.a FROM t1;
++    SELECT r0.a;
++  END;
++END;
++$$
++DELIMITER ;$$
++CALL p4;
++DROP PROCEDURE p4;
++
++DELIMITER $$;
++CREATE PROCEDURE p5()
++BEGIN
++  DECLARE c1 CURSOR FOR SELECT * FROM t1;
++  BEGIN
++    DECLARE r0 ROW TYPE OF c1;
++    SELECT a,b INTO r0.a FROM t1;
++  END;
++END;
++$$
++DELIMITER ;$$
++--error ER_WRONG_NUMBER_OF_COLUMNS_IN_SELECT
++CALL p5;
++DROP PROCEDURE p5;
++
++DROP TABLE t1;
++
+ --echo # End of 12.3 tests
+diff --git a/sql/sql_type_row.cc b/sql/sql_type_row.cc
+index c81e13d0..9ac86590 100644
+--- a/sql/sql_type_row.cc
++++ b/sql/sql_type_row.cc
+@@ -125,7 +125,7 @@ class my_var_sp_row_field: public my_var_sp
+                            bool *assign_as_row) const override
+   {
+     *assign_as_row= false;
+-    return select_list.elements == 1;
++    return select_list.elements != 1;
+   }
+   bool set(THD *thd, Item *item) override
+   {
+@@ -151,7 +151,7 @@ class my_var_sp_row_field_by_name: public my_var_sp
+                            bool *assign_as_row) const override
+   {
+     *assign_as_row= false;
+-    return select_list.elements == 1;
++    return select_list.elements != 1;
+   }
+   bool set(THD *thd, Item *item) override
+   {

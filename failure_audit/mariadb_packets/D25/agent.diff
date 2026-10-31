@@ -1,0 +1,18 @@
+diff --git a/sql/item_strfunc.cc b/sql/item_strfunc.cc
+index 34e47988..397371fa 100644
+--- a/sql/item_strfunc.cc
++++ b/sql/item_strfunc.cc
+@@ -572,7 +572,12 @@ String *Item_func_kdf::val_str(String *buf)
+   else
+   {
+     longlong iter= arg_count > 2 ? args[2]->val_int() : 1000;
+-    if (iter <= 0)
++    /*
++      PKCS5_PBKDF2_HMAC() takes the iteration count as int. Reject values
++      that do not fit instead of silently truncating them to a (possibly
++      much smaller) 32-bit value.
++    */
++    if (iter <= 0 || iter > INT_MAX32)
+     {
+       if (!args[2]->null_value)
+         invalid_argument_error(func_name(),

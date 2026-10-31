@@ -1,0 +1,58 @@
+diff --git a/mysql-test/suite/rpl/r/rpl_heartbeat_basic.result b/mysql-test/suite/rpl/r/rpl_heartbeat_basic.result
+index f335d3ab..d7f4d573 100644
+--- a/mysql-test/suite/rpl/r/rpl_heartbeat_basic.result
++++ b/mysql-test/suite/rpl/r/rpl_heartbeat_basic.result
+@@ -194,6 +194,8 @@ SHOW GLOBAL STATUS LIKE 'slave_heartbeat_period';
+ Variable_name	Value
+ Slave_heartbeat_period	60.000
+ RESET SLAVE;
++CHANGE MASTER TO MASTER_HEARTBEAT_PERIOD=+DEFAULT;
++ERROR 42000: You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'DEFAULT' at line 1
+ 
+ *** Running slave ***
+ CHANGE MASTER TO MASTER_HOST='127.0.0.1', MASTER_PORT=MASTER_PORT, MASTER_USER='root', MASTER_CONNECT_RETRY=20, MASTER_HEARTBEAT_PERIOD=0.1;
+diff --git a/mysql-test/suite/rpl/t/rpl_heartbeat_basic.test b/mysql-test/suite/rpl/t/rpl_heartbeat_basic.test
+index 9819e7f1..96e2b677 100644
+--- a/mysql-test/suite/rpl/t/rpl_heartbeat_basic.test
++++ b/mysql-test/suite/rpl/t/rpl_heartbeat_basic.test
+@@ -253,6 +253,9 @@ RESET SLAVE;
+ eval CHANGE MASTER TO MASTER_HOST='127.0.0.1', MASTER_PORT=$MASTER_MYPORT, MASTER_USER='root', MASTER_CONNECT_RETRY=$connect_retry, MASTER_HEARTBEAT_PERIOD=60;
+ SHOW GLOBAL STATUS LIKE 'slave_heartbeat_period';
+ RESET SLAVE;
++# MDEV-40122: + sign must only be accepted before a number, not before DEFAULT
++--error ER_PARSE_ERROR
++CHANGE MASTER TO MASTER_HEARTBEAT_PERIOD=+DEFAULT;
+ --echo
+ 
+ #
+diff --git a/sql/sql_yacc.yy b/sql/sql_yacc.yy
+index 83f8edd7..2821e070 100644
+--- a/sql/sql_yacc.yy
++++ b/sql/sql_yacc.yy
+@@ -2423,14 +2423,14 @@ master_def:
+             { mi->master_ssl_crlpath= path; };
+           }
+ 
+-        | MASTER_HEARTBEAT_PERIOD_SYM '=' opt_plus num_or_default
++        | MASTER_HEARTBEAT_PERIOD_SYM '=' num_or_default
+           {
+-            if ($4)
++            if ($3)
+             {
+               uint32_t milliseconds;
+               bool overprecise;
+               auto decimal_buf= my_decimal(),
+-                  *decimal= $4->val_decimal(&decimal_buf);
++                  *decimal= $3->val_decimal(&decimal_buf);
+               DBUG_ASSERT(decimal);
+               if (Master_info_file::Heartbeat_period_value::from_decimal(
+                 milliseconds, *decimal, overprecise
+@@ -2490,7 +2490,7 @@ master_use_gtid_enum:
+         | DEFAULT         { $$= enum_master_use_gtid::DEFAULT; }
+         ;
+ num_or_default:
+-          NUM_literal { DBUG_ASSERT($$); }
++          opt_plus NUM_literal { $$= $2; DBUG_ASSERT($$); }
+         | DEFAULT { $$= nullptr; }
+         ;
+ 

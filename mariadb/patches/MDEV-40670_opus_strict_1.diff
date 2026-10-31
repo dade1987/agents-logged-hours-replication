@@ -1,0 +1,21 @@
+diff --git a/plugin/qc_info/qc_info.cc b/plugin/qc_info/qc_info.cc
+index a46e2d9f..ea9a4c04 100644
+--- a/plugin/qc_info/qc_info.cc
++++ b/plugin/qc_info/qc_info.cc
+@@ -233,6 +233,16 @@ static int qc_info_fill_table(THD *thd, TABLE_LIST *tables,
+     compile_time_assert(QUERY_CACHE_DB_LENGTH_SIZE == 2); 
+     db= key + statement_text_length + 1 + QUERY_CACHE_DB_LENGTH_SIZE;
+     db_length= uint2korr(db - QUERY_CACHE_DB_LENGTH_SIZE);
++    /*
++      The query text may contain \0 bytes, in which case strlen() above
++      stops early and the "db length" is read from inside the query text.
++      The key format cannot be parsed unambiguously in this case, so at
++      least never read beyond the end of the db name (start of the flags).
++    */
++    if (unlikely(db > key + flags_length))
++      db_length= 0;
++    else
++      set_if_smaller(db_length, (size_t) (key + flags_length - db));
+ 
+     table->field[COLUMN_STATEMENT_SCHEMA]->store(db, db_length, scs);
+ 

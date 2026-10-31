@@ -1,0 +1,90 @@
+diff --git a/public/lib/form/duration.php b/public/lib/form/duration.php
+index f21cec34eb7..29712775f74 100644
+--- a/public/lib/form/duration.php
++++ b/public/lib/form/duration.php
+@@ -108,6 +108,11 @@ class MoodleQuickForm_duration extends MoodleQuickForm_group {
+             }
+             krsort($displayunits, SORT_NUMERIC);
+             $this->_options['units'] = $displayunits;
++            // The default unit must be one of the units offered to the user.
++            if (!array_key_exists($this->_options['defaultunit'], $displayunits)) {
++                throw new coding_exception($this->_options['defaultunit'] .
++                        ' is not one of the units allowed in MoodleQuickForm_duration.');
++            }
+         }
+     }
+ 
+@@ -299,7 +304,10 @@ class MoodleQuickForm_duration extends MoodleQuickForm_group {
+         if ($this->_options['optional'] && empty($valuearray['enabled'])) {
+             return $this->_prepareValue(0, $assoc);
+         }
+-        return $this->_prepareValue(
+-                (int) round($valuearray['number'] * $valuearray['timeunit']), $assoc);
++        // A disabled child control is not submitted by the browser, so fall back to
++        // the default unit and to zero for the number.
++        $number = $valuearray['number'] ?? 0;
++        $timeunit = $valuearray['timeunit'] ?? $this->_options['defaultunit'];
++        return $this->_prepareValue((int) round($number * $timeunit), $assoc);
+     }
+ }
+diff --git a/public/lib/form/tests/duration_test.php b/public/lib/form/tests/duration_test.php
+index d225e45425b..195b5890cc9 100644
+--- a/public/lib/form/tests/duration_test.php
++++ b/public/lib/form/tests/duration_test.php
+@@ -68,6 +68,42 @@ final class duration_test extends \basic_testcase {
+         $mform->addElement('duration', 'testel', null, ['defaultunit' => 123, 'optional' => false]);
+     }
+ 
++    /**
++     * Test the constructor rejects a default unit that is not one of the restricted units.
++     */
++    public function test_constructor_rejects_default_unit_not_in_units(): void {
++        $mform = $this->get_test_form();
++        $this->expectException(\coding_exception::class);
++        // The default unit (minutes) is not in the restricted units.
++        $mform->addElement('duration', 'testel', null, ['units' => [DAYSECS, WEEKSECS]]);
++    }
++
++    /**
++     * Test the constructor accepts a default unit that is one of the restricted units.
++     */
++    public function test_constructor_accepts_default_unit_in_units(): void {
++        $mform = $this->get_test_form();
++        $element = $mform->addElement('duration', 'testel', null,
++                ['units' => [DAYSECS, WEEKSECS], 'defaultunit' => DAYSECS]);
++        $this->assertInstanceOf(\MoodleQuickForm_duration::class, $element);
++    }
++
++    /**
++     * Test exportValue() when child controls were not submitted, as happens for disabled controls.
++     */
++    public function test_export_value_missing_child_values(): void {
++        $mform = $this->get_test_form();
++        $el = $mform->addElement('duration', 'testel', null, ['defaultunit' => DAYSECS]);
++
++        // The timeunit select was not submitted, so the default unit is used.
++        $values = ['testel' => ['number' => '2']];
++        $this->assertEquals(172800, $el->exportValue($values));
++
++        // The number was not submitted, so it is treated as zero.
++        $values = ['testel' => ['timeunit' => HOURSECS]];
++        $this->assertEquals(0, $el->exportValue($values));
++    }
++
+     /**
+      * Test constructor only some units.
+      */
+diff --git a/public/repository/recent/lib.php b/public/repository/recent/lib.php
+index c43cf780ca6..9d730d1800c 100644
+--- a/public/repository/recent/lib.php
++++ b/public/repository/recent/lib.php
+@@ -199,7 +199,8 @@ class repository_recent extends repository {
+         $mform->setDefault('recentfilesnumber', $number);
+ 
+         $mform->addElement('duration', 'recentfilestimelimit',
+-            get_string('timelimit', 'repository_recent'), ['units' => [DAYSECS, WEEKSECS], 'optional' => true]);
++            get_string('timelimit', 'repository_recent'), ['units' => [DAYSECS, WEEKSECS], 'defaultunit' => DAYSECS,
++            'optional' => true]);
+         $mform->addHelpButton('recentfilestimelimit', 'timelimit', 'repository_recent');
+         $mform->setDefault('recentfilestimelimit', DEFAULT_RECENT_FILES_TIME_LIMIT);
+     }

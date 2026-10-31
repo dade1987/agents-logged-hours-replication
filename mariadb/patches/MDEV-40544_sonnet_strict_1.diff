@@ -1,0 +1,27 @@
+diff --git a/sql/log_event.cc b/sql/log_event.cc
+index 5039c21c..74709507 100644
+--- a/sql/log_event.cc
++++ b/sql/log_event.cc
+@@ -995,11 +995,20 @@ Log_event* Log_event::read_log_event(IO_CACHE* file, int *out_error,
+ err:
+   if (unlikely(error))
+   {
+-    DBUG_ASSERT(!res);
+ #ifdef MYSQL_CLIENT
+     if (force_opt)
+-      DBUG_RETURN(new Unknown_log_event());
++    {
++      /*
++        --force-read: output invalid events as Unknown events rather than
++        error. The buffer-based reader may already have produced a substitute.
++      */
++      if (!res)
++        res= new Unknown_log_event();
++      *out_error= 0;
++      DBUG_RETURN(res);
++    }
+ #endif
++    DBUG_ASSERT(!res);
+ 
+     /*
+       The SQL slave thread will check *out_error to know

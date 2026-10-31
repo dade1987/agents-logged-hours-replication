@@ -1,0 +1,19 @@
+diff --git a/sql/sql_acl.cc b/sql/sql_acl.cc
+index d4a7606d..00028cfd 100644
+--- a/sql/sql_acl.cc
++++ b/sql/sql_acl.cc
+@@ -3704,7 +3704,13 @@ privilege_t acl_get(const char *host, const char *ip,
+   acl_entry *entry;
+   DBUG_ENTER("acl_get");
+ 
+-  tmp_db= strmov(strmov(key, safe_str(ip)) + 1, user) + 1;
++  /*
++    Roles are looked up with empty host and ip. Use a marker that cannot be
++    a valid ip address as the key prefix, to avoid a collision with a user
++    of the same name that connects without an ip (e.g. via a socket).
++  */
++  const char *key_ip= (host && !host[0] && ip && !ip[0]) ? "#role" : safe_str(ip);
++  tmp_db= strmov(strmov(key, key_ip) + 1, user) + 1;
+   end= strnmov(tmp_db, db, key + sizeof(key) - tmp_db);
+ 
+   if (end >= key + sizeof(key)) // db name was truncated

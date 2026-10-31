@@ -1,0 +1,67 @@
+diff --git a/sql/sql_type_row.cc b/sql/sql_type_row.cc
+index c72cab62..efdb41ee 100644
+--- a/sql/sql_type_row.cc
++++ b/sql/sql_type_row.cc
+@@ -135,6 +135,39 @@ class my_var_sp_row_field: public my_var_sp
+ };
+ 
+ 
++/*
++  Fields of ROW TYPE OF table/cursor variables: the field list is not known
++  at parse time, so the field is resolved by name at execution time.
++*/
++class my_var_sp_row_field_by_name: public my_var_sp
++{
++  LEX_CSTRING m_field_name;
++public:
++  my_var_sp_row_field_by_name(const Lex_ident_sys_st &varname,
++                              const sp_rcontext_addr &varaddr,
++                              const Lex_ident_sys_st &field, sp_head *s)
++   :my_var_sp(varname, varaddr,
++              &type_handler_double/*Not really used*/, s),
++    m_field_name(field)
++  { }
++  bool check_assignability(THD *thd, const List<Item> &select_list,
++                           bool *assign_as_row) const override
++  {
++    *assign_as_row= false;
++    return select_list.elements == 1;
++  }
++  bool set(THD *thd, Item *item) override
++  {
++    sp_rcontext *rctx= get_rcontext(thd->spcont);
++    uint field_idx;
++    if (rctx->find_row_field_by_name_or_error(&field_idx, offset(),
++                                              m_field_name))
++      return true;
++    return rctx->set_variable_row_field(thd, offset(), field_idx, &item);
++  }
++};
++
++
+ my_var *Type_handler_row::make_outvar(THD *thd,
+                                       const Lex_ident_sys_st &name,
+                                       const sp_rcontext_addr &addr,
+@@ -159,13 +192,18 @@ my_var *Type_handler_row::make_outvar_field(THD *thd,
+   DBUG_ASSERT(t);
+   DBUG_ASSERT(t->type_handler() == this);
+ 
++  if (t->field_def.is_table_rowtype_ref() ||
++      t->field_def.is_cursor_rowtype_ref())
++  {
++    if (validate_only)
++      return nullptr;
++    return new (thd->mem_root) my_var_sp_row_field_by_name(name, addr, field,
++                                                           sphead);
++  }
++
+   uint row_field_offset;
+   if (!t->find_row_field(&name, &field, &row_field_offset))
+-  {
+-    DBUG_ASSERT(0);
+-    my_error(ER_ROW_VARIABLE_DOES_NOT_HAVE_FIELD, MYF(0), name.str, field.str);
+     return NULL;
+-  }
+   if (validate_only) // e.g. EXPLAIN SELECT .. INTO spvar_row.field;
+     return nullptr;
+   return new (thd->mem_root) my_var_sp_row_field(name, addr, row_field_offset,

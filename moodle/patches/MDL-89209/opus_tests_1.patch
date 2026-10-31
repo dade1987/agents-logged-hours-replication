@@ -1,0 +1,45 @@
+diff --git a/public/course/classes/task/course_delete_modules.php b/public/course/classes/task/course_delete_modules.php
+index 7bf12719cfb..e718622e3ef 100644
+--- a/public/course/classes/task/course_delete_modules.php
++++ b/public/course/classes/task/course_delete_modules.php
+@@ -47,7 +47,7 @@ class course_delete_modules extends \core\task\adhoc_task {
+      * @throws \coding_exception if the module could not be removed.
+      */
+     public function execute() {
+-        global $CFG;
++        global $CFG, $DB;
+         require_once($CFG->dirroot. '/course/lib.php');
+ 
+         // Set the proper user.
+@@ -65,8 +65,13 @@ class course_delete_modules extends \core\task\adhoc_task {
+         $cmsfailed = [];
+         foreach ($cms as $key => $cm) {
+             try {
+-                $coursecontext = \context_module::instance($cm->id)->get_course_context();
+-                \core_courseformat\formatactions::cm($coursecontext->instanceid)->delete($cm->id);
++                // The course module may have already been deleted (e.g. the task is being re-run). In that case there
++                // is nothing left to do, so skip it to keep this task idempotent.
++                $courseid = $DB->get_field('course_modules', 'course', ['id' => $cm->id]);
++                if (!$courseid) {
++                    continue;
++                }
++                \core_courseformat\formatactions::cm($courseid)->delete($cm->id);
+             } catch (\Exception $e) {
+                 // Keep the information instead of throw an exception and continue with next cms.
+                 $exceptions[] = ("The course module {$cm->id} could not be deleted. "
+diff --git a/public/course/tests/course_delete_modules_test.php b/public/course/tests/course_delete_modules_test.php
+index 630fe466b20..34be49c1680 100644
+--- a/public/course/tests/course_delete_modules_test.php
++++ b/public/course/tests/course_delete_modules_test.php
+@@ -65,6 +65,11 @@ final class course_delete_modules_test extends \advanced_testcase {
+         // The module has deleted from the course.
+         $coursedmodules = get_course_mods($course->id);
+         $this->assertCount(0, $coursedmodules);
++
++        // Executing the task again must not fail now that the course module record is gone.
++        $removaltask->execute();
++        $coursedmodules = get_course_mods($course->id);
++        $this->assertCount(0, $coursedmodules);
+     }
+ 
+     /**

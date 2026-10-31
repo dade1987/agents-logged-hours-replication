@@ -1,0 +1,19 @@
+diff --git a/sql/field.h b/sql/field.h
+index ae407e47..2c85c9ce 100644
+--- a/sql/field.h
++++ b/sql/field.h
+@@ -5487,7 +5487,13 @@ class Column_definition: public Sql_alloc,
+ 
+   bool has_default_function() const
+   {
+-    return unireg_check != Field::NONE;
++    /*
++      TMYSQL_COMPRESSED is a column attribute (COMPRESSED), not a default
++      function, so a compressed column without an explicit DEFAULT must
++      still be treated as having no default.
++    */
++    return unireg_check != Field::NONE &&
++           unireg_check != Field::TMYSQL_COMPRESSED;
+   }
+ 
+   Field *make_field(TABLE_SHARE *share, MEM_ROOT *mem_root,

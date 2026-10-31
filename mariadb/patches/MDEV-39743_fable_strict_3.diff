@@ -1,0 +1,97 @@
+diff --git a/mysql-test/main/func_json_notembedded.result b/mysql-test/main/func_json_notembedded.result
+index cf895da6..7efaf5ae 100644
+--- a/mysql-test/main/func_json_notembedded.result
++++ b/mysql-test/main/func_json_notembedded.result
+@@ -48,6 +48,17 @@ select json_set(@arr,'$[1000]',1);
+ ERROR 70100: Query was interrupted: execution time limit 0.0001 sec exceeded
+ select ST_AsTEXT(ST_GeomFromGeoJSON(JSON_OBJECT("type", "Point", "coordinates", @arr),2)) as exp;
+ ERROR 70100: Query was interrupted: execution time limit 0.0001 sec exceeded
++#
++# MDEV-39743 IS JSON was not interuptable
++#
++select @obj is json;
++ERROR 70100: Query was interrupted: execution time limit 0.0001 sec exceeded
++select @arr is json array;
++ERROR 70100: Query was interrupted: execution time limit 0.0001 sec exceeded
++select @obj is json object with unique keys;
++ERROR 70100: Query was interrupted: execution time limit 0.0001 sec exceeded
++select @arr is not json;
++ERROR 70100: Query was interrupted: execution time limit 0.0001 sec exceeded
+ SET debug_dbug= @old_debug;
+ disconnect u;
+ connection default;
+diff --git a/mysql-test/main/func_json_notembedded.test b/mysql-test/main/func_json_notembedded.test
+index bf5cc4d9..4b022e0e 100644
+--- a/mysql-test/main/func_json_notembedded.test
++++ b/mysql-test/main/func_json_notembedded.test
+@@ -37,6 +37,13 @@ select json_remove(@obj,'$.foo');
+ select json_replace(@obj,'$.foo',1);
+ select json_set(@arr,'$[1000]',1);
+ select ST_AsTEXT(ST_GeomFromGeoJSON(JSON_OBJECT("type", "Point", "coordinates", @arr),2)) as exp;
++--echo #
++--echo # MDEV-39743 IS JSON was not interuptable
++--echo #
++select @obj is json;
++select @arr is json array;
++select @obj is json object with unique keys;
++select @arr is not json;
+ enable_abort_on_error;
+ SET debug_dbug= @old_debug;
+ disconnect u;
+diff --git a/sql/item_jsonfunc.cc b/sql/item_jsonfunc.cc
+index 3f49b122..ad1dcd38 100644
+--- a/sql/item_jsonfunc.cc
++++ b/sql/item_jsonfunc.cc
+@@ -6500,15 +6500,20 @@ bool Item_func_is_json::val_bool()
+   bool result= true;
+   bool unique_keys= true;
+   String *js= args[0]->val_json(&tmp_value);
++  THD *thd;
+ 
+   if ((null_value= args[0]->null_value))
+     return 0;
+ 
++  thd= current_thd;
++  JSON_DO_PAUSE_EXECUTION(thd, 0.0002);
++
+   json_scan_start(&je, js->charset(), (const uchar*)js->ptr(),
+                   (const uchar*)js->end());
++  je.killed_ptr= (uint32_t *) &thd->killed;
+ 
+   if (json_read_value(&je))
+-    return negated;
++    goto error;
+ 
+   switch (type_constraint)
+   {
+@@ -6536,17 +6541,28 @@ bool Item_func_is_json::val_bool()
+       unique_keys= handle_nested_value(&je);
+ 
+     if (je.s.error)
+-      return negated;
++      goto error;
+   }
+   else
+   {
+     // verify JSON is well-formed
+     while (json_scan_next(&je) == 0) {}
+     if (je.s.error)
+-      return negated;
++      goto error;
+   }
+ 
+   return negated ? !(result && unique_keys) : (result && unique_keys);
++
++error:
++  if (je.s.error == JE_KILLED)
++  {
++    /* The query was killed or timed out: report it and return NULL. */
++    report_json_error(js, &je, 0);
++    null_value= 1;
++    return 0;
++  }
++  /* Invalid JSON is simply "not JSON", no warning is needed. */
++  return negated;
+ }
+ 
+ 

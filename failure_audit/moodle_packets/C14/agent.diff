@@ -1,0 +1,214 @@
+diff --git a/public/lib/classes/api/repository/api_token_repository.php b/public/lib/classes/api/repository/api_token_repository.php
+index 8773ba7243f..d39633f3fb2 100644
+--- a/public/lib/classes/api/repository/api_token_repository.php
++++ b/public/lib/classes/api/repository/api_token_repository.php
+@@ -53,9 +53,14 @@ class api_token_repository {
+ 
+         $record = new \stdClass();
+         $record->name = $name;
+-        $record->token = password_hash($secret, PASSWORD_DEFAULT);
+         $record->userid = $userid;
+         $record->scopes = implode(' ', $scopes);
++        // The scopes and expiry are bound into the stored hash, so that a token's remit cannot be
++        // widened, or its life extended, by editing the database row directly.
++        $record->token = password_hash(
++            self::get_hashable_secret($secret, explode(' ', $record->scopes), $expirytime),
++            PASSWORD_DEFAULT,
++        );
+         $record->description = $description;
+         $record->expirytime = $expirytime;
+         $record->revoked = api_token_entity::REVOKED_NO;
+@@ -124,6 +129,9 @@ class api_token_repository {
+      *
+      * Only the following fields can be updated via this method: name, description, scopes, expirytime.
+      *
++     * Note that the scopes and expiry time are bound into the stored hash of the secret, so changing
++     * either of them invalidates the token: it will no longer pass {@see self::validate_token()}.
++     *
+      * @param int $tokenid The token ID.
+      * @param array $updates The updates.
+      * @return void
+@@ -189,7 +197,14 @@ class api_token_repository {
+     public function validate_token(int $tokenid, string $secret): api_token_entity {
+         $tokenentity = $this->get_by_id($tokenid);
+ 
+-        if (!password_verify($secret, $tokenentity->get_token())) {
++        // The hash covers the scopes and expiry as well as the secret, so a row whose scopes or
++        // expiry were altered after the token was minted fails here, just as a wrong secret does.
++        $hashable = self::get_hashable_secret(
++            $secret,
++            $tokenentity->get_scopes(),
++            $tokenentity->get_expirytime(),
++        );
++        if (!password_verify($hashable, $tokenentity->get_token())) {
+             throw new \core\exception\invalid_api_token_exception();
+         }
+ 
+@@ -204,6 +219,35 @@ class api_token_repository {
+         return $tokenentity;
+     }
+ 
++    /**
++     * Combine a secret with an integrity check value calculated from the token's scopes and expiry.
++     *
++     * The result is what gets hashed for storage, and what a presented secret is verified against,
++     * so any change to the stored scopes or expiry makes the stored hash stop matching.
++     *
++     * The value is an HMAC keyed with the secret, which keeps it to a fixed 64 characters: the
++     * default password hashing algorithm (bcrypt) ignores anything beyond 72 bytes, so simply
++     * appending the scopes to the secret could leave them outside of what is actually hashed.
++     *
++     * @param string $secret The raw secret.
++     * @param string[] $scopes The scopes granted to the token.
++     * @param int|null $expirytime The token expiry timestamp, or null if it never expires.
++     * @return string
++     */
++    protected static function get_hashable_secret(
++        #[\SensitiveParameter]
++        string $secret,
++        array $scopes,
++        ?int $expirytime,
++    ): string {
++        $integrity = json_encode([
++            'scopes' => array_values(array_map('strval', $scopes)),
++            'expirytime' => $expirytime,
++        ]);
++
++        return hash_hmac('sha256', $integrity, $secret);
++    }
++
+     /**
+      * Record that a token was just used, and where from.
+      *
+diff --git a/public/lib/classes/api/token_manager.php b/public/lib/classes/api/token_manager.php
+index 5a59145f171..c7ffe6a2658 100644
+--- a/public/lib/classes/api/token_manager.php
++++ b/public/lib/classes/api/token_manager.php
+@@ -58,8 +58,8 @@ class token_manager {
+     /** @var int How close to expiry a token is flagged as expiring soon, in days. */
+     public const int EXPIRY_IMMINENT_DAYS = 3;
+ 
+-    /** @var int The length of the generated secret, in characters. */
+-    protected const int SECRET_LENGTH = 32;
++    /** @var int The number of random bytes in the generated secret. */
++    protected const int SECRET_BYTES = 32;
+ 
+     /**
+      * Constructor.
+@@ -103,7 +103,9 @@ class token_manager {
+         $this->validate_expiry($expirytime);
+         $this->validate_scopes($scopes);
+ 
+-        $secret = random_string(self::SECRET_LENGTH);
++        // The secret is never read by a person on its own, so it need not be drawn from a
++        // human-friendly alphabet: hex-encoded random bytes, as used for OAuth 2 client secrets.
++        $secret = bin2hex(random_bytes(self::SECRET_BYTES));
+ 
+         $token = $this->repository->create_token(
+             $name,
+diff --git a/public/lib/tests/api/repository/api_token_repository_test.php b/public/lib/tests/api/repository/api_token_repository_test.php
+index 11bbdeb5cac..d5b517ca642 100644
+--- a/public/lib/tests/api/repository/api_token_repository_test.php
++++ b/public/lib/tests/api/repository/api_token_repository_test.php
+@@ -55,7 +55,9 @@ final class api_token_repository_test extends \advanced_testcase {
+         $record = $DB->get_record('rest_api_tokens', ['id' => $token->get_id()], '*', MUST_EXIST);
+ 
+         $this->assertEquals('Token 1', $record->name);
+-        $this->assertTrue(password_verify('secret', $record->token));
++        // Only a hash is stored, and it is not a hash of the secret alone.
++        $this->assertNotEquals('secret', $record->token);
++        $this->assertFalse(password_verify('secret', $record->token));
+         $this->assertEquals($user->id, $record->userid);
+         $this->assertEquals('scope', $record->scopes);
+         $this->assertEquals('A description', $record->description);
+@@ -252,6 +254,70 @@ final class api_token_repository_test extends \advanced_testcase {
+         ];
+     }
+ 
++    /**
++     * Tampering with the stored scopes or expiry invalidates the token, even with the correct secret.
++     *
++     * @param string $field The field to tamper with.
++     * @param mixed $value The value to write directly to the database.
++     */
++    #[DataProvider('tampered_token_provider')]
++    public function test_validate_token_tampered(string $field, mixed $value): void {
++        global $DB;
++
++        $this->resetAfterTest();
++
++        $user = $this->getDataGenerator()->create_user();
++        $repository = new api_token_repository();
++
++        $token = $repository->create_token(
++            'Test',
++            'correctsecret',
++            $user->id,
++            ['scope'],
++            null,
++            time() + HOURSECS,
++        );
++
++        // The untouched token validates.
++        $this->assertEquals($token->get_id(), $repository->validate_token($token->get_id(), 'correctsecret')->get_id());
++
++        $DB->set_field('rest_api_tokens', $field, $value, ['id' => $token->get_id()]);
++
++        $this->expectException(\core\exception\invalid_api_token_exception::class);
++        $repository->validate_token($token->get_id(), 'correctsecret');
++    }
++
++    /**
++     * Data provider for {@see test_validate_token_tampered}.
++     *
++     * @return array
++     */
++    public static function tampered_token_provider(): array {
++        return [
++            'scope added' => ['scopes', 'scope otherscope'],
++            'scope replaced' => ['scopes', 'otherscope'],
++            'expiry extended' => ['expirytime', time() + YEARSECS],
++            'expiry removed' => ['expirytime', null],
++        ];
++    }
++
++    /**
++     * Changing fields which are not covered by the integrity check leaves the token valid.
++     */
++    public function test_validate_token_untampered_fields(): void {
++        $this->resetAfterTest();
++
++        $user = $this->getDataGenerator()->create_user();
++        $repository = new api_token_repository();
++
++        $token = $repository->create_token('Test', 'correctsecret', $user->id, ['scope', 'other'], null, time() + HOURSECS);
++        $repository->update_token($token->get_id(), ['name' => 'Renamed', 'description' => 'Described']);
++        $repository->log_token_access($token->get_id());
++
++        $validated = $repository->validate_token($token->get_id(), 'correctsecret');
++        $this->assertEquals('Renamed', $validated->get_name());
++    }
++
+     /**
+      * Build a token string in the same shape {@see token_manager::issue_token} hands out.
+      *
+diff --git a/public/lib/tests/api/token_manager_test.php b/public/lib/tests/api/token_manager_test.php
+index 615dfe7cef2..f2e0696943a 100644
+--- a/public/lib/tests/api/token_manager_test.php
++++ b/public/lib/tests/api/token_manager_test.php
+@@ -77,9 +77,14 @@ final class token_manager_test extends \advanced_testcase {
+         // The repository stamps this from the injected clock, so the frozen time reaches it.
+         $this->assertEquals(self::NOW, $record->timecreated);
+ 
++        // The secret is hex-encoded random bytes.
++        $this->assertMatchesRegularExpression('/^[0-9a-f]{64}$/', $secret);
++
+         // Only a hash is stored, and it must verify against the secret half of the string.
+         $this->assertNotEquals($secret, $record->token);
+-        $this->assertTrue(password_verify($secret, $record->token));
++        $this->assertFalse(password_verify($secret, $record->token));
++        $validated = \core\di::get(api_token_repository::class)->get_from_token($token);
++        $this->assertEquals((int) $id, $validated->get_id());
+     }
+ 
+     /**

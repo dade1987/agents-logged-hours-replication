@@ -1,0 +1,52 @@
+diff --git a/public/lib/classes/task/manager.php b/public/lib/classes/task/manager.php
+index 1bd67857f72..a0d1224ddb5 100644
+--- a/public/lib/classes/task/manager.php
++++ b/public/lib/classes/task/manager.php
+@@ -60,6 +60,9 @@ class manager {
+      */
+     public static ?task_base $runningtask = null;
+ 
++    /** @var array Next run time of scheduled tasks (by class name) as at the time they started running. */
++    private static array $scheduledstartnextruntime = [];
++
+     /**
+      * @var bool Used to tell if the manager's shutdown callback has been registered.
+      */
+@@ -1355,6 +1358,7 @@ class manager {
+ 
+         $classname = self::get_canonical_class_name($task);
+ 
++        unset(self::$scheduledstartnextruntime[$classname]);
+         $record = $DB->get_record('task_scheduled', ['classname' => $classname]);
+         $record->nextruntime = $clock->time() + $delay;
+         $record->faildelay = $delay;
+@@ -1436,6 +1440,9 @@ class manager {
+         $record->pid = $pid;
+         $DB->update_record('task_scheduled', $record);
+ 
++        // Remember the next run time at start, so a Run ASAP request made while running can be preserved on completion.
++        self::$scheduledstartnextruntime[$classname] = $record->nextruntime;
++
+         self::task_starting($task);
+     }
+ 
+@@ -1461,6 +1468,19 @@ class manager {
+             $record->lastruntime = $clock->time();
+             $record->faildelay = 0;
+             $record->nextruntime = $task->get_next_scheduled_time();
++            // If the next run time was moved into the past while the task was running (Run ASAP), preserve the request.
++            if (array_key_exists($classname, self::$scheduledstartnextruntime)) {
++                $startnextruntime = self::$scheduledstartnextruntime[$classname];
++                $current = $DB->get_field('task_scheduled', 'nextruntime', ['classname' => $classname]);
++                if (
++                    $current !== null && $current !== false &&
++                    (int) $current !== (int) $startnextruntime &&
++                    (int) $current <= $clock->time()
++                ) {
++                    $record->nextruntime = (int) $current;
++                }
++            }
++            unset(self::$scheduledstartnextruntime[$classname]);
+             $record->timestarted = null;
+             $record->hostname = null;
+             $record->pid = null;

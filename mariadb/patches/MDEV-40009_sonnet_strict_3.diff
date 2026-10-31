@@ -1,0 +1,18 @@
+diff --git a/sql/sql_path.cc b/sql/sql_path.cc
+index 982fbffa..3472feae 100644
+--- a/sql/sql_path.cc
++++ b/sql/sql_path.cc
+@@ -282,7 +282,12 @@ bool Sql_path::from_text(const system_variables &sv, String *str)
+   free();
+   while (curr < end)
+   {
+-    auto len = cs->charlen(curr, end);
++    int len= (int) cs->charlen(curr, end);
++    if (len <= 0)
++    {
++      // Ill-formed or truncated multibyte sequence
++      goto err_bad_val;
++    }
+ 
+     switch (state)
+     {

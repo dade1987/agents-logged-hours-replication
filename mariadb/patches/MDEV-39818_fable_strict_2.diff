@@ -1,0 +1,57 @@
+diff --git a/mysql-test/suite/innodb/r/foreign_key.result b/mysql-test/suite/innodb/r/foreign_key.result
+index 48054c14..e89ea0f7 100644
+--- a/mysql-test/suite/innodb/r/foreign_key.result
++++ b/mysql-test/suite/innodb/r/foreign_key.result
+@@ -1232,3 +1232,16 @@ Note	1091	Can't DROP FOREIGN KEY `f1`; check that it exists
+ Note	1091	Can't DROP FOREIGN KEY `f1`; check that it exists
+ DROP TABLE t2, t1;
+ # End of 10.6 tests
++#
++# MDEV-39818 backtick in FK names breaks SHOW CREATE TABLE
++#
++CREATE TABLE p (a INT PRIMARY KEY) ENGINE=InnoDB;
++CREATE TABLE t1 (a INT, CONSTRAINT `foo `` bar` FOREIGN KEY (a) REFERENCES p(a)) ENGINE=InnoDB;
++SHOW CREATE TABLE t1;
++Table	Create Table
++t1	CREATE TABLE `t1` (
++  `a` int(11) DEFAULT NULL,
++  KEY `foo `` bar` (`a`),
++  CONSTRAINT `foo `` bar` FOREIGN KEY (`a`) REFERENCES `p` (`a`)
++) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
++DROP TABLE t1, p;
+diff --git a/mysql-test/suite/innodb/t/foreign_key.test b/mysql-test/suite/innodb/t/foreign_key.test
+index 734d8b63..e5576be5 100644
+--- a/mysql-test/suite/innodb/t/foreign_key.test
++++ b/mysql-test/suite/innodb/t/foreign_key.test
+@@ -1297,3 +1297,11 @@ ALTER TABLE t2 DROP FOREIGN KEY IF EXISTS f1, DROP FOREIGN KEY IF EXISTS f1, ALG
+ DROP TABLE t2, t1;
+ 
+ --echo # End of 10.6 tests
++
++--echo #
++--echo # MDEV-39818 backtick in FK names breaks SHOW CREATE TABLE
++--echo #
++CREATE TABLE p (a INT PRIMARY KEY) ENGINE=InnoDB;
++CREATE TABLE t1 (a INT, CONSTRAINT `foo `` bar` FOREIGN KEY (a) REFERENCES p(a)) ENGINE=InnoDB;
++SHOW CREATE TABLE t1;
++DROP TABLE t1, p;
+diff --git a/storage/innobase/handler/ha_innodb.cc b/storage/innobase/handler/ha_innodb.cc
+index 02649112..d334c37c 100644
+--- a/storage/innobase/handler/ha_innodb.cc
++++ b/storage/innobase/handler/ha_innodb.cc
+@@ -3501,7 +3501,14 @@ innobase_quote_identifier(
+ 		quoted_identifier.append(id);
+ 	} else {
+ 		quoted_identifier += char(q);
+-		quoted_identifier.append(id);
++
++		while (int c = *id++) {
++			if (c == q) {
++				quoted_identifier += char(c);
++			}
++			quoted_identifier += char(c);
++		}
++
+ 		quoted_identifier += char(q);
+ 	}
+ 

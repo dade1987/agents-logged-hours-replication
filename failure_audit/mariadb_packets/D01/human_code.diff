@@ -1,0 +1,22 @@
+diff --git a/sql/spatial.cc b/sql/spatial.cc
+index d1ed5bb8013..20b8a551ef5 100644
+--- a/sql/spatial.cc
++++ b/sql/spatial.cc
+@@ -20,6 +20,7 @@
+ #include "spatial.h"
+ #include "gstream.h"                            // Gis_read_stream
+ #include "sql_string.h"                         // String
++#include "sql_parse.h"
+ 
+ /* This is from item_func.h. Didn't want to #include the whole file. */
+ double my_double_round(double value, longlong dec, bool dec_unsigned,
+@@ -3306,6 +3307,9 @@ bool Gis_geometry_collection::init_from_wkt(Gis_read_stream *trs, String *wkb)
+     return 1;
+   wkb->length(wkb->length()+4);			// Reserve space for points
+ 
++  if (check_stack_overrun(current_thd, STACK_MIN_SIZE, (uchar*)&buffer))
++    return 1;
++
+   if (!(next_sym= trs->next_symbol()))
+     return 1;
+ 

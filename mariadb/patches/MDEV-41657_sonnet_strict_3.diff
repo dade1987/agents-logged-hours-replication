@@ -1,0 +1,74 @@
+diff --git a/mysql-test/main/to_date_var.result b/mysql-test/main/to_date_var.result
+new file mode 100644
+index 00000000..653f47e4
+--- /dev/null
++++ b/mysql-test/main/to_date_var.result
+@@ -0,0 +1,17 @@
++# MDEV-41657 TO_DATE no longer works as a variable
++CREATE TABLE t1 (to_date DATE);
++INSERT INTO t1 VALUES ('2020-01-01');
++SELECT to_date FROM t1;
++to_date
++2020-01-01
++DROP TABLE t1;
++SET @to_date=1;
++SELECT @to_date;
++@to_date
++1
++BEGIN NOT ATOMIC
++DECLARE to_date INT DEFAULT 5;
++SELECT to_date;
++END $$
++to_date
++5
+diff --git a/mysql-test/main/to_date_var.test b/mysql-test/main/to_date_var.test
+new file mode 100644
+index 00000000..aeffd483
+--- /dev/null
++++ b/mysql-test/main/to_date_var.test
+@@ -0,0 +1,13 @@
++--echo # MDEV-41657 TO_DATE no longer works as a variable
++CREATE TABLE t1 (to_date DATE);
++INSERT INTO t1 VALUES ('2020-01-01');
++SELECT to_date FROM t1;
++DROP TABLE t1;
++SET @to_date=1;
++SELECT @to_date;
++DELIMITER $$;
++BEGIN NOT ATOMIC
++  DECLARE to_date INT DEFAULT 5;
++  SELECT to_date;
++END $$
++DELIMITER ;$$
+diff --git a/sql/lex.h b/sql/lex.h
+index 709d949c..7f81d051 100644
+--- a/sql/lex.h
++++ b/sql/lex.h
+@@ -675,7 +675,6 @@ SYMBOL symbols[] = {
+   { "TINYINT",		SYM(TINYINT)},
+   { "TINYTEXT",		SYM(TINYTEXT)},
+   { "TO",		SYM(TO_SYM)},
+-  { "TO_DATE",		SYM(TO_DATE)},
+   { "TRAILING",		SYM(TRAILING)},
+   { "TRANSACTION",	SYM(TRANSACTION_SYM)},
+   { "TRANSACTIONAL",	SYM(TRANSACTIONAL_SYM)},
+@@ -791,6 +790,7 @@ SYMBOL sql_functions[] = {
+   { "SUBSTRING",	SYM(SUBSTRING)},
+   { "SUM",		SYM(SUM_SYM)},
+   { "SYSTEM_USER",      SYM(USER_SYM)},
++  { "TO_DATE",		SYM(TO_DATE)},
+   { "TRIM",		SYM(TRIM)},
+   { "TRIM_ORACLE",	SYM(TRIM_ORACLE)},
+   { "VARIANCE",		SYM(VARIANCE_SYM)},
+diff --git a/sql/sql_yacc.yy b/sql/sql_yacc.yy
+index 4d87b47a..f47c3da9 100644
+--- a/sql/sql_yacc.yy
++++ b/sql/sql_yacc.yy
+@@ -17135,6 +17135,7 @@ keyword_sp_var_and_label:
+         | SYSDATE
+ %endif
+         | TRIM_ORACLE
++        | TO_DATE
+         | TIMESTAMP_ADD
+         | TIMESTAMP_DIFF
+         | USER_SYM           %prec PREC_BELOW_CONTRACTION_TOKEN2

@@ -1,0 +1,160 @@
+diff --git a/sql/sql_acl.cc b/sql/sql_acl.cc
+index d4a7606d..739a22e3 100644
+--- a/sql/sql_acl.cc
++++ b/sql/sql_acl.cc
+@@ -645,7 +645,7 @@ bool ROLE_GRANT_PAIR::init(MEM_ROOT *mem, const char *username,
+ }
+ 
+ #define IP_ADDR_STRLEN (3 + 1 + 3 + 1 + 3 + 1 + 3)
+-#define ACL_KEY_LENGTH (IP_ADDR_STRLEN + 1 + NAME_LEN + \
++#define ACL_KEY_LENGTH (1 + IP_ADDR_STRLEN + 1 + NAME_LEN + \
+                         1 + USERNAME_LENGTH + 1)
+ 
+ #if defined(HAVE_OPENSSL)
+@@ -3463,7 +3463,7 @@ int acl_setrole(THD *thd, const char *rolename, privilege_t access)
+   else
+   {
+     if (thd->db.str)
+-      sctx->db_access|= acl_get("", "", rolename, thd->db.str, FALSE);
++      sctx->db_access|= acl_get_role(rolename, thd->db.str, FALSE);
+     /* mark the current role */
+     strmake_buf(thd->security_ctx->priv_role, rolename);
+   }
+@@ -3692,10 +3692,16 @@ static void acl_insert_db(const char *user, const char *host, const char *db,
+ 
+   as db_is_pattern changes the semantics of comparison,
+   acl_cache is not used if db_is_pattern is set.
++
++  Role lookups (is_role=true) use a separate cache key namespace, so that
++  a role name can never collide with a user@ip cache entry (e.g. a user
++  connecting via a unix socket has an empty ip, and would otherwise share
++  the key "\0name\0db" with the role of the same name).
+ */
+ 
+-privilege_t acl_get(const char *host, const char *ip,
+-                    const char *user, const char *db, my_bool db_is_pattern)
++static privilege_t acl_get_impl(const char *host, const char *ip,
++                                const char *user, const char *db,
++                                my_bool db_is_pattern, bool is_role)
+ {
+   privilege_t host_access(ALL_KNOWN_ACL), db_access(NO_ACL);
+   uint i;
+@@ -3704,7 +3710,9 @@ privilege_t acl_get(const char *host, const char *ip,
+   acl_entry *entry;
+   DBUG_ENTER("acl_get");
+ 
+-  tmp_db= strmov(strmov(key, safe_str(ip)) + 1, user) + 1;
++  /* first byte is a role marker; IP strings never contain '\1' */
++  key[0]= is_role ? '\1' : '\0';
++  tmp_db= strmov(strmov(key + 1, safe_str(ip)) + 1, user) + 1;
+   end= strnmov(tmp_db, db, key + sizeof(key) - tmp_db);
+ 
+   if (end >= key + sizeof(key)) // db name was truncated
+@@ -3775,6 +3783,19 @@ privilege_t acl_get(const char *host, const char *ip,
+   DBUG_RETURN(db_access & host_access);
+ }
+ 
++privilege_t acl_get(const char *host, const char *ip,
++                    const char *user, const char *db, my_bool db_is_pattern)
++{
++  return acl_get_impl(host, ip, user, db, db_is_pattern, false);
++}
++
++/* privileges of a role (roles have no host or ip) */
++privilege_t acl_get_role(const char *role, const char *db,
++                         my_bool db_is_pattern)
++{
++  return acl_get_impl("", "", role, db, db_is_pattern, true);
++}
++
+ /*
+   Check if there are any possible matching entries for this host
+ 
+@@ -4682,7 +4703,7 @@ static bool test_if_create_new_users(THD *thd)
+     db_access=acl_get(sctx->host, sctx->ip,
+ 		      sctx->priv_user, tl.db.str, 0);
+     if (sctx->priv_role[0])
+-      db_access|= acl_get("", "", sctx->priv_role, tl.db.str, 0);
++      db_access|= acl_get_role(sctx->priv_role, tl.db.str, 0);
+     if (!(db_access & INSERT_ACL))
+     {
+       if (check_grant(thd, INSERT_ACL, &tl, FALSE, UINT_MAX, TRUE))
+@@ -12918,7 +12939,7 @@ void fill_effective_table_privileges(THD *thd, GRANT_INFO *grant,
+     grant->privilege|= acl_get(sctx->host, sctx->ip, sctx->priv_user, db, 0);
+     /* db privileges for role */
+     if (sctx->priv_role[0])
+-      grant->privilege|= acl_get("", "", sctx->priv_role, db, 0);
++      grant->privilege|= acl_get_role(sctx->priv_role, db, 0);
+   }
+   else
+   {
+diff --git a/sql/sql_acl.h b/sql/sql_acl.h
+index 9506b911..78d6e788 100644
+--- a/sql/sql_acl.h
++++ b/sql/sql_acl.h
+@@ -78,6 +78,8 @@ bool acl_reload(THD *thd);
+ void acl_free(bool end=0);
+ privilege_t acl_get(const char *host, const char *ip,
+                     const char *user, const char *db, my_bool db_is_pattern);
++privilege_t acl_get_role(const char *role, const char *db,
++                         my_bool db_is_pattern);
+ bool acl_authenticate(THD *thd, uint com_change_user_pkt_len);
+ bool acl_getroot(Security_context *sctx, const char *user, const char *host,
+                  const char *ip, const char *db);
+diff --git a/sql/sql_db.cc b/sql/sql_db.cc
+index cac06bd5..eddf9b58 100644
+--- a/sql/sql_db.cc
++++ b/sql/sql_db.cc
+@@ -1795,7 +1795,7 @@ uint mysql_change_db(THD *thd, const LEX_CSTRING *new_db_name,
+     if (sctx->priv_role[0])
+     {
+       /* include a possible currently set role for access */
+-      db_access|= acl_get("", "", sctx->priv_role, new_db_file_name.str, FALSE);
++      db_access|= acl_get_role(sctx->priv_role, new_db_file_name.str, FALSE);
+     }
+   }
+ 
+diff --git a/sql/sql_parse.cc b/sql/sql_parse.cc
+index 9b1337ff..50e5d097 100644
+--- a/sql/sql_parse.cc
++++ b/sql/sql_parse.cc
+@@ -6945,7 +6945,7 @@ check_access(THD *thd, privilege_t want_access,
+         db_access= acl_get(sctx->host, sctx->ip, sctx->priv_user, db,
+                            db_is_pattern);
+         if (sctx->priv_role[0])
+-          db_access|= acl_get("", "", sctx->priv_role, db, db_is_pattern);
++          db_access|= acl_get_role(sctx->priv_role, db, db_is_pattern);
+       }
+       else
+       {
+@@ -6995,7 +6995,7 @@ check_access(THD *thd, privilege_t want_access,
+                        db_is_pattern);
+     if (sctx->priv_role[0])
+     {
+-      db_access|= acl_get("", "", sctx->priv_role, db, db_is_pattern);
++      db_access|= acl_get_role(sctx->priv_role, db, db_is_pattern);
+     }
+   }
+   else
+diff --git a/sql/sql_show.cc b/sql/sql_show.cc
+index 4266ef53..b8117306 100644
+--- a/sql/sql_show.cc
++++ b/sql/sql_show.cc
+@@ -1413,7 +1413,7 @@ bool mysqld_show_create_db(THD *thd, LEX_CSTRING *dbname,
+     db_access= acl_get(sctx->host, sctx->ip, sctx->priv_user, dbname->str, 0) |
+                sctx->master_access;
+     if (sctx->priv_role[0])
+-      db_access|= acl_get("", "", sctx->priv_role, dbname->str, 0);
++      db_access|= acl_get_role(sctx->priv_role, dbname->str, 0);
+   }
+ 
+   if (!(db_access & DB_ACLS) && check_grant_db(thd,dbname->str))
+@@ -5507,7 +5507,7 @@ int fill_schema_schemata(THD *thd, TABLE_LIST *tables, COND *cond)
+     if (sctx->master_access & (DB_ACLS | SHOW_DB_ACL) ||
+         acl_get(sctx->host, sctx->ip, sctx->priv_user, db_name->str, false) ||
+         (sctx->priv_role[0] ?
+-             acl_get("", "", sctx->priv_role, db_name->str, false) : NO_ACL) ||
++             acl_get_role(sctx->priv_role, db_name->str, false) : NO_ACL) ||
+         !check_grant_db(thd, db_name->str))
+ #endif
+     {

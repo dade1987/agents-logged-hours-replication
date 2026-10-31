@@ -1,0 +1,120 @@
+diff --git a/public/lib/classes/check/manager.php b/public/lib/classes/check/manager.php
+index 417907106b4..672226c70bb 100644
+--- a/public/lib/classes/check/manager.php
++++ b/public/lib/classes/check/manager.php
+@@ -133,6 +133,7 @@ class manager {
+             new security\passwordpolicy(),
+             new security\emailchangeconfirmation(),
+             new security\webcron(),
++            new security\newlogin(),
+             new http\cookiesecure(),
+             new access\riskadmin(),
+             new access\riskxss(),
+diff --git a/public/lib/classes/check/security/newlogin.php b/public/lib/classes/check/security/newlogin.php
+new file mode 100644
+index 00000000000..1ec21c691de
+--- /dev/null
++++ b/public/lib/classes/check/security/newlogin.php
+@@ -0,0 +1,70 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\check\security;
++
++use core\check\check;
++use core\check\result;
++
++/**
++ * Verifies that new login notifications are forced on.
++ *
++ * @package    core
++ * @category   check
++ * @copyright  2026 Moodle
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class newlogin extends check {
++    #[\Override]
++    public function get_name(): string {
++        return get_string('check_newlogin_name', 'report_security');
++    }
++
++    #[\Override]
++    public function get_action_link(): ?\action_link {
++        return new \action_link(
++            new \moodle_url('/admin/message.php'),
++            get_string('defaultmessageoutputs', 'message'),
++        );
++    }
++
++    #[\Override]
++    public function get_result(): result {
++        global $CFG;
++        require_once($CFG->dirroot . '/lib/messagelib.php');
++
++        $details = get_string('check_newlogin_details', 'report_security');
++        $prefs = get_message_output_default_preferences();
++        $forced = empty($prefs->moodle_newlogin_disable);
++        if ($forced) {
++            $processors = get_message_processors(true);
++            $forced = !empty($processors);
++            $enabledlist = explode(',', $prefs->message_provider_moodle_newlogin_enabled ?? '');
++            foreach ($processors as $name => $processor) {
++                $lockedkey = $name . '_provider_moodle_newlogin_locked';
++                if (empty($prefs->$lockedkey) || !in_array($name, $enabledlist)) {
++                    $forced = false;
++                    break;
++                }
++            }
++        }
++
++        if ($forced) {
++            return new result(result::OK, get_string('check_newlogin_ok', 'report_security'), $details);
++        }
++        return new result(result::WARNING, get_string('check_newlogin_warning', 'report_security'), $details);
++    }
++}
+diff --git a/public/lib/db/messages.php b/public/lib/db/messages.php
+index bf803ce1d1c..b6e4d49902c 100644
+--- a/public/lib/db/messages.php
++++ b/public/lib/db/messages.php
+@@ -37,9 +37,9 @@ $messageproviders = array (
+ 
+     'newlogin' => array (
+         'defaults' => [
+-            'popup' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
+-            'email' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
+-            'airnotifier' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
++            'popup' => MESSAGE_FORCED,
++            'email' => MESSAGE_FORCED,
++            'airnotifier' => MESSAGE_FORCED,
+         ],
+     ),
+ 
+diff --git a/public/report/security/lang/en/report_security.php b/public/report/security/lang/en/report_security.php
+index dbfc33d7607..198bed5ace6 100644
+--- a/public/report/security/lang/en/report_security.php
++++ b/public/report/security/lang/en/report_security.php
+@@ -88,6 +88,10 @@ $string['check_nodemodules_info'] = 'The node_modules directory should not be pr
+ $string['check_nodemodules_name'] = 'Node.js modules directory';
+ $string['check_openprofiles_details'] = 'Open user profiles can be abused by spammers. It is recommended that either <code>Force users to log in for profiles</code> or <code>Force users to log in</code> are enabled.';
+ $string['check_openprofiles_error'] = 'Anyone can may view user profiles without logging in.';
++$string['check_newlogin_details'] = '<p>New login notifications alert users when their account is accessed from a new browser or location, helping them to spot unauthorised logins. It is recommended that they are enabled and not able to be disabled by users.</p>';
++$string['check_newlogin_name'] = 'New login notifications';
++$string['check_newlogin_ok'] = 'New login notifications are forced on for all enabled notification methods.';
++$string['check_newlogin_warning'] = 'New login notifications are not forced on, so users may be unaware of unauthorised logins.';
+ $string['check_openprofiles_name'] = 'Open user profiles';
+ $string['check_openprofiles_ok'] = 'Login is required before viewing user profiles.';
+ $string['check_passwordpolicy_details'] = '<p>It is recommended that a password policy is set, since password guessing is very often the easiest way to gain unauthorised access.

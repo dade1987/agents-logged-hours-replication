@@ -1,0 +1,74 @@
+diff --git a/mysql-test/main/opt_tvc.result b/mysql-test/main/opt_tvc.result
+index 819d42b5..97cf779e 100644
+--- a/mysql-test/main/opt_tvc.result
++++ b/mysql-test/main/opt_tvc.result
+@@ -791,4 +791,26 @@ select * from t1 where a in (1, 2) and b = 2 order by a, b;
+ a	b	c
+ 1	2	NULL
+ drop table t1;
++#
++# MDEV-31225 Signal 11 after select ..WHERE ROW(a,(a,a)) IN ((1,(1,1)),(2,(2,null)))
++#            with in_predicate_conversion_threshold=1
++#
++set @@in_predicate_conversion_threshold=1;
++create table t1 (a int);
++insert into t1 values (1),(2),(3);
++select 1 from t1 where row(a,(a,a)) in ((1,(1,1)),(2,(2,null)));
++1
++1
++select a from t1 where row(a,(a,a)) in ((1,(1,1)),(2,(2,2)),(3,(3,null)));
++a
++1
++2
++select a from t1 where row(a,(a,a)) in ((1,(1,1)));
++a
++1
++select a from t1 where row((a,a),a) in (((2,2),2));
++a
++2
++drop table t1;
++set in_predicate_conversion_threshold=default;
+ # End of 11.4 tests
+diff --git a/mysql-test/main/opt_tvc.test b/mysql-test/main/opt_tvc.test
+index 7d39c6a8..2dd2e9b1 100644
+--- a/mysql-test/main/opt_tvc.test
++++ b/mysql-test/main/opt_tvc.test
+@@ -488,4 +488,19 @@ select * from t1 where a in (1, 2) and b = 2 order by a, b;
+ 
+ drop table t1;
+ 
++--echo #
++--echo # MDEV-31225 Signal 11 after select ..WHERE ROW(a,(a,a)) IN ((1,(1,1)),(2,(2,null)))
++--echo #            with in_predicate_conversion_threshold=1
++--echo #
++
++set @@in_predicate_conversion_threshold=1;
++create table t1 (a int);
++insert into t1 values (1),(2),(3);
++select 1 from t1 where row(a,(a,a)) in ((1,(1,1)),(2,(2,null)));
++select a from t1 where row(a,(a,a)) in ((1,(1,1)),(2,(2,2)),(3,(3,null)));
++select a from t1 where row(a,(a,a)) in ((1,(1,1)));
++select a from t1 where row((a,a),a) in (((2,2),2));
++drop table t1;
++set in_predicate_conversion_threshold=default;
++
+ --echo # End of 11.4 tests
+diff --git a/sql/sql_tvc.cc b/sql/sql_tvc.cc
+index 46835972..636608e7 100644
+--- a/sql/sql_tvc.cc
++++ b/sql/sql_tvc.cc
+@@ -894,6 +894,14 @@ static bool cmp_row_types(Item* item1, Item* item2)
+   {
+     Item *inner= item1->element_index(i);
+     Item *outer= item2->element_index(i);
++    /*
++      Nested rows (e.g. ROW(a,(a,a)) IN ((1,(1,1)),...)) cannot be
++      materialized: Type_handler_row::subquery_type_allows_materialization()
++      is not supposed to be called. Reject the conversion in such a case.
++    */
++    if (inner->type_handler() == &type_handler_row ||
++        outer->type_handler() == &type_handler_row)
++      return true;
+     if (!inner->type_handler()->subquery_type_allows_materialization(inner,
+                                                                      outer,
+                                                                      true))

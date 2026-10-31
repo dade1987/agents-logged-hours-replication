@@ -1,0 +1,41 @@
+diff --git a/plugin/qc_info/qc_info.cc b/plugin/qc_info/qc_info.cc
+index a46e2d9f..34fd073c 100644
+--- a/plugin/qc_info/qc_info.cc
++++ b/plugin/qc_info/qc_info.cc
+@@ -230,9 +230,33 @@ static int qc_info_fill_table(THD *thd, TABLE_LIST *tables,
+     /* The database against which the statement is executed is part of the
+        query cache query key
+      */
+-    compile_time_assert(QUERY_CACHE_DB_LENGTH_SIZE == 2); 
+-    db= key + statement_text_length + 1 + QUERY_CACHE_DB_LENGTH_SIZE;
+-    db_length= uint2korr(db - QUERY_CACHE_DB_LENGTH_SIZE);
++    compile_time_assert(QUERY_CACHE_DB_LENGTH_SIZE == 2);
++    /*
++      statement_text_length is computed with strlen() and so stops at the
++      first '\0'. The query text itself may contain '\0' bytes, in which case
++      the db name length and db name are not where this offset points to.
++      Never read beyond the key, and never let the db name run past its end
++      (the query cache flags follow the db name in the key).
++    */
++    {
++      size_t db_length_offset= statement_text_length + 1;
++      size_t db_offset= db_length_offset + QUERY_CACHE_DB_LENGTH_SIZE;
++
++      if (db_offset > flags_length)
++      {
++        /* Malformed for our purposes: no room for the db length field */
++        db= key;
++        db_length= 0;
++      }
++      else
++      {
++        size_t available= flags_length - db_offset;
++        db= key + db_offset;
++        db_length= uint2korr(key + db_length_offset);
++        if (db_length > available)
++          db_length= available;
++      }
++    }
+ 
+     table->field[COLUMN_STATEMENT_SCHEMA]->store(db, db_length, scs);
+ 

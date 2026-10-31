@@ -1,0 +1,349 @@
+diff --git a/public/mod/assign/locallib.php b/public/mod/assign/locallib.php
+index b6c384ac7e3..c9923bcc4a5 100644
+--- a/public/mod/assign/locallib.php
++++ b/public/mod/assign/locallib.php
+@@ -3214,9 +3214,10 @@ class assign {
+ 
+         $grade->timemodified = \core\di::get(\core\clock::class)->time();
+ 
+-        if (!empty($grade->workflowstate)) {
+-            $validstates = $this->get_marking_workflow_states_for_current_user();
+-            if (!array_key_exists($grade->workflowstate, $validstates)) {
++        if ($this->get_instance()->markingworkflow) {
++            // The workflow state is stored in the user flags, not in the grade record.
++            $workflowstate = $this->get_grading_status($grade->userid);
++            if (!$this->is_workflow_state_available_to_current_user($workflowstate)) {
+                 return false;
+             }
+         }
+@@ -3353,7 +3354,7 @@ class assign {
+     public function update_mark(stdClass $grade, mixed $mark, ?string $workflowstate = null): bool {
+         global $DB;
+ 
+-        if ($this->grading_disabled($grade->userid)) {
++        if ($this->marking_disabled($grade->userid)) {
+             return false;
+         }
+ 
+@@ -6760,8 +6761,10 @@ class assign {
+         } else {
+             $gradebookgrade = $this->convert_grade_for_gradebook($grade);
+         }
+-        // Grading is disabled, return.
+-        if ($this->grading_disabled($gradebookgrade['userid'])) {
++        // Grading is disabled (locked or overridden in the gradebook), return.
++        // The marking workflow state is not checked here because this only synchronises data to the gradebook
++        // and it may be triggered by users (e.g. students submitting) who can not manage the workflow state.
++        if ($this->grading_disabled($gradebookgrade['userid'], false)) {
+             return false;
+         }
+         $assign = clone $this->get_instance();
+@@ -8793,9 +8796,9 @@ class assign {
+      */
+     public function grading_disabled($userid, $checkworkflow = true, $gradinginfo = null) {
+         if ($checkworkflow && $this->get_instance()->markingworkflow) {
+-            $grade = $this->get_user_grade($userid, false);
+-            $validstates = $this->get_marking_workflow_states_for_current_user();
+-            if (!empty($grade) && !empty($grade->workflowstate) && !array_key_exists($grade->workflowstate, $validstates)) {
++            // The workflow state is stored in the user flags, not in the grade record.
++            $workflowstate = $this->get_grading_status($userid);
++            if (!$this->is_workflow_state_available_to_current_user($workflowstate)) {
+                 return true;
+             }
+         }
+@@ -8820,6 +8823,45 @@ class assign {
+         return $gradingdisabled;
+     }
+ 
++    /**
++     * Determine if the current user is allowed to work with a grade that is in the given marking workflow state.
++     *
++     * A grade that has not entered the workflow yet (empty state or "Not marked") is available to everyone,
++     * otherwise the state must be one the current user has permission to transition a grade to.
++     *
++     * @param string|null $workflowstate The overall marking workflow state of the grade.
++     * @return bool true if the current user can work with a grade in this state.
++     */
++    public function is_workflow_state_available_to_current_user(?string $workflowstate): bool {
++        if (empty($workflowstate) || $workflowstate === ASSIGN_MARKING_WORKFLOW_STATE_NOTMARKED) {
++            return true;
++        }
++        return array_key_exists($workflowstate, $this->get_marking_workflow_states_for_current_user());
++    }
++
++    /**
++     * Determine if the individual marker marks for this user can be edited.
++     *
++     * Marks can not be edited when grading is disabled, or once the overall marking workflow state
++     * has reached "Ready for release" or "Released", regardless of the capabilities of the current user.
++     *
++     * @param int $userid - The student userid
++     * @return bool true if marks can not be edited.
++     */
++    public function marking_disabled(int $userid): bool {
++        if ($this->grading_disabled($userid)) {
++            return true;
++        }
++        if (!$this->get_instance()->markingworkflow) {
++            return false;
++        }
++        $lockedstates = [
++            ASSIGN_MARKING_WORKFLOW_STATE_READYFORRELEASE,
++            ASSIGN_MARKING_WORKFLOW_STATE_RELEASED,
++        ];
++        return in_array($this->get_grading_status($userid), $lockedstates, true);
++    }
++
+     /**
+      * Determines if grading is restricted by multiple marking requirements.
+      * When grading is restricted grades can only be updated through marking calculations.
+@@ -8927,7 +8969,12 @@ class assign {
+         }
+ 
+         // Add advanced grading.
+-        $gradingdisabled = $this->grading_disabled($userid);
++        if ($markerpage) {
++            // Individual marks are locked once the overall workflow state is ready for release or released.
++            $gradingdisabled = $this->marking_disabled($userid);
++        } else {
++            $gradingdisabled = $this->grading_disabled($userid);
++        }
+         $gradinginstance = $this->get_grading_instance($userid, $grade, $gradingdisabled);
+ 
+         if ($markerpage) {
+@@ -9086,6 +9133,10 @@ class assign {
+                 }
+                 $mform->freeze('workflowstate');
+             }
++            if ($markerpage && $gradingdisabled) {
++                // The mark can not be changed, so the mark workflow state can not be changed either.
++                $mform->freeze('workflowstate');
++            }
+ 
+             $gradingstatus = $this->get_grading_status($userid);
+             if ($gradingstatus != ASSIGN_MARKING_WORKFLOW_STATE_RELEASED) {
+@@ -9603,7 +9654,7 @@ class assign {
+ 
+                 // Update mark workflow state.
+                 if (isset($formdata->workflowcontext) && $formdata->workflowcontext === 'mark') {
+-                    if (!$this->is_user_allocated_marker($USER->id, $userid)) {
++                    if (!$this->is_user_allocated_marker($USER->id, $userid) || $this->marking_disabled($userid)) {
+                         continue;
+                     }
+ 
+@@ -9965,7 +10016,11 @@ class assign {
+                     $grade->grade = grade_floatval(unformat_float($formdata->grade));
+                 }
+             }
+-            if (isset($formdata->workflowstate) && !property_exists($formdata, 'mark')) {
++            if (
++                isset($formdata->workflowstate) &&
++                !property_exists($formdata, 'mark') &&
++                $this->is_workflow_state_available_to_current_user($formdata->workflowstate)
++            ) {
+                 $flags = $this->get_user_flags($userid, true);
+                 $oldworkflowstate = $flags->workflowstate;
+                 $flags->workflowstate = isset($formdata->workflowstate) ? $formdata->workflowstate : $flags->workflowstate;
+diff --git a/public/mod/assign/tests/locallib_test.php b/public/mod/assign/tests/locallib_test.php
+index c706c1d27cc..9de8a5f895b 100644
+--- a/public/mod/assign/tests/locallib_test.php
++++ b/public/mod/assign/tests/locallib_test.php
+@@ -3360,7 +3360,8 @@ You can see it appended to your <a href="' . $assignurl .
+         $this->resetAfterTest();
+         $course = $this->getDataGenerator()->create_course();
+         $student = $this->getDataGenerator()->create_and_enrol($course, 'student');
+-        $teacher = $this->getDataGenerator()->create_and_enrol($course, 'teacher');
++        // The teacher must be able to transition grades to every workflow state.
++        $teacher = $this->getDataGenerator()->create_and_enrol($course, 'editingteacher');
+ 
+         $assign = $this->create_instance($course, [
+             'markingworkflow' => 1,
+@@ -3453,6 +3454,96 @@ You can see it appended to your <a href="' . $assignurl .
+         $this->assertEquals(50, (int)$grades[$student->id]->rawgrade);
+     }
+ 
++    /**
++     * Test that grading is disabled when the grade is in a marking workflow state not available to the grader.
++     *
++     * @covers ::grading_disabled
++     * @covers ::update_grade
++     * @covers ::is_workflow_state_available_to_current_user
++     */
++    public function test_grading_disabled_workflow_state(): void {
++        global $DB, $PAGE;
++
++        $this->resetAfterTest();
++        $course = $this->getDataGenerator()->create_course();
++        $student = $this->getDataGenerator()->create_and_enrol($course, 'student');
++        $teacher = $this->getDataGenerator()->create_and_enrol($course, 'editingteacher');
++
++        // Create a grader role that can grade but can not review, release or manage grades.
++        $graderroleid = $this->getDataGenerator()->create_role(['shortname' => 'grader']);
++        $context = \context_course::instance($course->id);
++        assign_capability('mod/assign:grade', CAP_ALLOW, $graderroleid, $context->id);
++        assign_capability('mod/assign:view', CAP_ALLOW, $graderroleid, $context->id);
++        assign_capability('mod/assign:viewgrades', CAP_ALLOW, $graderroleid, $context->id);
++        $grader = $this->getDataGenerator()->create_and_enrol($course, 'grader');
++
++        $assign = $this->create_instance($course, [
++            'markingworkflow' => 1,
++        ]);
++        $PAGE->set_url(new \moodle_url('/mod/assign/view.php', ['id' => $assign->get_course_module()->id]));
++
++        $this->add_submission($student, $assign);
++        $this->submit_for_grading($student, $assign);
++
++        // Before any workflow state is set, the grader can grade.
++        $this->setUser($grader);
++        $graderassign = new mod_assign_testable_assign($assign->get_context(), $assign->get_course_module(), $course);
++        $this->assertFalse($graderassign->grading_disabled($student->id));
++
++        // The teacher grades the submission and sets the workflow state to "In marking".
++        $this->grade_submission($teacher, $assign, $student, 50.0, [
++            'workflowstate' => ASSIGN_MARKING_WORKFLOW_STATE_INMARKING,
++        ]);
++
++        // The grader can still edit the grade.
++        $this->setUser($grader);
++        $this->assertFalse($graderassign->grading_disabled($student->id));
++        $this->grade_submission($grader, $graderassign, $student, 60.0);
++        $grade = $assign->get_user_grade($student->id, false);
++        $this->assertEquals(60.0, $grade->grade);
++
++        // The teacher sets the workflow state to "Released".
++        $this->grade_submission($teacher, $assign, $student, 50.0, [
++            'workflowstate' => ASSIGN_MARKING_WORKFLOW_STATE_RELEASED,
++        ]);
++        $this->assertEquals(ASSIGN_MARKING_WORKFLOW_STATE_RELEASED, $assign->get_grading_status($student->id));
++
++        // The grader can no longer edit the grade because "Released" is not available to them.
++        $this->setUser($grader);
++        $this->assertTrue($graderassign->grading_disabled($student->id));
++        $this->assertFalse($graderassign->grading_disabled($student->id, false));
++
++        // Attempting to grade through the grading form must not change the released grade.
++        $this->grade_submission($grader, $graderassign, $student, 70.0);
++        $grade = $assign->get_user_grade($student->id, false);
++        $this->assertEquals(50.0, $grade->grade);
++
++        // Nor can the grade be updated directly.
++        $this->setUser($grader);
++        $grade->grade = 70.0;
++        $this->assertFalse($graderassign->update_grade($grade));
++        $this->assertEquals(50.0, $DB->get_field('assign_grades', 'grade', ['id' => $grade->id]));
++
++        // Quick grading must also be ignored for this user.
++        $data = [
++            'grademodified_' . $student->id => $grade->timemodified,
++            'gradeattempt_' . $student->id => $grade->attemptnumber,
++            'quickgrade_' . $student->id => '80',
++            'sesskey' => sesskey(),
++        ];
++        $graderassign->testable_process_save_quick_grades($data);
++        $this->assertEquals(50.0, $DB->get_field('assign_grades', 'grade', ['id' => $grade->id]));
++
++        // The teacher can still edit the released grade.
++        $this->setUser($teacher);
++        $this->assertFalse($assign->grading_disabled($student->id));
++        $this->grade_submission($teacher, $assign, $student, 90.0, [
++            'workflowstate' => ASSIGN_MARKING_WORKFLOW_STATE_RELEASED,
++        ]);
++        $grade = $assign->get_user_grade($student->id, false);
++        $this->assertEquals(90.0, $grade->grade);
++    }
++
+     /**
+      * Ensure that a teacher cannot submit for students as standard.
+      */
+@@ -5252,7 +5343,8 @@ Anchor link 2:<a title=\"bananas\" href=\"../logo-240x60.gif\">Link text</a>
+     public function test_release_grade_anon(): void {
+         $this->resetAfterTest();
+         $course = $this->getDataGenerator()->create_course();
+-        $teacher = $this->getDataGenerator()->create_and_enrol($course, 'teacher');
++        // The teacher must be able to release grades.
++        $teacher = $this->getDataGenerator()->create_and_enrol($course, 'editingteacher');
+         $student = $this->getDataGenerator()->create_and_enrol($course, 'student');
+ 
+         $assign = $this->create_instance($course, [
+diff --git a/public/mod/assign/tests/markerallocation_test.php b/public/mod/assign/tests/markerallocation_test.php
+index 6a3833c3ba9..4c6f2188b71 100644
+--- a/public/mod/assign/tests/markerallocation_test.php
++++ b/public/mod/assign/tests/markerallocation_test.php
+@@ -1187,6 +1187,77 @@ final class markerallocation_test extends \advanced_testcase {
+         $this->assertEquals(ASSIGN_MARKING_WORKFLOW_STATE_INREVIEW, $flags->workflowstate);
+     }
+ 
++    /**
++     * Test that individual marks can not be modified once the overall workflow state is ready for release or released,
++     * even by users who are able to manage or release the overall workflow state.
++     *
++     * @covers ::update_mark
++     * @covers ::marking_disabled
++     */
++    public function test_marks_locked_once_ready_for_release(): void {
++        $this->setup_data();
++        $assignment = $this->create_assignment();
++        $studentid = $this->users[2]->id;
++
++        // Allocate both teachers to the student assignment.
++        $assignment->update_marker_allocations($studentid, [
++            1 => [$this->users[0]->id],
++            2 => [$this->users[1]->id],
++        ]);
++
++        // Both markers mark the submission as marking complete.
++        $gradeobject = $assignment->get_user_grade($studentid, true);
++        $gradeobject->grader = $this->users[0]->id;
++        $this->assertTrue($assignment->update_mark($gradeobject, 90, ASSIGN_MARKING_WORKFLOW_STATE_READYFORREVIEW));
++        $gradeobject->grader = $this->users[1]->id;
++        $this->assertTrue($assignment->update_mark($gradeobject, 70, ASSIGN_MARKING_WORKFLOW_STATE_READYFORREVIEW));
++
++        $flags = $assignment->get_user_flags($studentid, true);
++        $this->assertEquals(ASSIGN_MARKING_WORKFLOW_STATE_READYFORREVIEW, $flags->workflowstate);
++        $this->assertFalse($assignment->marking_disabled($studentid));
++
++        // Marks can still be changed while the overall state is in review.
++        $flags->workflowstate = ASSIGN_MARKING_WORKFLOW_STATE_INREVIEW;
++        $assignment->update_user_flags($flags);
++        $this->assertFalse($assignment->marking_disabled($studentid));
++        $gradeobject->grader = $this->users[0]->id;
++        $this->assertTrue($assignment->update_mark($gradeobject, 80, ASSIGN_MARKING_WORKFLOW_STATE_READYFORREVIEW));
++        $this->assertEquals(80, $assignment->get_mark($gradeobject->id, $this->users[0]->id)->mark);
++
++        // Once the overall state is ready for release, the marks are locked.
++        $flags->workflowstate = ASSIGN_MARKING_WORKFLOW_STATE_READYFORRELEASE;
++        $assignment->update_user_flags($flags);
++        $this->assertTrue($assignment->marking_disabled($studentid));
++        $this->assertFalse($assignment->update_mark($gradeobject, 60, ASSIGN_MARKING_WORKFLOW_STATE_READYFORREVIEW));
++        $this->assertEquals(80, $assignment->get_mark($gradeobject->id, $this->users[0]->id)->mark);
++        $this->assertFalse($assignment->update_mark($gradeobject, 80, ASSIGN_MARKING_WORKFLOW_STATE_INMARKING));
++        $mark = $assignment->get_mark($gradeobject->id, $this->users[0]->id);
++        $this->assertEquals(ASSIGN_MARKING_WORKFLOW_STATE_READYFORREVIEW, $mark->workflowstate);
++
++        // The same applies once released, even as a user who can release grades.
++        $flags->workflowstate = ASSIGN_MARKING_WORKFLOW_STATE_RELEASED;
++        $assignment->update_user_flags($flags);
++        $this->setUser($this->users[0]);
++        $this->assertTrue($assignment->marking_disabled($studentid));
++        $this->assertFalse($assignment->grading_disabled($studentid));
++        $this->assertFalse($assignment->update_mark($gradeobject, 60, ASSIGN_MARKING_WORKFLOW_STATE_READYFORREVIEW));
++        $this->assertEquals(80, $assignment->get_mark($gradeobject->id, $this->users[0]->id)->mark);
++        $gradeobject->grader = $this->users[1]->id;
++        $this->assertFalse($assignment->update_mark($gradeobject, 10));
++        $this->assertEquals(70, $assignment->get_mark($gradeobject->id, $this->users[1]->id)->mark);
++
++        // The overall state is untouched.
++        $flags = $assignment->get_user_flags($studentid, true);
++        $this->assertEquals(ASSIGN_MARKING_WORKFLOW_STATE_RELEASED, $flags->workflowstate);
++
++        // Moving the overall state back to in review unlocks the marks again.
++        $flags->workflowstate = ASSIGN_MARKING_WORKFLOW_STATE_INREVIEW;
++        $assignment->update_user_flags($flags);
++        $this->assertFalse($assignment->marking_disabled($studentid));
++        $this->assertTrue($assignment->update_mark($gradeobject, 10));
++        $this->assertEquals(10, $assignment->get_mark($gradeobject->id, $this->users[1]->id)->mark);
++    }
++
+     /**
+      * Test that when we remove a marker their marks are not counted towards anything.
+      *

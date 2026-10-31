@@ -1,0 +1,30 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot run Moodle's test suite. You may run `php -l <file>` and read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-89295: Assignment grades remain editable in workflow states unavailable to the grader
+
+h2. Background
+
+The {{assign::grading_disabled}} and {{assign::update_grade}} methods read {{workflowstate}} from the *assign_grades* record, however it’s stored in {{assign_user_flags}}. The checks therefore do nothing, allowing graders to edit grades in workflow states they cannot manage. A similar issue was identified in [https://moodle.atlassian.net/browse/MDL-70441).|https://moodle.atlassian.net/browse/MDL-70441).|smart-link] .
+
+This issue also covers multiple marking: once the overall workflow state is “Ready for release” or “Released”, individual marker marks must not be modified, including by users with permission to manage or release the overall workflow state.
+
+h2. Replication steps
+
+# Create a grader role with *mod/assign:grade*, but _without_ *mod/assign:reviewgrades*, mod/*assign:releasegrades*, or *mod/assign:managegrades*
+# Create an assignment with marking workflow enabled
+# Have a student submit
+# As a teacher or administrator, give the submission a grade and set its workflow state to “Released”
+# Log in as the grader and open the student’s grading page
+# Change the grade and save it
+
+*Expected*: The grade is read only because “Released” is not a workflow state available to this grader.
+*Actual*: The grade remains editable and the released grade can be changed.
+
+For multiple marking, the expected result is individual marker marks must also be read only once the overall state is “Ready for release” or “Released”, including for users who can manage or release that state.

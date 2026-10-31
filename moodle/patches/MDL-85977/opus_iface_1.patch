@@ -1,0 +1,336 @@
+diff --git a/public/mod/bigbluebuttonbn/classes/local/admin/setting_configmultiselect_tags.php b/public/mod/bigbluebuttonbn/classes/local/admin/setting_configmultiselect_tags.php
+new file mode 100644
+index 00000000000..224231034d5
+--- /dev/null
++++ b/public/mod/bigbluebuttonbn/classes/local/admin/setting_configmultiselect_tags.php
+@@ -0,0 +1,207 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace mod_bigbluebuttonbn\local\admin;
++
++use admin_setting_configmultiselect;
++
++/**
++ * Multiple selection setting with autocomplete that also allows new values (tags) to be typed in.
++ *
++ * Values that are not part of the predefined list of choices are accepted and stored, and are then
++ * added to the list of choices so they can be displayed and selected again.
++ *
++ * @package    mod_bigbluebuttonbn
++ * @copyright  2025 onwards, Blindside Networks Inc
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class setting_configmultiselect_tags extends admin_setting_configmultiselect {
++    /** @var string $placeholder Placeholder text for an empty list. */
++    protected string $placeholder;
++
++    /** @var string $noselectionstring String shown when there are no selections. */
++    protected string $noselectionstring;
++
++    /** @var bool $showsuggestions Show suggestions by default. */
++    protected bool $showsuggestions;
++
++    /** @var array $basechoices The predefined choices (value => label). */
++    protected array $basechoices;
++
++    /**
++     * Constructor.
++     *
++     * @param string $name unique ascii name
++     * @param string $visiblename localised name
++     * @param string $description localised long description
++     * @param array $defaultsetting array of default values
++     * @param array $choices array of $value => $label predefined choices
++     * @param string $placeholder placeholder text for the autocomplete field
++     * @param string $noselectionstring text shown when nothing is selected
++     * @param bool $showsuggestions whether suggestions are shown
++     */
++    public function __construct(
++        string $name,
++        string $visiblename,
++        string $description,
++        array $defaultsetting,
++        array $choices,
++        string $placeholder,
++        string $noselectionstring,
++        bool $showsuggestions = true
++    ) {
++        $this->basechoices = $choices;
++        $this->placeholder = $placeholder;
++        $this->noselectionstring = $noselectionstring;
++        $this->showsuggestions = $showsuggestions;
++        parent::__construct($name, $visiblename, $description, $defaultsetting, $choices);
++    }
++
++    /**
++     * Get the list of choices, including any custom value currently stored or used as default.
++     *
++     * @return array value => label
++     */
++    public function get_choices(): array {
++        $this->load_choices();
++        return $this->choices;
++    }
++
++    /**
++     * Load the choices: predefined choices plus default and currently stored values.
++     *
++     * @return bool
++     */
++    public function load_choices(): bool {
++        $choices = is_array($this->choices) ? $this->choices : [];
++        foreach ($this->basechoices as $value => $label) {
++            if (!array_key_exists($value, $choices)) {
++                $choices[$value] = $label;
++            }
++        }
++        $values = [];
++        $default = $this->get_defaultsetting();
++        if (is_array($default)) {
++            $values = array_merge($values, $default);
++        }
++        $current = $this->get_setting();
++        if (is_array($current)) {
++            $values = array_merge($values, $current);
++        }
++        foreach ($values as $value) {
++            $value = $this->clean_value((string) $value);
++            if ($value === '' || array_key_exists($value, $choices)) {
++                continue;
++            }
++            $choices[$value] = $this->resolve_label($value);
++        }
++        $this->choices = $choices;
++        return true;
++    }
++
++    /**
++     * Save the setting. Any non-empty value is accepted (new tags are allowed).
++     *
++     * @param mixed $data array of values
++     * @return string empty string if ok, error message otherwise
++     */
++    public function write_setting($data): string {
++        if (!is_array($data)) {
++            return ''; // Ignore it.
++        }
++        unset($data['xxxxx']);
++
++        $this->load_choices();
++        $save = [];
++        foreach ($data as $value) {
++            if (!is_scalar($value)) {
++                continue;
++            }
++            $value = $this->clean_value((string) $value);
++            if ($value === '' || in_array($value, $save, true)) {
++                continue;
++            }
++            $save[] = $value;
++            if (!array_key_exists($value, $this->choices)) {
++                $this->choices[$value] = $this->resolve_label($value);
++            }
++        }
++
++        return ($this->config_write($this->name, implode(',', $save)) ? '' : get_string('errorsetting', 'admin'));
++    }
++
++    /**
++     * Return the HTML for this setting, enhanced with the autocomplete (tags) widget.
++     *
++     * @param mixed $data array of selected values
++     * @param string $query
++     * @return string
++     */
++    public function output_html($data, $query = '') {
++        global $PAGE;
++
++        $html = parent::output_html($data, $query);
++        if ($html === '') {
++            return $html;
++        }
++
++        $params = [
++            '#' . $this->get_id(),
++            true, // Tags: allow new entries.
++            '',
++            $this->placeholder,
++            false,
++            $this->showsuggestions,
++            $this->noselectionstring,
++        ];
++        $PAGE->requires->js_call_amd('core/form-autocomplete', 'enhance', $params);
++
++        return $html;
++    }
++
++    /**
++     * Resolve the label for a given value.
++     *
++     * Uses the predefined choices first, then a language string 'view_recording_format_<value>'
++     * if it exists, falling back to the raw value.
++     *
++     * @param string $value
++     * @return string
++     */
++    protected function resolve_label(string $value): string {
++        if (array_key_exists($value, $this->basechoices)) {
++            return (string) $this->basechoices[$value];
++        }
++        $stringid = 'view_recording_format_' . $value;
++        $sm = get_string_manager();
++        if ($sm->string_exists($stringid, 'mod_bigbluebuttonbn')) {
++            return get_string($stringid, 'mod_bigbluebuttonbn');
++        }
++        return $value;
++    }
++
++    /**
++     * Clean a single value so it can safely be stored in a comma separated list.
++     *
++     * @param string $value
++     * @return string
++     */
++    protected function clean_value(string $value): string {
++        $value = clean_param($value, PARAM_NOTAGS);
++        $value = str_replace(',', '', $value);
++        return trim($value);
++    }
++}
+diff --git a/public/mod/bigbluebuttonbn/classes/settings.php b/public/mod/bigbluebuttonbn/classes/settings.php
+index 3d36118ae94..41183f59c64 100644
+--- a/public/mod/bigbluebuttonbn/classes/settings.php
++++ b/public/mod/bigbluebuttonbn/classes/settings.php
+@@ -29,6 +29,7 @@ use core_admin\setting\tree\category as admin_category;
+ use core_cache\helper as cache_helper;
+ use core_plugin_manager;
+ use lang_string;
++use mod_bigbluebuttonbn\local\admin\setting_configmultiselect_tags;
+ use mod_bigbluebuttonbn\local\config;
+ use mod_bigbluebuttonbn\local\helpers\roles;
+ use mod_bigbluebuttonbn\local\plugins\admin_page_manage_extensions;
+@@ -391,12 +392,14 @@ class settings {
+                 'statistics' => get_string('view_recording_format_statistics', 'mod_bigbluebuttonbn'),
+                 'video' => get_string('view_recording_format_video', 'mod_bigbluebuttonbn'),
+             ];
+-            $item = new configmultiselect(
++            $item = new setting_configmultiselect_tags(
+                 'bigbluebuttonbn_recording_safe_formats',
+                 get_string('config_recording_safe_formats', 'mod_bigbluebuttonbn'),
+                 get_string('config_recording_safe_formats_description', 'mod_bigbluebuttonbn'),
+                 ['video', 'presentation'],
+-                $recordingsafeformat
++                $recordingsafeformat,
++                get_string('config_recording_safe_formats_placeholder', 'mod_bigbluebuttonbn'),
++                get_string('config_recording_safe_formats_noselection', 'mod_bigbluebuttonbn')
+             );
+             $this->add_conditional_element(
+                 'recording_hide_button_editable',
+diff --git a/public/mod/bigbluebuttonbn/lang/en/bigbluebuttonbn.php b/public/mod/bigbluebuttonbn/lang/en/bigbluebuttonbn.php
+index fe13f805d51..48f89ff4cea 100644
+--- a/public/mod/bigbluebuttonbn/lang/en/bigbluebuttonbn.php
++++ b/public/mod/bigbluebuttonbn/lang/en/bigbluebuttonbn.php
+@@ -163,7 +163,10 @@ $string['config_recording_refresh_period_description'] = 'How often should the B
+ $string['config_recording_safe_formats'] = 'Recording formats viewable by everyone';
+ $string['config_recording_safe_formats_description'] = 'Select the formats which are viewable by everyone.
+ All other formats are only viewable by teachers and other users with the mod/bigbluebuttonbn:viewallrecordingformats and
+- mod/bigbluebuttonbn:managerecordings capabilities.';
++ mod/bigbluebuttonbn:managerecordings capabilities.
++Additional formats can be added by typing their name and pressing Enter.';
++$string['config_recording_safe_formats_noselection'] = 'No formats selected';
++$string['config_recording_safe_formats_placeholder'] = 'Select or type a recording format';
+ $string['config_recordingready_enabled'] = 'Send recording available notification';
+ $string['config_recordingready_enabled_description'] = 'If enabled, a notification will be sent when a recording link is available. This feature requires the script post_publish_recording_ready_callback to be enabled on the BigBlueButton server.';
+ $string['config_recordings'] = 'Show recordings';
+diff --git a/public/mod/bigbluebuttonbn/tests/local/admin/setting_configmultiselect_tags_test.php b/public/mod/bigbluebuttonbn/tests/local/admin/setting_configmultiselect_tags_test.php
+new file mode 100644
+index 00000000000..7126df5012d
+--- /dev/null
++++ b/public/mod/bigbluebuttonbn/tests/local/admin/setting_configmultiselect_tags_test.php
+@@ -0,0 +1,72 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace mod_bigbluebuttonbn\local\admin;
++
++/**
++ * Tests for the setting_configmultiselect_tags admin setting.
++ *
++ * @package    mod_bigbluebuttonbn
++ * @copyright  2025 onwards, Blindside Networks Inc
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ * @covers     \mod_bigbluebuttonbn\local\admin\setting_configmultiselect_tags
++ */
++final class setting_configmultiselect_tags_test extends \advanced_testcase {
++    /**
++     * Create the setting.
++     *
++     * @return setting_configmultiselect_tags
++     */
++    private function get_setting(): setting_configmultiselect_tags {
++        global $CFG;
++        require_once($CFG->libdir . '/adminlib.php');
++        return new setting_configmultiselect_tags(
++            'bigbluebuttonbn_recording_safe_formats',
++            'Safe formats',
++            'Description',
++            ['video', 'presentation'],
++            [
++                'presentation' => get_string('view_recording_format_presentation', 'mod_bigbluebuttonbn'),
++                'video' => get_string('view_recording_format_video', 'mod_bigbluebuttonbn'),
++            ],
++            'Placeholder',
++            'No selection'
++        );
++    }
++
++    public function test_write_custom_values(): void {
++        $this->resetAfterTest();
++        $setting = $this->get_setting();
++        $this->assertSame('', $setting->write_setting(['xxxxx' => 1, 'video', 'transcript', 'podcast', ' ', 'video']));
++        $this->assertSame('video,transcript,podcast', get_config('core', 'bigbluebuttonbn_recording_safe_formats'));
++        $this->assertSame(['video', 'transcript', 'podcast'], $setting->get_setting());
++
++        $choices = $this->get_setting()->get_choices();
++        $this->assertArrayHasKey('transcript', $choices);
++        $this->assertSame('transcript', $choices['transcript']);
++        $this->assertSame(get_string('view_recording_format_podcast', 'mod_bigbluebuttonbn'), $choices['podcast']);
++        $this->assertArrayHasKey('presentation', $choices);
++    }
++
++    public function test_write_empty_and_invalid(): void {
++        $this->resetAfterTest();
++        $setting = $this->get_setting();
++        $this->assertSame('', $setting->write_setting(['xxxxx' => 1]));
++        $this->assertSame([], $setting->get_setting());
++        $this->assertSame('', $setting->write_setting('notanarray'));
++        $this->assertTrue($setting->load_choices());
++    }
++}

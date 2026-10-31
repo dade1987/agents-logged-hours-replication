@@ -1,0 +1,227 @@
+diff --git a/include/heap.h b/include/heap.h
+index 4df384d7..d3b04911 100644
+--- a/include/heap.h
++++ b/include/heap.h
+@@ -180,6 +180,13 @@ typedef struct st_heap_info
+   uint key_version;                     /* Version at last read */
+   uint file_version;                    /* Version at scan */
+   uint lastkey_len;
++  /*
++    Set if lastkey holds the complete key, including the row position, of
++    the record that was last deleted through the current index.
++    heap_rnext()/heap_rprev() use it to restart the search from the last
++    position instead of from the original search key.
++  */
++  my_bool lastkey_with_rowid;
+   my_bool implicit_emptied;
+   THR_LOCK_DATA lock;
+   LIST open_list;
+diff --git a/mysql-test/suite/heap/heap_btree.result b/mysql-test/suite/heap/heap_btree.result
+index 6197e55c..7248d5bb 100644
+--- a/mysql-test/suite/heap/heap_btree.result
++++ b/mysql-test/suite/heap/heap_btree.result
+@@ -386,3 +386,49 @@ create table t1 (id int, a varchar(300) not null, key using btree(a)) engine=hea
+ insert t1 values (1, repeat('a', 300));
+ drop table t1;
+ # End of 5.5 tests
++#
++# MDEV-40186 MEMORY tables incorrectly restart index scan on DELETE
++#
++create table t1 (a int, b int, c int, key (a, b) using btree) engine=heap;
++insert t1 select seq % 10, seq, seq from seq_1_to_80;
++flush status;
++delete from t1 where a=3 and c>60;
++select variable_name, variable_value from information_schema.session_status where variable_name like 'handler_r%' and variable_value>0;
++variable_name	variable_value
++HANDLER_READ_KEY	1
++HANDLER_READ_NEXT	8
++select * from t1 where a=3 order by b;
++a	b	c
++3	3	3
++3	13	13
++3	23	23
++3	33	33
++3	43	43
++3	53	53
++delete from t1;
++insert t1 select seq % 10, seq, seq from seq_1_to_80;
++flush status;
++delete from t1 where a=3;
++select variable_name, variable_value from information_schema.session_status where variable_name like 'handler_r%' and variable_value>0;
++variable_name	variable_value
++HANDLER_READ_KEY	1
++HANDLER_READ_NEXT	8
++select count(*) from t1 where a=3;
++count(*)
++0
++delete from t1;
++insert t1 select seq % 10, seq, seq from seq_1_to_80;
++flush status;
++delete from t1 where a=3 and c%20=3;
++select variable_name, variable_value from information_schema.session_status where variable_name like 'handler_r%' and variable_value>0;
++variable_name	variable_value
++HANDLER_READ_KEY	1
++HANDLER_READ_NEXT	8
++select * from t1 where a=3 order by b;
++a	b	c
++3	13	13
++3	33	33
++3	53	53
++3	73	73
++drop table t1;
++# End of 10.11 tests
+diff --git a/mysql-test/suite/heap/heap_btree.test b/mysql-test/suite/heap/heap_btree.test
+index 08f94abb..67cc8c52 100644
+--- a/mysql-test/suite/heap/heap_btree.test
++++ b/mysql-test/suite/heap/heap_btree.test
+@@ -291,3 +291,28 @@ insert t1 values (1, repeat('a', 300));
+ drop table t1;
+ 
+ --echo # End of 5.5 tests
++
++--echo #
++--echo # MDEV-40186 MEMORY tables incorrectly restart index scan on DELETE
++--echo #
++create table t1 (a int, b int, c int, key (a, b) using btree) engine=heap;
++insert t1 select seq % 10, seq, seq from seq_1_to_80;
++flush status;
++delete from t1 where a=3 and c>60;
++select variable_name, variable_value from information_schema.session_status where variable_name like 'handler_r%' and variable_value>0;
++select * from t1 where a=3 order by b;
++delete from t1;
++insert t1 select seq % 10, seq, seq from seq_1_to_80;
++flush status;
++delete from t1 where a=3;
++select variable_name, variable_value from information_schema.session_status where variable_name like 'handler_r%' and variable_value>0;
++select count(*) from t1 where a=3;
++delete from t1;
++insert t1 select seq % 10, seq, seq from seq_1_to_80;
++flush status;
++delete from t1 where a=3 and c%20=3;
++select variable_name, variable_value from information_schema.session_status where variable_name like 'handler_r%' and variable_value>0;
++select * from t1 where a=3 order by b;
++drop table t1;
++
++--echo # End of 10.11 tests
+diff --git a/storage/heap/hp_delete.c b/storage/heap/hp_delete.c
+index 9579fb51..92e3cb62 100644
+--- a/storage/heap/hp_delete.c
++++ b/storage/heap/hp_delete.c
+@@ -71,12 +71,23 @@ int hp_rb_delete_key(HP_INFO *info, register HP_KEYDEF *keyinfo,
+   size_t old_allocated;
+   int res;
+ 
+-  if (flag) 
+-    info->last_pos= NULL; /* For heap_rnext/heap_rprev */
+-
+   custom_arg.keyseg= keyinfo->seg;
+   custom_arg.key_length= hp_rb_make_key(keyinfo, info->recbuf, record, recpos);
+   custom_arg.search_flag= SEARCH_SAME;
++  if (flag)
++  {
++    /*
++      The current index position is going away. Remember the full key
++      (together with the row position) of the deleted record, so that
++      heap_rnext()/heap_rprev() can restart the search from the last
++      found key instead of from the original search key.
++    */
++    info->last_pos= NULL; /* For heap_rnext/heap_rprev */
++    memcpy(info->lastkey, info->recbuf,
++           custom_arg.key_length + sizeof(uchar*));
++    info->lastkey_len= custom_arg.key_length;
++    info->lastkey_with_rowid= 1;
++  }
+   old_allocated= keyinfo->rb_tree.allocated;
+   res= tree_delete(&keyinfo->rb_tree, info->recbuf, custom_arg.key_length,
+                    &custom_arg);
+diff --git a/storage/heap/hp_rfirst.c b/storage/heap/hp_rfirst.c
+index 1b1610ac..bb97bd4d 100644
+--- a/storage/heap/hp_rfirst.c
++++ b/storage/heap/hp_rfirst.c
+@@ -48,6 +48,7 @@ int heap_rfirst(HP_INFO *info, uchar *record, int inx)
+         for now heap_rlast() is never used for DELETE queries.
+       */
+       info->lastkey_len= 0;
++      info->lastkey_with_rowid= 0;
+       info->update = HA_STATE_AKTIV;
+     }
+     else
+diff --git a/storage/heap/hp_rkey.c b/storage/heap/hp_rkey.c
+index aa26bf4e..a3ee0365 100644
+--- a/storage/heap/hp_rkey.c
++++ b/storage/heap/hp_rkey.c
+@@ -42,6 +42,7 @@ int heap_rkey(HP_INFO *info, uchar *record, int inx, const uchar *key,
+       hp_rb_pack_key(keyinfo, (uchar*) info->lastkey,
+ 		     (uchar*) key, keypart_map);
+     custom_arg.search_flag= SEARCH_FIND | SEARCH_SAME;
++    info->lastkey_with_rowid= 0;
+     /* for next rkey() after deletion */
+     if (find_flag == HA_READ_AFTER_KEY)
+       info->last_find_flag= HA_READ_KEY_OR_NEXT;
+diff --git a/storage/heap/hp_rlast.c b/storage/heap/hp_rlast.c
+index c95d8af5..fdb6d745 100644
+--- a/storage/heap/hp_rlast.c
++++ b/storage/heap/hp_rlast.c
+@@ -37,6 +37,7 @@ int heap_rlast(HP_INFO *info, uchar *record, int inx)
+       memcpy(&pos, pos + keyinfo->get_key_length(keyinfo, pos), sizeof(uchar*));
+       info->current_ptr = pos;
+       memcpy(record, pos, (size_t)share->reclength);
++      info->lastkey_with_rowid= 0;
+       info->update = HA_STATE_AKTIV;
+     }
+     else
+diff --git a/storage/heap/hp_rnext.c b/storage/heap/hp_rnext.c
+index a07d8fae..88e26e84 100644
+--- a/storage/heap/hp_rnext.c
++++ b/storage/heap/hp_rnext.c
+@@ -57,6 +57,24 @@ int heap_rnext(HP_INFO *info, uchar *record)
+                             offsetof(TREE_ELEMENT, left),
+                             offsetof(TREE_ELEMENT, right));
+     }
++    else if (info->lastkey_with_rowid)
++    {
++      /*
++        The last record read through this index was deleted (or updated)
++        and info->lastkey holds its complete key together with the row
++        position (see hp_rb_delete_key()). Restart the search from that
++        key: as the key is no longer in the tree, HA_READ_KEY_OR_NEXT with
++        SEARCH_SAME (without SEARCH_FIND, so that the row position is
++        compared too) positions on the first key after the deleted one.
++        This avoids re-reading all the keys that were already visited.
++      */
++      custom_arg.keyseg = keyinfo->seg;
++      custom_arg.key_length = info->lastkey_len;
++      custom_arg.search_flag = SEARCH_SAME;
++      pos= tree_search_key(&keyinfo->rb_tree, info->lastkey, info->parents,
++                           &info->last_pos, HA_READ_KEY_OR_NEXT, &custom_arg);
++      info->key_version= info->s->key_version;
++    }
+     else if (!info->lastkey_len)
+     {
+       /*
+diff --git a/storage/heap/hp_rprev.c b/storage/heap/hp_rprev.c
+index bb9ef06d..55c93cbf 100644
+--- a/storage/heap/hp_rprev.c
++++ b/storage/heap/hp_rprev.c
+@@ -50,6 +50,21 @@ int heap_rprev(HP_INFO *info, uchar *record)
+       pos = tree_search_next(&keyinfo->rb_tree, &info->last_pos,
+                              offsetof(TREE_ELEMENT, right),
+                              offsetof(TREE_ELEMENT, left));
++    else if (info->lastkey_with_rowid)
++    {
++      /*
++        The last record read through this index was deleted and
++        info->lastkey holds its complete key together with the row position
++        (see hp_rb_delete_key()). Restart from the key before it.
++      */
++      custom_arg.keyseg = keyinfo->seg;
++      custom_arg.key_length = info->lastkey_len;
++      custom_arg.search_flag = SEARCH_SAME;
++      info->last_find_flag= HA_READ_KEY_OR_PREV;
++      pos = tree_search_key(&keyinfo->rb_tree, info->lastkey, info->parents,
++                            &info->last_pos, info->last_find_flag, &custom_arg);
++      info->key_version= info->s->key_version;
++    }
+     else
+     {
+       custom_arg.keyseg = keyinfo->seg;

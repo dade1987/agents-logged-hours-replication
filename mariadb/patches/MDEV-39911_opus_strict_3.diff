@@ -1,0 +1,90 @@
+diff --git a/mysql-test/main/spatial_utility_function_simplify.result b/mysql-test/main/spatial_utility_function_simplify.result
+index b20ca8a9..9bc762dc 100644
+--- a/mysql-test/main/spatial_utility_function_simplify.result
++++ b/mysql-test/main/spatial_utility_function_simplify.result
+@@ -594,3 +594,13 @@ ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((10 2,5 2,5 10,-5 10,-5 2,-10 2,-10 -2,-5 -
+ ORDER BY TABLE_SCHEMA + 2 DESC, TABLE_NAME, ORDINAL_POSITION,
+ (SELECT COLUMN_NAME ORDER BY 1);
+ TABLE_SCHEMA	x	ORDINAL_POSITION
++#
++# MDEV-39911 ST_SIMPLIFY result overflowing a small caller buffer
++# (CONCAT_WS separator)
++#
++SELECT ST_ASTEXT(ST_SIMPLIFY(ST_GEOMFROMTEXT('MULTILINESTRING((0 0,5 5,0 10),(0 0,-5 5,0 10))'), 5)) AS r;
++r
++MULTILINESTRING((0 0,0 10),(0 0,0 10))
++SELECT HEX(CONCAT_WS(ST_SIMPLIFY(ST_GEOMFROMTEXT('MULTILINESTRING((0 0,5 5,0 10),(0 0,-5 5,0 10))'), 5), 7, 5)) AS r;
++r
++37000000000105000000020000000102000000020000000000000000000000000000000000000000000000000000000000000000002440010200000002000000000000000000000000000000000000000000000000000000000000000000244035
+diff --git a/mysql-test/main/spatial_utility_function_simplify.test b/mysql-test/main/spatial_utility_function_simplify.test
+index 4c4d075b..43bdd879 100644
+--- a/mysql-test/main/spatial_utility_function_simplify.test
++++ b/mysql-test/main/spatial_utility_function_simplify.test
+@@ -538,3 +538,11 @@ ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((10 2,5 2,5 10,-5 10,-5 2,-10 2,-10 -2,-5 -
+ 'global_status')
+ ORDER BY TABLE_SCHEMA + 2 DESC, TABLE_NAME, ORDINAL_POSITION,
+ (SELECT COLUMN_NAME ORDER BY 1);
++
++--echo #
++--echo # MDEV-39911 ST_SIMPLIFY result overflowing a small caller buffer
++--echo # (CONCAT_WS separator)
++--echo #
++
++SELECT ST_ASTEXT(ST_SIMPLIFY(ST_GEOMFROMTEXT('MULTILINESTRING((0 0,5 5,0 10),(0 0,-5 5,0 10))'), 5)) AS r;
++SELECT HEX(CONCAT_WS(ST_SIMPLIFY(ST_GEOMFROMTEXT('MULTILINESTRING((0 0,5 5,0 10),(0 0,-5 5,0 10))'), 5), 7, 5)) AS r;
+diff --git a/sql/spatial.cc b/sql/spatial.cc
+index 5df5a555..c6212694 100644
+--- a/sql/spatial.cc
++++ b/sql/spatial.cc
+@@ -1686,8 +1686,9 @@ int Gis_line_string::simplify(String *result, double max_distance) const {
+   simplify_RDP(points, max_distance);
+ 
+   result->length(0);
+-  result->reserve(SRID_SIZE + WKB_HEADER_SIZE +
+-                  (POINT_DATA_SIZE * points.size()));
++  if (result->reserve(SRID_SIZE + WKB_HEADER_SIZE + 4 /* n_points */ +
++                      (POINT_DATA_SIZE * points.size())))
++    return 1;
+ 
+   result->q_append(SRID_PLACEHOLDER);
+   result->q_append((char) wkb_ndr);
+@@ -2395,7 +2396,8 @@ int Gis_polygon::simplify(String *result, double max_distance) const
+     return 1;
+ 
+   result->length(0);
+-  result->reserve(SRID_SIZE + WKB_HEADER_SIZE);
++  if (result->reserve(SRID_SIZE + WKB_HEADER_SIZE + 4 /* n_items */))
++    return 1;
+   result->q_append(SRID_PLACEHOLDER);
+   result->q_append((char) wkb_ndr);
+   result->q_append((uint32) wkb_polygon);
+@@ -3500,7 +3502,8 @@ int Gis_multi_line_string::simplify(String *result, double max_distance) const
+     return 1;
+ 
+   result->length(0);
+-  result->reserve(SRID_SIZE + WKB_HEADER_SIZE);
++  if (result->reserve(SRID_SIZE + WKB_HEADER_SIZE + 4 /* n_items */))
++    return 1;
+   result->q_append(SRID_PLACEHOLDER);
+   result->q_append((char) wkb_ndr);
+   result->q_append((uint32) wkb_multilinestring);
+@@ -4107,7 +4110,8 @@ int Gis_multi_polygon::simplify(String *result, double max_distance) const
+     return 1;
+ 
+   result->length(0);
+-  result->reserve(SRID_SIZE + WKB_HEADER_SIZE);
++  if (result->reserve(SRID_SIZE + WKB_HEADER_SIZE + 4 /* n_items */))
++    return 1;
+   result->q_append(SRID_PLACEHOLDER);
+   result->q_append((char) wkb_ndr);
+   result->q_append((uint32) wkb_multipolygon);
+@@ -4702,7 +4706,8 @@ int Gis_geometry_collection::simplify(String *result,
+     return 1;
+ 
+   result->length(0);
+-  result->reserve(SRID_SIZE + BYTE_ORDER_SIZE + WKB_HEADER_SIZE);
++  if (result->reserve(SRID_SIZE + WKB_HEADER_SIZE + 4 /* n_geometries */))
++    return 1;
+   result->q_append(SRID_PLACEHOLDER);
+   result->q_append((char) wkb_ndr);
+   result->q_append((uint32) wkb_geometrycollection);

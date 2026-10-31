@@ -1,0 +1,55 @@
+diff --git a/public/admin/tool/installaddon/classes/installer.php b/public/admin/tool/installaddon/classes/installer.php
+index 80f04bc9b4e..7949f25e3ed 100644
+--- a/public/admin/tool/installaddon/classes/installer.php
++++ b/public/admin/tool/installaddon/classes/installer.php
+@@ -56,6 +56,20 @@ class tool_installaddon_installer {
+         return new moodle_url('/admin/tool/installaddon/index.php', $params);
+     }
+ 
++    /**
++     * Is an alternative addons repository configured?
++     *
++     * Direct installation from the official Moodle plugins directory is no longer available, so the
++     * install from repository feature only makes sense with an alternative repository.
++     *
++     * @return bool
++     */
++    public function has_alternative_addons_repository(): bool {
++        global $CFG;
++
++        return !empty($CFG->config_php_settings['alternativeaddonsrepositoryurl']);
++    }
++
+     /**
+      * Returns URL to the repository that addons can be searched in and installed from
+      *
+diff --git a/public/admin/tool/installaddon/lang/en/tool_installaddon.php b/public/admin/tool/installaddon/lang/en/tool_installaddon.php
+index c104eb0b723..850919a346b 100644
+--- a/public/admin/tool/installaddon/lang/en/tool_installaddon.php
++++ b/public/admin/tool/installaddon/lang/en/tool_installaddon.php
+@@ -34,6 +34,7 @@ $string['installaddon'] = 'Install plugin!';
+ $string['installaddons'] = 'Install plugins';
+ $string['installfromrepo'] = 'Install plugins from the Moodle plugins directory';
+ $string['installfromrepo_help'] = 'You will be redirected to the Moodle plugins directory to search for and install a plugin. Note that your site full name, URL and Moodle version will be sent as well, to make the installation process easier for you.';
++$string['installfromrepounavailable'] = 'Installing plugins directly from the Moodle plugins directory is currently unavailable. Please download the plugin ZIP package and install it using the upload option below.';
+ $string['installfromzip'] = 'Install plugin from ZIP file';
+ $string['installfromzip_help'] = 'An alternative to installing a plugin directly from the Moodle plugins directory is to upload a ZIP package of the plugin. The ZIP package should have the same structure as a package downloaded from the Moodle plugins directory.';
+ $string['installfromzipfile'] = 'ZIP package';
+diff --git a/public/admin/tool/installaddon/renderer.php b/public/admin/tool/installaddon/renderer.php
+index e69aa6789d5..ab3f4435cd7 100644
+--- a/public/admin/tool/installaddon/renderer.php
++++ b/public/admin/tool/installaddon/renderer.php
+@@ -205,6 +205,13 @@ class tool_installaddon_renderer extends plugin_renderer_base {
+      */
+     protected function index_page_repository() {
+ 
++        if (!$this->installer->has_alternative_addons_repository()) {
++            return $this->box(
++                $this->output->notification(get_string('installfromrepounavailable', 'tool_installaddon'), 'info', false),
++                'generalbox', 'installfromrepobox'
++            );
++        }
++
+         $url = $this->installer->get_addons_repository_url();
+ 
+         $out = $this->box(

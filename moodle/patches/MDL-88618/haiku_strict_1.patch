@@ -1,0 +1,131 @@
+diff --git a/public/lib/editor/tiny/classes/manager.php b/public/lib/editor/tiny/classes/manager.php
+index 57f10a42bb7..4565ff5d0f1 100644
+--- a/public/lib/editor/tiny/classes/manager.php
++++ b/public/lib/editor/tiny/classes/manager.php
+@@ -275,6 +275,18 @@ class manager {
+         // The following list is defined at:
+         // https://www.tiny.cloud/docs/advanced/available-toolbar-buttons/#thecoretoolbarbuttons.
+         return [
++            'accordion' => [
++                'buttons' => [
++                    'accordion',
++                ],
++                'menuitems' => [
++                    'accordion' => 'insert',
++                ],
++            ],
++            'advlist' => [
++                // The advlist plugin extends the existing bullist and numlist buttons, so it adds no buttons of its own.
++                // It depends on the lists plugin, which is defined above and is not disabled.
++            ],
+             'anchor' => [
+                 'buttons' => [
+                     'anchor',
+diff --git a/public/lib/editor/tiny/tests/manager_test.php b/public/lib/editor/tiny/tests/manager_test.php
+new file mode 100644
+index 00000000000..c2ee939fcb4
+--- /dev/null
++++ b/public/lib/editor/tiny/tests/manager_test.php
+@@ -0,0 +1,84 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace editor_tiny;
++
++/**
++ * Unit tests for the editor_tiny manager class.
++ *
++ * @package    editor_tiny
++ * @category   test
++ * @copyright  2026 Moodle Developers
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ * @covers     \editor_tiny\manager
++ */
++final class manager_test extends \advanced_testcase {
++
++    /**
++     * Get the shipped plugins from the manager, exposing the protected method.
++     *
++     * @return array
++     */
++    private function get_shipped_plugins(): array {
++        $manager = new class extends manager {
++            /**
++             * Expose the protected method for testing.
++             *
++             * @return array
++             */
++            public function get_shipped_plugins_for_test(): array {
++                return $this->get_shipped_plugins();
++            }
++        };
++
++        return $manager->get_shipped_plugins_for_test();
++    }
++
++    /**
++     * Test that the accordion and advlist plugins are included in the enabled shipped plugins.
++     */
++    public function test_accordion_and_advlist_are_enabled(): void {
++        $this->resetAfterTest();
++
++        $plugins = $this->get_shipped_plugins();
++
++        $this->assertArrayHasKey('accordion', $plugins);
++        $this->assertArrayHasKey('advlist', $plugins);
++    }
++
++    /**
++     * Test that the accordion plugin is accessible from the Insert menu.
++     */
++    public function test_accordion_is_in_insert_menu(): void {
++        $this->resetAfterTest();
++
++        $plugins = $this->get_shipped_plugins();
++
++        $this->assertSame(['accordion' => 'insert'], $plugins['accordion']['menuitems']);
++        $this->assertContains('accordion', $plugins['accordion']['buttons']);
++    }
++
++    /**
++     * Test that the lists plugin required by advlist is enabled.
++     */
++    public function test_lists_plugin_is_enabled_for_advlist(): void {
++        $this->resetAfterTest();
++
++        $plugins = $this->get_shipped_plugins();
++
++        $this->assertArrayHasKey('lists', $plugins);
++    }
++}
+diff --git a/public/lib/weblib.php b/public/lib/weblib.php
+index 225779a9cd8..b82c57f6732 100644
+--- a/public/lib/weblib.php
++++ b/public/lib/weblib.php
+@@ -1151,6 +1151,13 @@ function purify_html($text, $options = array()) {
+             $def->addElement('bdi', 'Inline', 'Flow', 'Common');
+             $def->addAttribute('span', 'dir', 'Enum#ltr,rtl,auto');
+ 
++            // Accordion plugin markup (TinyMCE accordion plugin).
++            // Without these definitions the purifier strips the accordion structure on display.
++            $def->addElement('details', 'Block', 'Custom: (summary?,(Flow|#PCDATA)*)', 'Common', [
++                'open' => 'Bool',
++            ]);
++            $def->addElement('summary', false, 'Inline', 'Common');
++
+             // Media elements.
+             // https://html.spec.whatwg.org/#the-video-element
+             $def->addElement('video', 'Inline', 'Optional: #PCDATA | Flow | source | track', 'Common', [

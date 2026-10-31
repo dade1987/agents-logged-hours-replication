@@ -1,0 +1,354 @@
+Logging: /home/user/mdb_src/mysql-test/mariadb-test-run.pl  --vardir=/home/mtr/var/t --force --parallel=4 --retry=0 main.spatial_utility_function_simplify
+VS config: 
+vardir: /home/mtr/var/t
+Removing old var directory...
+Creating var directory '/home/mtr/var/t'...
+Checking supported features...
+MariaDB Version 12.3.3-MariaDB-debug
+ - SSL connections supported
+ - binaries are debug compiled
+Collecting tests...
+Installing system database...
+
+==============================================================================
+
+TEST                                  WORKER RESULT   TIME (ms) or COMMENT
+--------------------------------------------------------------------------
+
+worker[01] Using MTR_BUILD_THREAD 300, with reserved ports 19000..19029
+worker[02] Using MTR_BUILD_THREAD 301, with reserved ports 19030..19059
+worker[03] Using MTR_BUILD_THREAD 302, with reserved ports 19060..19089
+worker[04] Using MTR_BUILD_THREAD 303, with reserved ports 19090..19119
+main.spatial_utility_function_simplify   w1 [ fail ]
+        Test ended at 2026-10-28 14:08:56
+
+CURRENT_TEST: main.spatial_utility_function_simplify
+mysqltest: At line 512: query 'SELECT COLUMN_GET(COLUMN_CREATE('a', 1), ST_SIMPLIFY(ST_GEOMFROMTEXT('GEOMETRYCOLLECTION(MULTILINESTRING((0 0,5 5,0 10),(0 0,-5 5,0 10)))'), 5) AS CHAR) IS NULL AS ok' failed: <Unknown> (2013): Lost connection to server during query
+
+The result from queries just before the failure was:
+< snip >
+SELECT ST_ASTEXT(ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((0 0,0 10,10 10,10 0,0 0,0 0,0 0,0 0))'), a));
+ERROR 42S22: Unknown column 'a' in 'SELECT'
+#
+# MDEV-39911 Crash in ST_SIMPLIFY of a collection geometry
+#
+# ST_SIMPLIFY of a collection reserved less space than the WKB header it
+# writes, so the element count overran a small buffer.  CONCAT_WS
+# builds its separator in a ten byte stack buffer and COLUMN_GET builds its
+# column name in an eleven byte stack buffer.  Each query below crashed
+# before the fix.
+SELECT CONCAT_WS(ST_SIMPLIFY(ST_GEOMFROMTEXT('MULTILINESTRING((0 0,5 5,0 10),(0 0,-5 5,0 10))'), 5), 7, 5) IS NOT NULL AS ok;
+ok
+1
+SELECT CONCAT_WS(ST_SIMPLIFY(ST_GEOMFROMTEXT('POLYGON((0 0,10 0,15 5,10 10,0 10,-5 5,0 0))'), 0.0001), 7, 5) IS NOT NULL AS ok;
+ok
+1
+SELECT CONCAT_WS(ST_SIMPLIFY(ST_GEOMFROMTEXT('MULTIPOLYGON(((0 0,10 0,15 5,10 10,0 10,-5 5,0 0)))'), 0.0001), 7, 5) IS NOT NULL AS ok;
+ok
+1
+SELECT COLUMN_GET(COLUMN_CREATE('a', 1), ST_SIMPLIFY(ST_GEOMFROMTEXT('GEOMETRYCOLLECTION(MULTILINESTRING((0 0,5 5,0 10),(0 0,-5 5,0 10)))'), 5) AS CHAR) IS NULL AS ok;
+
+More results from queries before failure can be found in /home/mtr/var/t/1/log/spatial_utility_function_simplify.log
+
+
+Server [mysqld.1 - pid: 6959, winpid: 6959, exit: 256] failed during test run
+Server log from this test:
+----------SERVER LOG START-----------
+$ /home/user/mdb_build_dbg/sql/mariadbd --defaults-group-suffix=.1 --defaults-file=/home/mtr/var/t/1/my.cnf --log-output=file --core-file --loose-debug-sync-timeout=300
+2026-10-28 14:08:34 0 [Warning] Could not increase number of max_open_files to more than 1024 (request: 32186)
+2026-10-28 14:08:34 0 [Warning] Changed limits: max_open_files: 1024  max_connections: 151 (was 151)  table_cache: 421 (was 2000)
+2026-10-28 14:08:34 0 [Note] Starting MariaDB 12.3.3-MariaDB-debug-log source revision deed18f42d59193afbc8f64ebd8fdcff4cafd9e1 server_uid NzS151uu8ZVD58aPAFsNZrW2jyI= as process 6960
+2026-10-28 14:08:34 0 [Note] Plugin 'partition' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'InnoDB' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'SEQUENCE' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'INNODB_FT_CONFIG' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'INNODB_SYS_TABLESTATS' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'INNODB_CMP_PER_INDEX' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'INNODB_FT_DELETED' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'INNODB_CMP' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'THREAD_POOL_WAITS' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'INNODB_CMP_RESET' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'THREAD_POOL_QUEUES' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'INNODB_SYS_FIELDS' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'INNODB_BUFFER_PAGE_LRU' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'FEEDBACK' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'INNODB_FT_INDEX_TABLE' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'INNODB_CMPMEM' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'THREAD_POOL_GROUPS' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'INNODB_CMP_PER_INDEX_RESET' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'INNODB_SYS_FOREIGN_COLS' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'INNODB_FT_INDEX_CACHE' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'INNODB_BUFFER_POOL_STATS' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'INNODB_FT_BEING_DELETED' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'INNODB_SYS_FOREIGN' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'INNODB_CMPMEM_RESET' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'INNODB_FT_DEFAULT_STOPWORD' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'INNODB_SYS_TABLES' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'INNODB_SYS_COLUMNS' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'INNODB_SYS_TABLESPACES' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'INNODB_SYS_INDEXES' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'INNODB_SYS_VIRTUAL' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'user_variables' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'INNODB_TABLESPACES_ENCRYPTION' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'THREAD_POOL_STATS' is disabled.
+2026-10-28 14:08:34 0 [Note] Plugin 'unix_socket' is disabled.
+2026-10-28 14:08:34 0 [Warning] /home/user/mdb_build_dbg/sql/mariadbd: unknown option '--loose-pam-debug'
+2026-10-28 14:08:34 0 [Warning] /home/user/mdb_build_dbg/sql/mariadbd: unknown option '--loose-aria'
+2026-10-28 14:08:34 0 [Note] Server socket created on IP: '127.0.0.1', port: '19000'.
+2026-10-28 14:08:34 0 [Note] mariadbd: Event Scheduler: Loaded 0 events
+2026-10-28 14:08:34 0 [Note] /home/user/mdb_build_dbg/sql/mariadbd: ready for connections.
+Version: '12.3.3-MariaDB-debug-log'  socket: '/home/mtr/var/t/tmp/1/mysqld.1.sock'  port: 19000  Source distribution
+mariadbd: /home/user/mdb_src/sql/sql_string.h:360: void Binary_string::q_append(uint32): Assertion `str_length + (uint32) (4) <= Alloced_length' failed.
+261028 14:08:34 [ERROR] /home/user/mdb_build_dbg/sql/mariadbd got signal 6 ;
+Sorry, we probably made a mistake, and this is a bug.
+
+Your assistance in bug reporting will enable us to fix this for the next release.
+To report this bug, see https://mariadb.com/docs/general-resources/community/community/bug-tracking/reporting-bugs about how to report
+a bug on https://jira.mariadb.org/.
+
+Please include the information from the server start above, to the end of the
+information below.
+
+Server version: 12.3.3-MariaDB-debug-log source revision: deed18f42d59193afbc8f64ebd8fdcff4cafd9e1
+
+The information page at https://mariadb.com/docs/server/reference/product-development/mariadb-fault-finding/how-to-produce-a-full-stack-trace-for-mariadbdcontains instructions to obtain a better version of the backtrace below.
+Following these instructions will help MariaDB developers provide a fix quicker.
+
+Attempting backtrace. Include this in the bug report.
+(note: Retrieving this information may fail)
+
+Thread pointer: 0x7fd640000dd0
+stack_bottom = 0x7fd65349e000 thread_stack 0x49000
+/home/user/mdb_build_dbg/sql/mariadbd(my_print_stacktrace+0x44)[0x564ccee47b94]
+/home/user/mdb_build_dbg/sql/mariadbd(handle_fatal_signal+0x260)[0x564cce3c96c1]
+libc_sigaction.c:0(__restore_rt)[0x7fd65dc45330]
+nptl/pthread_kill.c:44(__pthread_kill_implementation)[0x7fd65dc9ec0c]
+posix/raise.c:27(__GI_raise)[0x7fd65dc4527e]
+stdlib/abort.c:81(__GI_abort)[0x7fd65dc288ff]
+intl/loadmsgcat.c:1177(_nl_load_domain)[0x7fd65dc2881b]
+/lib/x86_64-linux-gnu/libc.so.6(+0x3b517)[0x7fd65dc3b517]
+sql/sql_string.h:361(Binary_string::q_append(unsigned int))[0x564cce4ac0b4]
+sql/spatial.cc:4714(Gis_geometry_collection::simplify(String*, double) const)[0x564cce6156f8]
+sql/item_geofunc.cc:2330(Item_func_simplify::val_str(String*))[0x564cce4a59d0]
+sql/item_strfunc.cc:5355(Item_dyncol_get::get_dyn_value(THD*, st_dynamic_column_value*, String*))[0x564cce4d327b]
+sql/item_strfunc.cc:5421(Item_dyncol_get::val_str(String*))[0x564cce4d3640]
+sql/item_timefunc.cc:4000(Item_char_typecast::val_str_generic(String*))[0x564cce548bf9]
+sql/item_timefunc.cc:4118(Item_char_typecast_func_handler::val_str(Item_handled_func*, String*) const)[0x564cce556a0e]
+sql/item_func.h:898(Item_handled_func::val_str(String*))[0x564cce27267d]
+sql/sql_type.cc:4367(Type_handler_string_result::Item_update_null_value(Item*) const)[0x564cce257923]
+sql/item.h:2172(Item::update_null_value())[0x564ccdcf758a]
+sql/item_func.h:249(Item_func::is_null())[0x564ccdd44e2b]
+sql/item_cmpfunc.cc:5884(Item_func_isnull::val_bool())[0x564cce43cc77]
+sql/item_cmpfunc.h:245(Item_bool_func::val_int())[0x564ccdd4590c]
+sql/sql_type.cc:7646(Type_handler::Item_send_long(Item*, Protocol*, st_value*) const)[0x564cce25fe1d]
+sql/sql_type.h:5988(Type_handler_long::Item_send(Item*, Protocol*, st_value*) const)[0x564cce26eeea]
+sql/item.h:1237(Item::send(Protocol*, st_value*))[0x564ccdcf6870]
+sql/protocol.cc:1358(Protocol::send_result_set_row(List<Item>*))[0x564ccdd5e7bf]
+sql/sql_class.cc:3411(select_send::send_data(List<Item>&))[0x564ccde42db5]
+sql/sql_class.cc:3309(select_result_sink::send_data_with_check(List<Item>&, st_select_lex_unit*, unsigned long long))[0x564ccde42a9c]
+sql/sql_select.cc:4994(JOIN::exec_inner())[0x564ccdf6a2fa]
+sql/sql_select.cc:4913(JOIN::exec())[0x564ccdf69bc6]
+sql/sql_select.cc:5439(mysql_select(THD*, TABLE_LIST*, List<Item>&, Item*, unsigned int, st_order*, st_order*, Item*, st_order*, unsigned long long, select_result*, st_select_lex_unit*, st_select_lex*))[0x564ccdf6b5b3]
+sql/sql_select.cc:636(handle_select(THD*, LEX*, select_result*, unsigned long long))[0x564ccdf58f82]
+sql/sql_parse.cc:6219(execute_sqlcom_select(THD*, TABLE_LIST*))[0x564ccdeeeeeb]
+sql/sql_parse.cc:3992(mysql_execute_command(THD*, bool))[0x564ccdee848f]
+sql/sql_parse.cc:7947(mysql_parse(THD*, char*, unsigned int, Parser_state*))[0x564ccdef35af]
+sql/sql_parse.cc:1905(dispatch_command(enum_server_command, THD*, char*, unsigned int, bool))[0x564ccdee241c]
+sql/sql_parse.cc:1437(do_command(THD*, bool))[0x564ccdee115f]
+sql/sql_connect.cc:1510(do_handle_one_connection(CONNECT*, bool))[0x564cce12730f]
+sql/sql_connect.cc:1424(handle_one_connection)[0x564cce12709b]
+perfschema/pfs.cc:2200(pfs_spawn_thread)[0x564cce78e9d6]
+nptl/pthread_create.c:447(start_thread)[0x7fd65dc9cb84]
+x86_64/clone3.S:80(clone3)[0x7fd65dd29ecc]
+
+Connection ID (thread ID): 4
+Status: NOT_KILLED
+Query (0x7fd640017fe0): SELECT COLUMN_GET(COLUMN_CREATE('a', 1), ST_SIMPLIFY(ST_GEOMFROMTEXT('GEOMETRYCOLLECTION(MULTILINESTRING((0 0,5 5,0 10),(0 0,-5 5,0 10)))'), 5) AS CHAR) IS NULL AS ok
+
+Optimizer switch: index_merge=on,index_merge_union=on,index_merge_sort_union=on,index_merge_intersection=on,index_merge_sort_intersection=off,index_condition_pushdown=on,derived_merge=on,derived_with_keys=on,firstmatch=on,loosescan=on,duplicateweedout=on,materialization=on,in_to_exists=on,semijoin=on,partial_match_rowid_merge=on,partial_match_table_scan=on,subquery_cache=on,mrr=off,mrr_cost_based=off,mrr_sort_keys=off,outer_join_with_cache=on,semijoin_with_cache=on,join_cache_incremental=on,join_cache_hashed=on,join_cache_bka=on,optimize_join_buffer_size=on,table_elimination=on,extended_keys=on,exists_to_in=on,orderby_uses_equalities=on,condition_pushdown_for_derived=on,split_materialized=on,condition_pushdown_for_subquery=on,rowid_filter=on,condition_pushdown_from_having=on,not_null_range_scan=off,hash_join_cardinality=on,cset_narrowing=on,sargable_casefold=on,reorder_outer_joins=off
+
+Writing a core file...
+Working directory at /home/mtr/var/t/1/mysqld.1/data
+Resource Limits (excludes unlimited resources):
+Limit                     Soft Limit           Hard Limit           Units     
+Max stack size            8388608              unlimited            bytes     
+Max processes             64279                64279                processes 
+Max open files            1024                 1024                 files     
+Max locked memory         8388608              8388608              bytes     
+Max pending signals       64279                64279                signals   
+Max msgqueue size         819200               819200               bytes     
+Max nice priority         0                    0                    
+Max realtime priority     0                    0                    
+Core pattern: core
+
+Kernel version: Linux version 6.18.44-fc-v180 (builder@sandboxing) (gcc (GCC) 15.3.0, GNU ld (GNU Binutils) 2.46) #1 SMP PREEMPT_DYNAMIC @0
+
+----------SERVER LOG END-------------
+
+
+ - found 'core' (0/5)
+Core generated by '/home/user/mdb_build_dbg/sql/mariadbd'
+Output from gdb follows. The first stack trace is from the failing thread.
+The following stack traces are from all threads (so the failing one is
+duplicated).
+--------------------------
+[New LWP 6968]
+[New LWP 6964]
+[New LWP 6961]
+[New LWP 6963]
+[New LWP 6962]
+[New LWP 6965]
+[New LWP 6960]
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+Core was generated by `/home/user/mdb_build_dbg/sql/mariadbd --defaults-group-suffix=.1 --defaults-fil'.
+Program terminated with signal SIGABRT, Aborted.
+#0  __pthread_kill_implementation (no_tid=0, signo=6, threadid=<optimized out>) at ./nptl/pthread_kill.c:44
+
+warning: 44	./nptl/pthread_kill.c: No such file or directory
+[Current thread is 1 (Thread 0x7fd65349d6c0 (LWP 6968))]
+
+Thread 7 (Thread 0x7fd65e9bc940 (LWP 6960)):
+#0  0x00007fd65dd1b79d in __GI___poll (fds=0x564cf39d7060, nfds=3, timeout=-1) at ../sysdeps/unix/sysv/linux/poll.c:29
+#1  0x0000564ccdceb5f3 in handle_connections_sockets () at /home/user/mdb_src/sql/mysqld.cc:6738
+#2  0x0000564ccdce9e43 in run_main_loop () at /home/user/mdb_src/sql/mysqld.cc:6012
+#3  0x0000564ccdceaaa1 in mysqld_main (argc=140, argv=0x564cf32148e0) at /home/user/mdb_src/sql/mysqld.cc:6438
+#4  0x0000564ccdcdcc6d in main (argc=6, argv=0x7ffec5bb7e28) at /home/user/mdb_src/sql/main.cc:34
+
+Thread 6 (Thread 0x7fd6534e86c0 (LWP 6965)):
+#0  0x00007fd65dc98e51 in __futex_abstimed_wait_common64 (private=22092, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x564ccfee15cc <COND_slave_deadlock_handler+44>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=22092, abstime=0x0, clockid=0, expected=0, futex_word=0x564ccfee15cc <COND_slave_deadlock_handler+44>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x564ccfee15cc <COND_slave_deadlock_handler+44>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007fd65dc9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x564ccfee4b08 <LOCK_slave_deadlock_handler+40>, cond=0x564ccfee15a0 <COND_slave_deadlock_handler>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x564ccfee15a0 <COND_slave_deadlock_handler>, mutex=0x564ccfee4b08 <LOCK_slave_deadlock_handler+40>) at ./nptl/pthread_cond_wait.c:627
+#5  0x0000564ccee4c104 in safe_cond_wait (cond=0x564ccfee15a0 <COND_slave_deadlock_handler>, mp=0x564ccfee4ae0 <LOCK_slave_deadlock_handler>, file=0x564ccf5469e8 "/home/user/mdb_src/mysys/my_thr_init.c", line=580) at /home/user/mdb_src/mysys/thr_mutex.c:489
+#6  0x0000564ccee460e3 in psi_cond_wait (that=0x564ccfee15a0 <COND_slave_deadlock_handler>, mutex=0x564ccfee4ae0 <LOCK_slave_deadlock_handler>, file=0x564ccef7a318 "/home/user/mdb_src/sql/slave.cc", line=500) at /home/user/mdb_src/mysys/my_thr_init.c:580
+#7  0x0000564ccdd7c869 in inline_mysql_cond_wait (that=0x564ccfee15a0 <COND_slave_deadlock_handler>, mutex=0x564ccfee4ae0 <LOCK_slave_deadlock_handler>, src_file=0x564ccef7a318 "/home/user/mdb_src/sql/slave.cc", src_line=500) at /home/user/mdb_src/include/mysql/psi/mysql_thread.h:1070
+#8  0x0000564ccdd7e03a in slave_deadlock_handler (arg=0x0) at /home/user/mdb_src/sql/slave.cc:500
+#9  0x0000564cce78e9d6 in pfs_spawn_thread (arg=0x564cf3a1d9b0) at /home/user/mdb_src/storage/perfschema/pfs.cc:2198
+#10 0x00007fd65dc9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#11 0x00007fd65dd29ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 5 (Thread 0x7fd653d346c0 (LWP 6962)):
+#0  0x00007fd65dc98e51 in __futex_abstimed_wait_common64 (private=22092, cancel=true, abstime=0x7fd653d33ba0, op=393, expected=0, futex_word=0x564cd0728028 <COND_checkpoint+40>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=22092, abstime=0x7fd653d33ba0, clockid=0, expected=0, futex_word=0x564cd0728028 <COND_checkpoint+40>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x564cd0728028 <COND_checkpoint+40>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x7fd653d33ba0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007fd65dc9bd6e in __pthread_cond_wait_common (abstime=0x7fd653d33ba0, clockid=0, mutex=0x564cd0727f68 <LOCK_checkpoint+40>, cond=0x564cd0728000 <COND_checkpoint>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_timedwait64 (cond=0x564cd0728000 <COND_checkpoint>, mutex=0x564cd0727f68 <LOCK_checkpoint+40>, abstime=0x7fd653d33ba0) at ./nptl/pthread_cond_wait.c:652
+#5  0x0000564ccee4c4c9 in safe_cond_timedwait (cond=0x564cd0728000 <COND_checkpoint>, mp=0x564cd0727f40 <LOCK_checkpoint>, abstime=0x7fd653d33ba0, file=0x564ccf5469e8 "/home/user/mdb_src/mysys/my_thr_init.c", line=593) at /home/user/mdb_src/mysys/thr_mutex.c:543
+#6  0x0000564ccee46196 in psi_cond_timedwait (that=0x564cd0728000 <COND_checkpoint>, mutex=0x564cd0727f40 <LOCK_checkpoint>, abstime=0x7fd653d33ba0, file=0x564ccf2cdd08 "/home/user/mdb_src/storage/maria/ma_servicethread.c", line=115) at /home/user/mdb_src/mysys/my_thr_init.c:593
+#7  0x0000564cce6d4db4 in inline_mysql_cond_timedwait (that=0x564cd0728000 <COND_checkpoint>, mutex=0x564cd0727f40 <LOCK_checkpoint>, abstime=0x7fd653d33ba0, src_file=0x564ccf2cdd08 "/home/user/mdb_src/storage/maria/ma_servicethread.c", src_line=115) at /home/user/mdb_src/include/mysql/psi/mysql_thread.h:1086
+#8  0x0000564cce6d5328 in my_service_thread_sleep (control=0x564ccfccc520 <checkpoint_control>, sleep_time=29000000000) at /home/user/mdb_src/storage/maria/ma_servicethread.c:115
+#9  0x0000564cce6c868d in ma_checkpoint_background (arg=0x1e) at /home/user/mdb_src/storage/maria/ma_checkpoint.c:765
+#10 0x0000564cce78e9d6 in pfs_spawn_thread (arg=0x564cf364ae50) at /home/user/mdb_src/storage/perfschema/pfs.cc:2198
+#11 0x00007fd65dc9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#12 0x00007fd65dd29ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 4 (Thread 0x7fd65804d6c0 (LWP 6963)):
+#0  0x00007fd65dc98e51 in __futex_abstimed_wait_common64 (private=32726, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x564ccfeec368 <COND_manager+40>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=32726, abstime=0x0, clockid=0, expected=0, futex_word=0x564ccfeec368 <COND_manager+40>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x564ccfeec368 <COND_manager+40>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007fd65dc9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x564ccfeec2a8 <LOCK_manager+40>, cond=0x564ccfeec340 <COND_manager>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x564ccfeec340 <COND_manager>, mutex=0x564ccfeec2a8 <LOCK_manager+40>) at ./nptl/pthread_cond_wait.c:627
+#5  0x0000564ccee4c104 in safe_cond_wait (cond=0x564ccfeec340 <COND_manager>, mp=0x564ccfeec280 <LOCK_manager>, file=0x564ccf5469e8 "/home/user/mdb_src/mysys/my_thr_init.c", line=580) at /home/user/mdb_src/mysys/thr_mutex.c:489
+#6  0x0000564ccee460e3 in psi_cond_wait (that=0x564ccfeec340 <COND_manager>, mutex=0x564ccfeec280 <LOCK_manager>, file=0x564ccefb9f28 "/home/user/mdb_src/sql/sql_manager.cc", line=110) at /home/user/mdb_src/mysys/my_thr_init.c:580
+#7  0x0000564ccded7115 in inline_mysql_cond_wait (that=0x564ccfeec340 <COND_manager>, mutex=0x564ccfeec280 <LOCK_manager>, src_file=0x564ccefb9f28 "/home/user/mdb_src/sql/sql_manager.cc", src_line=110) at /home/user/mdb_src/include/mysql/psi/mysql_thread.h:1070
+#8  0x0000564ccded7607 in handle_manager (arg=0x0) at /home/user/mdb_src/sql/sql_manager.cc:110
+#9  0x0000564cce78e9d6 in pfs_spawn_thread (arg=0x564cf393e9c0) at /home/user/mdb_src/storage/perfschema/pfs.cc:2198
+#10 0x00007fd65dc9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#11 0x00007fd65dd29ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 3 (Thread 0x7fd65e9296c0 (LWP 6961)):
+#0  0x00007fd65dc98e51 in __futex_abstimed_wait_common64 (private=22092, cancel=true, abstime=0x7fd65e928c60, op=393, expected=0, futex_word=0x564cd07be488 <COND_timer+40>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=22092, abstime=0x7fd65e928c60, clockid=0, expected=0, futex_word=0x564cd07be488 <COND_timer+40>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x564cd07be488 <COND_timer+40>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x7fd65e928c60, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007fd65dc9bd6e in __pthread_cond_wait_common (abstime=0x7fd65e928c60, clockid=0, mutex=0x564cd07be3c8 <LOCK_timer+40>, cond=0x564cd07be460 <COND_timer>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_timedwait64 (cond=0x564cd07be460 <COND_timer>, mutex=0x564cd07be3c8 <LOCK_timer+40>, abstime=0x7fd65e928c60) at ./nptl/pthread_cond_wait.c:652
+#5  0x0000564ccee4c4c9 in safe_cond_timedwait (cond=0x564cd07be460 <COND_timer>, mp=0x564cd07be3a0 <LOCK_timer>, abstime=0x7fd65e928c60, file=0x564ccf5469e8 "/home/user/mdb_src/mysys/my_thr_init.c", line=593) at /home/user/mdb_src/mysys/thr_mutex.c:543
+#6  0x0000564ccee46196 in psi_cond_timedwait (that=0x564cd07be460 <COND_timer>, mutex=0x564cd07be3a0 <LOCK_timer>, abstime=0x7fd65e928c60, file=0x564ccf547988 "/home/user/mdb_src/mysys/thr_timer.c", line=330) at /home/user/mdb_src/mysys/my_thr_init.c:593
+#7  0x0000564ccee4d596 in inline_mysql_cond_timedwait (that=0x564cd07be460 <COND_timer>, mutex=0x564cd07be3a0 <LOCK_timer>, abstime=0x7fd65e928c60, src_file=0x564ccf547988 "/home/user/mdb_src/mysys/thr_timer.c", src_line=330) at /home/user/mdb_src/include/mysql/psi/mysql_thread.h:1086
+#8  0x0000564ccee4e36f in timer_handler (arg=0x0) at /home/user/mdb_src/mysys/thr_timer.c:330
+#9  0x0000564cce78e9d6 in pfs_spawn_thread (arg=0x564cf330a0a0) at /home/user/mdb_src/storage/perfschema/pfs.cc:2198
+#10 0x00007fd65dc9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#11 0x00007fd65dd29ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 2 (Thread 0x7fd6535336c0 (LWP 6964)):
+#0  0x00007fd65dc45fc8 in __GI___sigtimedwait (set=0x7fd653532bf0, info=0x7fd653532b30, timeout=0x0) at ../sysdeps/unix/sysv/linux/sigtimedwait.c:31
+#1  0x0000564ccdcdcd82 in my_sigwait (set=0x7fd653532bf0, sig=0x7fd653532bd8, code=0x7fd653532bdc) at /home/user/mdb_src/include/my_pthread.h:180
+#2  0x0000564ccdce39c6 in signal_hand () at /home/user/mdb_src/sql/mysqld.cc:3362
+#3  0x0000564cce78e9d6 in pfs_spawn_thread (arg=0x564cf39bc4c0) at /home/user/mdb_src/storage/perfschema/pfs.cc:2198
+#4  0x00007fd65dc9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#5  0x00007fd65dd29ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 1 (Thread 0x7fd65349d6c0 (LWP 6968)):
+#0  __pthread_kill_implementation (no_tid=0, signo=6, threadid=<optimized out>) at ./nptl/pthread_kill.c:44
+#1  __pthread_kill_internal (signo=6, threadid=<optimized out>) at ./nptl/pthread_kill.c:78
+#2  __GI___pthread_kill (threadid=<optimized out>, signo=6) at ./nptl/pthread_kill.c:89
+#3  0x0000564ccee47c8d in my_write_core (sig=6) at /home/user/mdb_src/mysys/stacktrace.c:424
+#4  0x0000564cce3c9933 in handle_fatal_signal (sig=6) at /home/user/mdb_src/sql/signal_handler.cc:298
+#5  <signal handler called>
+#6  __pthread_kill_implementation (no_tid=0, signo=6, threadid=<optimized out>) at ./nptl/pthread_kill.c:44
+#7  __pthread_kill_internal (signo=6, threadid=<optimized out>) at ./nptl/pthread_kill.c:78
+#8  __GI___pthread_kill (threadid=<optimized out>, signo=signo@entry=6) at ./nptl/pthread_kill.c:89
+#9  0x00007fd65dc4527e in __GI_raise (sig=sig@entry=6) at ../sysdeps/posix/raise.c:26
+#10 0x00007fd65dc288ff in __GI_abort () at ./stdlib/abort.c:79
+#11 0x00007fd65dc2881b in __assert_fail_base (fmt=0x7fd65ddd1208 "%s%s%s:%u: %s%sAssertion `%s' failed.\n%n", assertion=assertion@entry=0x564ccf218248 "str_length + (uint32) (4) <= Alloced_length", file=file@entry=0x564ccf2181f8 "/home/user/mdb_src/sql/sql_string.h", line=line@entry=360, function=function@entry=0x564ccf218278 "void Binary_string::q_append(uint32)") at ./assert/assert.c:96
+#12 0x00007fd65dc3b517 in __assert_fail (assertion=0x564ccf218248 "str_length + (uint32) (4) <= Alloced_length", file=0x564ccf2181f8 "/home/user/mdb_src/sql/sql_string.h", line=360, function=0x564ccf218278 "void Binary_string::q_append(uint32)") at ./assert/assert.c:105
+#13 0x0000564cce4ac0b4 in Binary_string::q_append (this=0x7fd65349a508, n=1) at /home/user/mdb_src/sql/sql_string.h:360
+#14 0x0000564cce6156f8 in Gis_geometry_collection::simplify (this=0x7fd65349a440, result=0x7fd65349a500, max_distance=5) at /home/user/mdb_src/sql/spatial.cc:4712
+#15 0x0000564cce4a59d0 in Item_func_simplify::val_str (this=0x7fd640018ed0, str=0x7fd65349a500) at /home/user/mdb_src/sql/item_geofunc.cc:2330
+#16 0x0000564cce4d327b in Item_dyncol_get::get_dyn_value (this=0x7fd6400190e0, thd=0x7fd640000dd0, val=0x7fd65349a5a0, tmp=0x7fd65349a580) at /home/user/mdb_src/sql/item_strfunc.cc:5355
+#17 0x0000564cce4d3640 in Item_dyncol_get::val_str (this=0x7fd6400190e0, str_result=0x7fd65349a730) at /home/user/mdb_src/sql/item_strfunc.cc:5421
+#18 0x0000564cce548bf9 in Item_char_typecast::val_str_generic (this=0x7fd6400191a0, str=0x7fd65349a730) at /home/user/mdb_src/sql/item_timefunc.cc:4000
+#19 0x0000564cce556a0e in Item_char_typecast_func_handler::val_str (this=0x564ccfcc45b0 <item_char_typecast_func_handler>, item=0x7fd6400191a0, to=0x7fd65349a730) at /home/user/mdb_src/sql/item_timefunc.cc:4117
+#20 0x0000564cce27267d in Item_handled_func::val_str (this=0x7fd6400191a0, to=0x7fd65349a730) at /home/user/mdb_src/sql/item_func.h:897
+#21 0x0000564cce257923 in Type_handler_string_result::Item_update_null_value (this=0x564ccff1c120 <type_handler_long_blob>, item=0x7fd6400191a0) at /home/user/mdb_src/sql/sql_type.cc:4366
+#22 0x0000564ccdcf758a in Item::update_null_value (this=0x7fd6400191a0) at /home/user/mdb_src/sql/item.h:2172
+#23 0x0000564ccdd44e2b in Item_func::is_null (this=0x7fd6400191a0) at /home/user/mdb_src/sql/item_func.h:248
+#24 0x0000564cce43cc77 in Item_func_isnull::val_bool (this=0x7fd6400192b0) at /home/user/mdb_src/sql/item_cmpfunc.cc:5884
+#25 0x0000564ccdd4590c in Item_bool_func::val_int (this=0x7fd6400192b0) at /home/user/mdb_src/sql/item_cmpfunc.h:245
+#26 0x0000564cce25fe1d in Type_handler::Item_send_long (this=0x564ccff1bc80 <type_handler_bool>, item=0x7fd6400192b0, protocol=0x7fd6400014b0, buf=0x7fd65349ac00) at /home/user/mdb_src/sql/sql_type.cc:7646
+#27 0x0000564cce26eeea in Type_handler_long::Item_send (this=0x564ccff1bc80 <type_handler_bool>, item=0x7fd6400192b0, protocol=0x7fd6400014b0, buf=0x7fd65349ac00) at /home/user/mdb_src/sql/sql_type.h:5987
+#28 0x0000564ccdcf6870 in Item::send (this=0x7fd6400192b0, protocol=0x7fd6400014b0, buffer=0x7fd65349ac00) at /home/user/mdb_src/sql/item.h:1236
+#29 0x0000564ccdd5e7bf in Protocol::send_result_set_row (this=0x7fd6400014b0, row_items=0x7fd640018448) at /home/user/mdb_src/sql/protocol.cc:1358
+#30 0x0000564ccde42db5 in select_send::send_data (this=0x7fd640019cd0, items=...) at /home/user/mdb_src/sql/sql_class.cc:3411
+#31 0x0000564ccde42a9c in select_result_sink::send_data_with_check (this=0x7fd640019cd0, items=..., u=0x7fd6400054d0, sent=0) at /home/user/mdb_src/sql/sql_class.cc:3309
+#32 0x0000564ccdf6a2fa in JOIN::exec_inner (this=0x7fd640019d00) at /home/user/mdb_src/sql/sql_select.cc:4996
+#33 0x0000564ccdf69bc6 in JOIN::exec (this=0x7fd640019d00) at /home/user/mdb_src/sql/sql_select.cc:4913
+#34 0x0000564ccdf6b5b3 in mysql_select (thd=0x7fd640000dd0, tables=0x0, fields=..., conds=0x0, og_num=0, order=0x0, group=0x0, having=0x0, proc_param=0x0, select_options=2164525824, result=0x7fd640019cd0, unit=0x7fd6400054d0, select_lex=0x7fd640018190) at /home/user/mdb_src/sql/sql_select.cc:5439
+#35 0x0000564ccdf58f82 in handle_select (thd=0x7fd640000dd0, lex=0x7fd6400053f0, result=0x7fd640019cd0, setup_tables_done_option=0) at /home/user/mdb_src/sql/sql_select.cc:636
+#36 0x0000564ccdeeeeeb in execute_sqlcom_select (thd=0x7fd640000dd0, all_tables=0x0) at /home/user/mdb_src/sql/sql_parse.cc:6219
+#37 0x0000564ccdee848f in mysql_execute_command (thd=0x7fd640000dd0, is_called_from_prepared_stmt=false) at /home/user/mdb_src/sql/sql_parse.cc:3992
+#38 0x0000564ccdef35af in mysql_parse (thd=0x7fd640000dd0, rawbuf=0x7fd640017fe0 "SELECT COLUMN_GET(COLUMN_CREATE('a', 1), ST_SIMPLIFY(ST_GEOMFROMTEXT('GEOMETRYCOLLECTION(MULTILINESTRING((0 0,5 5,0 10),(0 0,-5 5,0 10)))'), 5) AS CHAR) IS NULL AS ok", length=166, parser_state=0x7fd65349c2a0) at /home/user/mdb_src/sql/sql_parse.cc:7947
+#39 0x0000564ccdee241c in dispatch_command (command=COM_QUERY, thd=0x7fd640000dd0, packet=0x7fd640250411 "", packet_length=166, blocking=true) at /home/user/mdb_src/sql/sql_parse.cc:1903
+#40 0x0000564ccdee115f in do_command (thd=0x7fd640000dd0, blocking=true) at /home/user/mdb_src/sql/sql_parse.cc:1437
+#41 0x0000564cce12730f in do_handle_one_connection (connect=0x564cf3ab2f10, put_in_cache=true) at /home/user/mdb_src/sql/sql_connect.cc:1510
+#42 0x0000564cce12709b in handle_one_connection (arg=0x564cf3a94d50) at /home/user/mdb_src/sql/sql_connect.cc:1422
+#43 0x0000564cce78e9d6 in pfs_spawn_thread (arg=0x564cf39d8470) at /home/user/mdb_src/storage/perfschema/pfs.cc:2198
+#44 0x00007fd65dc9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#45 0x00007fd65dd29ecc in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+ - saving '/home/mtr/var/t/1/log/main.spatial_utility_function_simplify/' to '/home/mtr/var/t/log/main.spatial_utility_function_simplify/'
+***Warnings generated in error logs during shutdown after running tests: main.spatial_utility_function_simplify
+
+mariadbd: /home/user/mdb_src/sql/sql_string.h:360: void Binary_string::q_append(uint32): Assertion `str_length + (uint32) (4) <= Alloced_length' failed.
+261028 14:08:34 [ERROR] /home/user/mdb_build_dbg/sql/mariadbd got signal 6 ;
+Attempting backtrace. Include this in the bug report.
+
+--------------------------------------------------------------------------
+The servers were restarted 0 times
+Spent 0.000 of 27 seconds executing testcases
+
+Completed: Failed 1/1 tests, 0.00% were successful.
+
+Failing test(s): main.spatial_utility_function_simplify
+
+The log files in var/log may give you some hint of what went wrong.
+
+If you want to report this error, MariaDB's bug tracker is found at
+https://jira.mariadb.org
+
+Errors/warnings were found in logfiles during server shutdown after running the
+following sequence(s) of tests:
+    main.spatial_utility_function_simplify
+mysql-test-run: *** ERROR: there were failing test cases

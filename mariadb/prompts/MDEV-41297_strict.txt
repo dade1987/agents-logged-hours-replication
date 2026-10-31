@@ -1,0 +1,86 @@
+You are a software engineer fixing an issue in MariaDB Server (C/C++). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot build MariaDB or run its test suite. Read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update mysql-test tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDEV-41297: Wrong result upon DISTINCT/GROUP BY/UNION on TEXT with empty and all-space values
+
+CLI Testcase:
+{code:sql}
+CREATE TABLE t1 (a TEXT);
+INSERT INTO t1 VALUES (''),('   ');
+SELECT COUNT(*) FROM (SELECT DISTINCT a FROM t1) AS d;
+SELECT COUNT(DISTINCT a) FROM t1;
+SELECT COUNT(*) FROM (SELECT a FROM t1 GROUP BY a) AS g;
+SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE LENGTH(a)=0 UNION SELECT a FROM t1 WHERE LENGTH(a)=3) AS u;
+{code}
+
+MTR Testcase:
+{code:sql}
+CREATE TABLE t1 (a TEXT);
+INSERT INTO t1 VALUES (''),('   ');
+--let $distinct= query_get_value(SELECT COUNT(*) AS c FROM (SELECT DISTINCT a FROM t1) AS d, c, 1)
+--let $count_distinct= query_get_value(SELECT COUNT(DISTINCT a) AS c FROM t1, c, 1)
+--let $group_by= query_get_value(SELECT COUNT(*) AS c FROM (SELECT a FROM t1 GROUP BY a) AS g, c, 1)
+--let $union= query_get_value(SELECT COUNT(*) AS c FROM (SELECT a FROM t1 WHERE LENGTH(a)=0 UNION SELECT a FROM t1 WHERE LENGTH(a)=3) AS u, c, 1)
+--echo DISTINCT $distinct, COUNT(DISTINCT) $count_distinct, GROUP BY $group_by, UNION $union
+if ($distinct != 1)
+{
+  --die An empty and an all-space TEXT value come back as two rows from DISTINCT. They are one value under a PAD SPACE collation.
+}
+if ($count_distinct != 1)
+{
+  --die An empty and an all-space TEXT value count as two values in COUNT(DISTINCT). They are one value under a PAD SPACE collation.
+}
+if ($group_by != 1)
+{
+  --die An empty and an all-space TEXT value form two groups in GROUP BY. They are one value under a PAD SPACE collation.
+}
+if ($union != 1)
+{
+  --die An empty and an all-space TEXT value come back as two rows from UNION. They are one value under a PAD SPACE collation.
+}
+DROP TABLE t1;
+{code}
+
+Leads to:
+
+{noformat:title=MDEV-38975 CS 13.1.0 5bfa1a2cdbeceea9ffa9952c7e75af9346298f6c (Optimized, Clang 22.1.8-20260622) Build 22/09/2026}
+COUNT(*)
+2
+COUNT(DISTINCT a)
+2
+COUNT(*)
+2
+COUNT(*)
+2
+{noformat}
+{noformat:title=preview-13.2-preview CS 13.2.0 c9f28ba0afec6d29e4688255dce8caaf7e91233d (Debug, Clang 22.1.8-20260622) Build 24/09/2026}
+COUNT(*)
+2
+COUNT(DISTINCT a)
+2
+COUNT(*)
+2
+COUNT(*)
+2
+{noformat}
+Versus 13.1:
+{noformat:title=CS 13.1.0 da18481158c81ca94689702073c3e04aad85a6a3 (Debug, Clang 22.1.8-20260622) Build 18/08/2026}
+13.1.0-dbg>SELECT COUNT(*) FROM (SELECT DISTINCT a FROM t1) AS d;
+|        1 |
+13.1.0-dbg>SELECT COUNT(DISTINCT a) FROM t1;
+|        1 |
+13.1.0-dbg>SELECT COUNT(*) FROM (SELECT a FROM t1 GROUP BY a) AS g;
+|        1 |
+13.1.0-dbg>SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE LENGTH(a)=0 UNION SELECT a FROM t1 WHERE LENGTH(a)=3) AS u;
+|        1 |
+{noformat}
+
+The expected count is 1 in each case. The empty value and the all-space value are equal under the PAD SPACE collation of the column: {{SELECT '' = '   '}} returns 1. With {{SET tmp_memory_table_size=0}} (Aria in place of MEMORY) the four queries return 1. The count is also 1 when the all-space value comes first: with the rows inserted as {{('   '),('')}}, the first three queries return 1, and the {{UNION}} returns 1 with its two branches swapped. A {{latin1}} column gives the same result as the default {{utf8mb4}} one.
+
+{{hp_write_blobs()}} stores a NULL chain pointer for an empty value, and {{hp_materialize_one_blob()}} returns that NULL for a zero-length value. {{hp_rec_key_cmp()}} and {{hp_key_cmp()}} then return 1 (different) before the collation compares the two values.

@@ -1,0 +1,48 @@
+diff --git a/plugin/server_audit/server_audit.c b/plugin/server_audit/server_audit.c
+index 5d37186a..524e9639 100644
+--- a/plugin/server_audit/server_audit.c
++++ b/plugin/server_audit/server_audit.c
+@@ -839,6 +839,14 @@ static struct connection_info *get_loc_info(MYSQL_THD thd)
+   return (struct connection_info *) THDVAR(thd, loc_info);
+   */
+   struct connection_info *ci= (struct connection_info *) THDVAR(thd, loc_info);
++  /*
++    The thread-local value can be NULL, e.g. if the session variables
++    of this THD were synced while the plugin was uninstalled (its
++    MEMALLOC string values are freed then), and the plugin was installed
++    again after that. Callers must handle the NULL result.
++  */
++  if (!ci)
++    return NULL;
+   if ((size_t) ci->user_length > sizeof(ci->user))
+   {
+     ci->user_length= 0;
+@@ -1874,6 +1882,9 @@ static void update_connection_info(MYSQL_THD thd, struct connection_info *cn,
+ {
+   *after_action= 0;
+ 
++  if (!cn)
++    return;
++
+   switch (event_class) {
+   case MYSQL_AUDIT_GENERAL_CLASS:
+   {
+@@ -2168,7 +2179,8 @@ void auditing(MYSQL_THD thd, unsigned int event_class, const void *ev)
+     {
+       const struct mysql_event_connection *event =
+         (const struct mysql_event_connection *) ev;
+-      change_connection(cn, event);
++      if (cn)
++        change_connection(cn, event);
+       break;
+     }
+     default:
+@@ -2631,7 +2643,7 @@ static void log_current_query(MYSQL_THD thd)
+   if (!thd)
+     return;
+   cn= get_loc_info(thd);
+-  if (!ci_needs_setup(cn) && cn->query_length)
++  if (cn && !ci_needs_setup(cn) && cn->query_length)
+   {
+     cn->log_always= 1;
+     log_statement_ex(cn, cn->query_time, thd_get_thread_id(thd),

@@ -1,0 +1,80 @@
+diff --git a/mysql-test/suite/heap/blob_pad_space_empty.result b/mysql-test/suite/heap/blob_pad_space_empty.result
+new file mode 100644
+index 00000000..5f6cf301
+--- /dev/null
++++ b/mysql-test/suite/heap/blob_pad_space_empty.result
+@@ -0,0 +1,20 @@
++#
++# MDEV-41297: an empty and an all-space TEXT value are equal under the
++# PAD SPACE collation, so they must form one value in HEAP internal
++# temporary tables (DISTINCT, GROUP BY, UNION, COUNT(DISTINCT)).
++#
++CREATE TABLE t1 (a TEXT);
++INSERT INTO t1 VALUES (''),('   ');
++SELECT COUNT(*) FROM (SELECT DISTINCT a FROM t1) AS d;
++COUNT(*)
++1
++SELECT COUNT(DISTINCT a) FROM t1;
++COUNT(DISTINCT a)
++1
++SELECT COUNT(*) FROM (SELECT a FROM t1 GROUP BY a) AS g;
++COUNT(*)
++1
++SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE LENGTH(a)=0 UNION SELECT a FROM t1 WHERE LENGTH(a)=3) AS u;
++COUNT(*)
++1
++DROP TABLE t1;
+diff --git a/mysql-test/suite/heap/blob_pad_space_empty.test b/mysql-test/suite/heap/blob_pad_space_empty.test
+new file mode 100644
+index 00000000..048f2235
+--- /dev/null
++++ b/mysql-test/suite/heap/blob_pad_space_empty.test
+@@ -0,0 +1,15 @@
++--echo #
++--echo # MDEV-41297: an empty and an all-space TEXT value are equal under the
++--echo # PAD SPACE collation, so they must form one value in HEAP internal
++--echo # temporary tables (DISTINCT, GROUP BY, UNION, COUNT(DISTINCT)).
++--echo #
++
++CREATE TABLE t1 (a TEXT);
++INSERT INTO t1 VALUES (''),('   ');
++
++SELECT COUNT(*) FROM (SELECT DISTINCT a FROM t1) AS d;
++SELECT COUNT(DISTINCT a) FROM t1;
++SELECT COUNT(*) FROM (SELECT a FROM t1 GROUP BY a) AS g;
++SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE LENGTH(a)=0 UNION SELECT a FROM t1 WHERE LENGTH(a)=3) AS u;
++
++DROP TABLE t1;
+diff --git a/storage/heap/hp_blob.c b/storage/heap/hp_blob.c
+index 3763b949..658d60f6 100644
+--- a/storage/heap/hp_blob.c
++++ b/storage/heap/hp_blob.c
+@@ -919,7 +919,8 @@ int hp_read_blobs(HP_INFO *info, uchar *record, const uchar *pos)
+   @param data_len  Total blob data length (from record's packlength bytes)
+ 
+   @return Pointer into info->blob_buff with contiguous blob data,
+-          or NULL on allocation failure.
++          an empty string for a zero-length value, or NULL on allocation
++          failure.
+ */
+ 
+ const uchar *hp_materialize_one_blob(HP_INFO *info,
+@@ -930,8 +931,16 @@ const uchar *hp_materialize_one_blob(HP_INFO *info,
+   uint visible= share->visible;
+   uint recbuffer= share->block.recbuffer;
+ 
+-  if (data_len == 0 || !chain)
+-    return chain;
++  /*
++    A zero-length value has no data to dereference, and its chain pointer is
++    NULL.  Return a valid empty buffer rather than NULL: NULL is the error
++    return, and comparing an empty value with a blank one must not fail.
++  */
++  if (data_len == 0)
++    return (const uchar*) "";
++
++  if (!chain)
++    return NULL;
+ 
+   if (hp_is_single_rec(chain, visible))
+     return chain;                         /* Case A: no header, data at offset 0 */

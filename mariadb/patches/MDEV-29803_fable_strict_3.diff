@@ -1,0 +1,170 @@
+diff --git a/client/mysqlbinlog.cc b/client/mysqlbinlog.cc
+index aaf75a4f..74188141 100644
+--- a/client/mysqlbinlog.cc
++++ b/client/mysqlbinlog.cc
+@@ -127,7 +127,7 @@ static my_bool print_row_count_used= 0, print_row_event_positions_used= 0;
+ static my_bool debug_info_flag, debug_check_flag;
+ static my_bool force_if_open_opt= 1;
+ static my_bool opt_raw_mode= 0, opt_stop_never= 0;
+-my_bool opt_gtid_strict_mode= true;
++my_bool opt_gtid_strict_mode= false;
+ static ulong opt_stop_never_slave_server_id= 0;
+ static my_bool opt_verify_binlog_checksum= 1;
+ static ulonglong offset = 0;
+@@ -1885,9 +1885,10 @@ static struct my_option my_options[] =
+   {"gtid-strict-mode", 0, "Process binlog according to gtid-strict-mode "
+    "specification. The start, stop positions are verified to satisfy  "
+    "start < stop comparison condition. Sequence numbers of any gtid domain "
+-   "must comprise monotically growing sequence",
++   "must comprise monotically growing sequence. Default is off, in which "
++   "case out of order GTIDs are reported as warnings only with -vvv",
+    &opt_gtid_strict_mode, &opt_gtid_strict_mode, 0,
+-   GET_BOOL, NO_ARG, 1, 0, 0, 0, 0, 0},
++   GET_BOOL, NO_ARG, 0, 0, 0, 0, 0, 0},
+   {"stop-datetime", OPT_STOP_DATETIME,
+    "Stop reading the binlog at first event having a datetime equal or "
+    "posterior to the argument; the argument must be a date and time "
+@@ -2564,7 +2565,7 @@ static int parse_args(int *argc, char*** argv)
+   /*
+     Always initialize the stream auditor initially because it is used to check
+     the initial state of the binary log is correct. If we don't want it later
+-    (i.e. --skip-gtid-strict-mode or -vvv is not given), it is deleted when we
++    (i.e. neither --gtid-strict-mode nor -vvv is given), it is deleted when we
+     are certain the initial gtid state is set.
+   */
+   gtid_state_validator= new Binlog_gtid_state_validator();
+diff --git a/mysql-test/suite/binlog/include/mysqlbinlog_gtid_window_test_cases.inc b/mysql-test/suite/binlog/include/mysqlbinlog_gtid_window_test_cases.inc
+index 2830f3f6..cb8d17c3 100644
+--- a/mysql-test/suite/binlog/include/mysqlbinlog_gtid_window_test_cases.inc
++++ b/mysql-test/suite/binlog/include/mysqlbinlog_gtid_window_test_cases.inc
+@@ -577,9 +577,9 @@ if ($is_remote == 0)
+ --echo #   Error Case 3:
+ --echo #   A GTID --start-position with any sequence numbers that are not
+ --echo # eventually processed results in error
+---echo # MYSQL_BINLOG BINLOG_FILE_PARAM2 --start-position=0-1-8,1-2-6 > tmp_out_ 2> err_out_
++--echo # MYSQL_BINLOG BINLOG_FILE_PARAM2 --start-position=0-1-8,1-2-6 --gtid-strict-mode > tmp_out_ 2> err_out_
+ --error 1
+---exec $MYSQL_BINLOG $BINLOG_FILE_PARAM2 --start-position=0-1-8,1-2-6 > $tmp_out_ 2> $err_out_
++--exec $MYSQL_BINLOG $BINLOG_FILE_PARAM2 --start-position=0-1-8,1-2-6 --gtid-strict-mode > $tmp_out_ 2> $err_out_
+ if ($is_remote == 1)
+ {
+     --let SEARCH_PATTERN=ERROR: Got error reading packet from server
+diff --git a/mysql-test/suite/binlog/r/binlog_mysqlbinlog_gtid_strict_mode_default.result b/mysql-test/suite/binlog/r/binlog_mysqlbinlog_gtid_strict_mode_default.result
+new file mode 100644
+index 00000000..894d8433
+--- /dev/null
++++ b/mysql-test/suite/binlog/r/binlog_mysqlbinlog_gtid_strict_mode_default.result
+@@ -0,0 +1,24 @@
++RESET MASTER;
++CREATE TABLE t1 (a int);
++CREATE TABLE t2 (a int);
++DROP TABLE t1, t2;
++FLUSH BINARY LOGS;
++# Replay the first binlog on the same server. The GTIDs are re-used,
++# so the second binlog has out of order GTIDs relative to the first.
++# MYSQL_BINLOG --read-from-remote-server master-bin.000001 | MYSQL
++DROP TABLE IF EXISTS t1, t2;
++FLUSH BINARY LOGS;
++# By default (no --gtid-strict-mode), processing both binlogs should
++# succeed without errors
++# MYSQL_BINLOG master-bin.000001 master-bin.000002 > /dev/null 2> err_out
++NOT FOUND /Found out of order GTID/ in mysqlbinlog_err.out
++# With -vvv (and no --gtid-strict-mode), a warning should be issued
++# MYSQL_BINLOG -vvv master-bin.000001 master-bin.000002 > /dev/null 2> err_out
++FOUND 1 /WARNING: Found out of order GTID/ in mysqlbinlog_err.out
++# With --gtid-strict-mode explicitly provided, mariadb-binlog should
++# error
++# MYSQL_BINLOG --gtid-strict-mode master-bin.000001 master-bin.000002 > /dev/null 2> err_out
++FOUND 1 /ERROR: Found out of order GTID/ in mysqlbinlog_err.out
++# Cleanup
++RESET MASTER;
++End of the tests
+diff --git a/mysql-test/suite/binlog/r/binlog_mysqlbinlog_gtid_window.result b/mysql-test/suite/binlog/r/binlog_mysqlbinlog_gtid_window.result
+index fce5f95c..ec0c4b1c 100644
+--- a/mysql-test/suite/binlog/r/binlog_mysqlbinlog_gtid_window.result
++++ b/mysql-test/suite/binlog/r/binlog_mysqlbinlog_gtid_window.result
+@@ -208,7 +208,7 @@ FOUND 1 /ERROR: Binary logs are missing data for domain 0/ in err.out
+ #   Error Case 3:
+ #   A GTID --start-position with any sequence numbers that are not
+ # eventually processed results in error
+-# MYSQL_BINLOG BINLOG_FILE_PARAM2 --start-position=0-1-8,1-2-6 > tmp_out_ 2> err_out_
++# MYSQL_BINLOG BINLOG_FILE_PARAM2 --start-position=0-1-8,1-2-6 --gtid-strict-mode > tmp_out_ 2> err_out_
+ FOUND 2 /ERROR: Binary logs never reached expected GTID state/ in err.out
+ ######################################
+ #      Test Group 2
+@@ -440,7 +440,7 @@ FOUND 1 /ERROR: Got error reading packet from server/ in err.out
+ #   Error Case 3:
+ #   A GTID --start-position with any sequence numbers that are not
+ # eventually processed results in error
+-# MYSQL_BINLOG BINLOG_FILE_PARAM2 --start-position=0-1-8,1-2-6 > tmp_out_ 2> err_out_
++# MYSQL_BINLOG BINLOG_FILE_PARAM2 --start-position=0-1-8,1-2-6 --gtid-strict-mode > tmp_out_ 2> err_out_
+ FOUND 1 /ERROR: Got error reading packet from server/ in err.out
+ #
+ # Remote-only cleanup from error cases
+diff --git a/mysql-test/suite/binlog/t/binlog_mysqlbinlog_gtid_strict_mode_default.test b/mysql-test/suite/binlog/t/binlog_mysqlbinlog_gtid_strict_mode_default.test
+new file mode 100644
+index 00000000..9da9f1a3
+--- /dev/null
++++ b/mysql-test/suite/binlog/t/binlog_mysqlbinlog_gtid_strict_mode_default.test
+@@ -0,0 +1,61 @@
++#
++# Purpose:
++#   Ensure that mariadb-binlog, by default, does not error when a binary log
++# contains out of order GTIDs. The server's gtid_strict_mode is off by
++# default, so binary logs can legitimately contain non-monotonic sequence
++# numbers (e.g. when the output of mariadb-binlog is replayed on the same
++# server, which re-uses the original GTIDs). Only when --gtid-strict-mode is
++# explicitly provided should mariadb-binlog error on out of order GTIDs.
++#
++# References:
++#   MDEV-29803: Unexpected ERROR: Found out of order GTID after replaying
++#               binlog read from remote
++#   MDEV-4989: Support for GTID in mysqlbinlog
++#
++--source include/have_log_bin.inc
++
++RESET MASTER;
++CREATE TABLE t1 (a int);
++CREATE TABLE t2 (a int);
++DROP TABLE t1, t2;
++FLUSH BINARY LOGS;
++
++--echo # Replay the first binlog on the same server. The GTIDs are re-used,
++--echo # so the second binlog has out of order GTIDs relative to the first.
++--echo # MYSQL_BINLOG --read-from-remote-server master-bin.000001 | MYSQL
++--exec $MYSQL_BINLOG --read-from-remote-server -uroot --protocol=tcp --port=$MASTER_MYPORT master-bin.000001 | $MYSQL test 2>&1
++
++DROP TABLE IF EXISTS t1, t2;
++FLUSH BINARY LOGS;
++
++--let $datadir= `select @@datadir`
++--let $err_out= $MYSQLTEST_VARDIR/tmp/mysqlbinlog_err.out
++
++--echo # By default (no --gtid-strict-mode), processing both binlogs should
++--echo # succeed without errors
++--echo # MYSQL_BINLOG master-bin.000001 master-bin.000002 > /dev/null 2> err_out
++--exec $MYSQL_BINLOG $datadir/master-bin.000001 $datadir/master-bin.000002 > /dev/null 2> $err_out
++--let SEARCH_FILE= $err_out
++--let SEARCH_PATTERN= Found out of order GTID
++--source include/search_pattern_in_file.inc
++--remove_file $err_out
++
++--echo # With -vvv (and no --gtid-strict-mode), a warning should be issued
++--echo # MYSQL_BINLOG -vvv master-bin.000001 master-bin.000002 > /dev/null 2> err_out
++--exec $MYSQL_BINLOG -vvv $datadir/master-bin.000001 $datadir/master-bin.000002 > /dev/null 2> $err_out
++--let SEARCH_PATTERN= WARNING: Found out of order GTID
++--source include/search_pattern_in_file.inc
++--remove_file $err_out
++
++--echo # With --gtid-strict-mode explicitly provided, mariadb-binlog should
++--echo # error
++--echo # MYSQL_BINLOG --gtid-strict-mode master-bin.000001 master-bin.000002 > /dev/null 2> err_out
++--error 1
++--exec $MYSQL_BINLOG --gtid-strict-mode $datadir/master-bin.000001 $datadir/master-bin.000002 > /dev/null 2> $err_out
++--let SEARCH_PATTERN= ERROR: Found out of order GTID
++--source include/search_pattern_in_file.inc
++--remove_file $err_out
++
++--echo # Cleanup
++RESET MASTER;
++--echo End of the tests

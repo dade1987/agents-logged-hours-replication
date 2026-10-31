@@ -1,0 +1,153 @@
+diff --git a/mysql-test/suite/roles/role_user_localhost_cache.result b/mysql-test/suite/roles/role_user_localhost_cache.result
+new file mode 100644
+index 00000000..f1a3dbbc
+--- /dev/null
++++ b/mysql-test/suite/roles/role_user_localhost_cache.result
+@@ -0,0 +1,45 @@
++create database db;
++create table db.t1(a varchar(40));
++insert into db.t1 values ('role-cache-collision-row');
++create role r1;
++create user r1@localhost identified by 'r1pass';
++create user u1@'127.0.0.1' identified by 'u1pass';
++grant select on db.* to r1@localhost;
++grant r1 to u1@'127.0.0.1';
++connect  r1,localhost,r1,r1pass,,,,;
++select a from db.t1;
++a
++role-cache-collision-row
++connect  u1,127.0.0.1,u1,u1pass,,,,;
++set role r1;
++show grants;
++Grants for u1@127.0.0.1
++GRANT `r1` TO `u1`@`127.0.0.1`
++GRANT USAGE ON *.* TO `u1`@`127.0.0.1`
++GRANT USAGE ON *.* TO `r1`
++select a from db.t1;
++ERROR 42000: SELECT command denied to user 'u1'@'localhost' for table `db`.`t1`
++connection default;
++flush privileges;
++grant insert on db.* to r1;
++connect  u1b,127.0.0.1,u1,u1pass,,,,;
++set role r1;
++select a from db.t1;
++ERROR 42000: SELECT command denied to user 'u1'@'localhost' for table `db`.`t1`
++insert into db.t1 values ('inserted-by-role');
++connect  r1b,localhost,r1,r1pass,,,,;
++select a from db.t1;
++a
++role-cache-collision-row
++inserted-by-role
++insert into db.t1 values ('must-fail');
++ERROR 42000: INSERT command denied to user 'r1'@'localhost' for table `db`.`t1`
++connection default;
++disconnect r1;
++disconnect u1;
++disconnect u1b;
++disconnect r1b;
++drop user r1@localhost;
++drop user u1@'127.0.0.1';
++drop role r1;
++drop database db;
+diff --git a/mysql-test/suite/roles/role_user_localhost_cache.test b/mysql-test/suite/roles/role_user_localhost_cache.test
+new file mode 100644
+index 00000000..96aa9729
+--- /dev/null
++++ b/mysql-test/suite/roles/role_user_localhost_cache.test
+@@ -0,0 +1,55 @@
++#
++# MDEV-40541 role vs user@localhost acl_cache key confusion
++#
++# A role is looked up in the acl_cache with an empty host and ip, a
++# connection over a unix socket has no ip either. Make sure that the role
++# 'r1' and the user 'r1'@'localhost' do not share an acl_cache entry.
++#
++--source include/not_embedded.inc
++
++create database db;
++create table db.t1(a varchar(40));
++insert into db.t1 values ('role-cache-collision-row');
++
++create role r1;
++create user r1@localhost identified by 'r1pass';
++create user u1@'127.0.0.1' identified by 'u1pass';
++
++grant select on db.* to r1@localhost;
++grant r1 to u1@'127.0.0.1';
++
++# populate the acl_cache with the entry for r1@localhost
++--connect (r1,localhost,r1,r1pass,,,,)
++select a from db.t1;
++
++# the role r1 has no privileges on db, so u1 must not see the table
++--connect (u1,127.0.0.1,u1,u1pass,,,,)
++set role r1;
++show grants;
++--error ER_TABLEACCESS_DENIED_ERROR
++select a from db.t1;
++
++# and the other way around: the role must not inherit the user's cache
++# entry when the role is looked up first
++connection default;
++flush privileges;
++grant insert on db.* to r1;
++--connect (u1b,127.0.0.1,u1,u1pass,,,,)
++set role r1;
++--error ER_TABLEACCESS_DENIED_ERROR
++select a from db.t1;
++insert into db.t1 values ('inserted-by-role');
++--connect (r1b,localhost,r1,r1pass,,,,)
++select a from db.t1;
++--error ER_TABLEACCESS_DENIED_ERROR
++insert into db.t1 values ('must-fail');
++
++connection default;
++disconnect r1;
++disconnect u1;
++disconnect u1b;
++disconnect r1b;
++drop user r1@localhost;
++drop user u1@'127.0.0.1';
++drop role r1;
++drop database db;
+diff --git a/sql/sql_acl.cc b/sql/sql_acl.cc
+index d4a7606d..971d4987 100644
+--- a/sql/sql_acl.cc
++++ b/sql/sql_acl.cc
+@@ -644,8 +644,13 @@ bool ROLE_GRANT_PAIR::init(MEM_ROOT *mem, const char *username,
+   return false;
+ }
+ 
+-#define IP_ADDR_STRLEN (3 + 1 + 3 + 1 + 3 + 1 + 3)
+-#define ACL_KEY_LENGTH (IP_ADDR_STRLEN + 1 + NAME_LEN + \
++/*
++  The acl_cache key is "<ip or host>\0<user>\0<db>". The first part is the
++  ip of the connection or, when the connection has no ip (unix socket,
++  named pipe, shared memory), its host name ("localhost"). It must be
++  large enough for any host name.
++*/
++#define ACL_KEY_LENGTH (HOSTNAME_LENGTH + 1 + NAME_LEN + \
+                         1 + USERNAME_LENGTH + 1)
+ 
+ #if defined(HAVE_OPENSSL)
+@@ -3704,7 +3709,19 @@ privilege_t acl_get(const char *host, const char *ip,
+   acl_entry *entry;
+   DBUG_ENTER("acl_get");
+ 
+-  tmp_db= strmov(strmov(key, safe_str(ip)) + 1, user) + 1;
++  /*
++    Roles are looked up with an empty host and an empty ip. A connection
++    over a unix socket, named pipe or shared memory has no ip either, but
++    its host is "localhost". If the key only used the ip, the role 'r1'
++    and the user 'r1'@'localhost' would share the same cache entry, and
++    one would get the privileges of the other (MDEV-40541). Use the host
++    name in the key when there is no ip to keep them apart.
++  */
++  const char *key_host= (ip && ip[0]) ? ip : safe_str(host);
++  DBUG_ASSERT(strlen(key_host) <= HOSTNAME_LENGTH);
++  tmp_db= strnmov(key, key_host, HOSTNAME_LENGTH);
++  *tmp_db++= 0;
++  tmp_db= strmov(tmp_db, user) + 1;
+   end= strnmov(tmp_db, db, key + sizeof(key) - tmp_db);
+ 
+   if (end >= key + sizeof(key)) // db name was truncated

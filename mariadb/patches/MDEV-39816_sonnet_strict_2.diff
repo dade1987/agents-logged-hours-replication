@@ -1,0 +1,18 @@
+diff --git a/storage/myisam/mi_open.c b/storage/myisam/mi_open.c
+index 414e483a..2cd371bf 100644
+--- a/storage/myisam/mi_open.c
++++ b/storage/myisam/mi_open.c
+@@ -364,6 +364,13 @@ MI_INFO *mi_open(const char *name, int mode, uint open_flags)
+         for (j=0 ; j < keyinfo->keysegs; j++,pos++)
+ 	{
+ 	  disk_pos=mi_keyseg_read(disk_pos, pos);
++          if (!(pos->flag & (HA_SPACE_PACK | HA_VAR_LENGTH_PART |
++                             HA_BLOB_PART)) &&
++              pos->length > HA_MAX_KEY_LENGTH)
++          {
++            my_errno= HA_ERR_CRASHED;
++            goto err;
++          }
+           if (pos->flag & HA_BLOB_PART &&
+               ! (share->options & (HA_OPTION_COMPRESS_RECORD |
+                                    HA_OPTION_PACK_RECORD)))

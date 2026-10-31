@@ -1,0 +1,138 @@
+diff --git a/public/course/format/classes/output/local/linearnavigation/footer_content.php b/public/course/format/classes/output/local/linearnavigation/footer_content.php
+index f90a7ff41c5..360ff08ed0a 100644
+--- a/public/course/format/classes/output/local/linearnavigation/footer_content.php
++++ b/public/course/format/classes/output/local/linearnavigation/footer_content.php
+@@ -48,22 +48,86 @@ class footer_content implements named_templatable, renderable {
+     #[\Override]
+     public function export_for_template(renderer_base $output) {
+         // Get previous and next URLs for the current course module.
+-        $previousurl = util::get_path_for_callable(
+-            [course_navigation::class, 'cm_previous_element'],
+-            ['cm' => $this->cminfo->id],
+-        );
+-        $nexturl = util::get_path_for_callable(
+-            [course_navigation::class, 'cm_next_element'],
+-            ['cm' => $this->cminfo->id],
+-        );
++        [$isfirst, $islast] = $this->get_boundaries();
++
++        $previousurl = '';
++        if (!$isfirst) {
++            $previousurl = util::get_path_for_callable(
++                [course_navigation::class, 'cm_previous_element'],
++                ['cm' => $this->cminfo->id],
++            )->out(false);
++        }
++
++        $nexturl = '';
++        $courseurl = '';
++        if ($islast) {
++            $courseurl = course_get_url($this->cminfo->get_course())->out(false);
++        } else {
++            $nexturl = util::get_path_for_callable(
++                [course_navigation::class, 'cm_next_element'],
++                ['cm' => $this->cminfo->id],
++            )->out(false);
++        }
+ 
+         return [
+-            'previousurl' => $previousurl->out(false),
+-            'nexturl' => $nexturl->out(false),
++            'previousurl' => $previousurl,
++            'nexturl' => $nexturl,
++            'courseurl' => $courseurl,
+             'completion' => $this->export_completion($output),
+         ];
+     }
+ 
++    /**
++     * Check whether the current activity is the first and/or the last navigable activity of the course.
++     *
++     * Only activities the current user can see and that have a navigation URL are taken into account.
++     *
++     * @return bool[] Array with two booleans: [is first, is last].
++     */
++    private function get_boundaries(): array {
++        $modinfo = $this->cminfo->get_modinfo();
++        $navigable = [];
++        foreach ($modinfo->get_section_info_all() as $section) {
++            if ($section->is_delegated()) {
++                // Delegated section activities are collected from the parent section.
++                continue;
++            }
++            $this->collect_navigable_cms($section, $navigable);
++        }
++        if (empty($navigable)) {
++            return [true, true];
++        }
++        $ids = array_keys($navigable);
++        $currentid = (int) $this->cminfo->id;
++        return [reset($ids) === $currentid, end($ids) === $currentid];
++    }
++
++    /**
++     * Collect, in course order, the navigable activities of a section (including delegated subsections).
++     *
++     * @param \section_info $section
++     * @param array $navigable Navigable cm_info instances indexed by cm id.
++     */
++    private function collect_navigable_cms(\section_info $section, array &$navigable): void {
++        foreach ($section->get_sequence_cm_infos() as $cm) {
++            $delegated = $cm->get_delegated_section_info();
++            if ($delegated) {
++                $this->collect_navigable_cms($delegated, $navigable);
++                continue;
++            }
++            if (
++                $cm->id == $this->cminfo->id
++                || (
++                    !empty($cm->get_navigation_url())
++                    && $cm->is_visible_on_course_page()
++                    && \core_course\modinfo::is_mod_type_visible_on_course($cm->modname)
++                )
++            ) {
++                $navigable[(int) $cm->id] = $cm;
++            }
++        }
++    }
++
+     /**
+      * Export the activity completion control to display in the footer.
+      *
+diff --git a/public/course/format/templates/local/linearnavigation/footer_content.mustache b/public/course/format/templates/local/linearnavigation/footer_content.mustache
+index a916bc770f4..47c2ad8aac2 100644
+--- a/public/course/format/templates/local/linearnavigation/footer_content.mustache
++++ b/public/course/format/templates/local/linearnavigation/footer_content.mustache
+@@ -23,6 +23,7 @@
+     {
+         "previousurl": "http://moodle.com/course/cms/42/previous",
+         "nexturl": "http://moodle.com/course/cms/42/next",
++        "courseurl": "http://moodle.com/course/view.php?id=2",
+         "completion": "<span class=\"completion-status text-success\"><i class=\"fa fa-check\"></i> <span>Done</span></span>"
+     }
+ }}
+@@ -50,5 +51,12 @@
+             <span class="dir-ltr-hide" aria-hidden="true">{{#pix}} e/backward, core {{/pix}}</span>
+         </a>
+         {{/nexturl}}
++        {{^nexturl}}
++        {{#courseurl}}
++        <a href="{{.}}" class="course-linear-navigation-link text-decoration-none d-inline-flex align-items-center gap-1 ms-auto">
++            <span>{{#str}} gotocourse, core {{/str}}</span>
++        </a>
++        {{/courseurl}}
++        {{/nexturl}}
+     </div>
+ </div>
+diff --git a/public/lang/en/moodle.php b/public/lang/en/moodle.php
+index 83436c136be..9a0b9ff957c 100644
+--- a/public/lang/en/moodle.php
++++ b/public/lang/en/moodle.php
+@@ -983,6 +983,7 @@ This program is free software: you can redistribute it and/or modify it under th
+ This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ 
+ See the Moodle License information page for full details: https://moodledev.io/general/license';
++$string['gotocourse'] = 'Go to course';
+ $string['gradable'] = 'Gradable';
+ $string['grades'] = 'Grades';
+ $string['gradenoun'] = 'Grade';

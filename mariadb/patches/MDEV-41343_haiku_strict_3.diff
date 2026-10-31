@@ -1,0 +1,103 @@
+diff --git a/mysql-test/main/deny_revoke_public.result b/mysql-test/main/deny_revoke_public.result
+index a82947a6..30f15853 100644
+--- a/mysql-test/main/deny_revoke_public.result
++++ b/mysql-test/main/deny_revoke_public.result
+@@ -65,6 +65,32 @@ connection default;
+ REVOKE UPDATE ON mysql.global_priv FROM u_col@localhost;
+ DROP USER u_col@localhost;
+ #
++# UPDATE on an unrelated column of mysql.global_priv is not enough,
++# only UPDATE(Priv), where the DENY lists are stored, bypasses
++#
++CREATE USER u_nopriv@localhost;
++GRANT SELECT ON test.t1 TO u_nopriv@localhost;
++GRANT UPDATE (Host) ON mysql.global_priv TO u_nopriv@localhost;
++DENY SELECT ON test.t1 TO PUBLIC;
++connect  con_nopriv1, localhost, u_nopriv,,test;
++SELECT * FROM t1;
++ERROR 42000: SELECT command denied to user 'u_nopriv'@'localhost' for table `test`.`t1`
++REVOKE DENY SELECT ON test.t1 FROM PUBLIC;
++ERROR 42000: SELECT, GRANT command denied to user 'u_nopriv'@'localhost' for table `test`.`t1`
++disconnect con_nopriv1;
++connection default;
++REVOKE UPDATE (Host) ON mysql.global_priv FROM u_nopriv@localhost;
++GRANT UPDATE (Priv) ON mysql.global_priv TO u_nopriv@localhost;
++connect  con_nopriv2, localhost, u_nopriv,,test;
++REVOKE DENY SELECT ON test.t1 FROM PUBLIC;
++SELECT * FROM t1;
++id	data
++1	100
++disconnect con_nopriv2;
++connection default;
++REVOKE UPDATE (Priv) ON mysql.global_priv FROM u_nopriv@localhost;
++DROP USER u_nopriv@localhost;
++#
+ # DB level
+ #
+ CREATE USER u_db@localhost;
+diff --git a/mysql-test/main/deny_revoke_public.test b/mysql-test/main/deny_revoke_public.test
+index 9df13f0a..714d4d22 100644
+--- a/mysql-test/main/deny_revoke_public.test
++++ b/mysql-test/main/deny_revoke_public.test
+@@ -77,6 +77,35 @@ connection default;
+ REVOKE UPDATE ON mysql.global_priv FROM u_col@localhost;
+ DROP USER u_col@localhost;
+ 
++--echo #
++--echo # UPDATE on an unrelated column of mysql.global_priv is not enough,
++--echo # only UPDATE(Priv), where the DENY lists are stored, bypasses
++--echo #
++CREATE USER u_nopriv@localhost;
++GRANT SELECT ON test.t1 TO u_nopriv@localhost;
++GRANT UPDATE (Host) ON mysql.global_priv TO u_nopriv@localhost;
++DENY SELECT ON test.t1 TO PUBLIC;
++
++connect (con_nopriv1, localhost, u_nopriv,,test);
++--error ER_TABLEACCESS_DENIED_ERROR
++SELECT * FROM t1;
++--error ER_TABLEACCESS_DENIED_ERROR
++REVOKE DENY SELECT ON test.t1 FROM PUBLIC;
++disconnect con_nopriv1;
++connection default;
++
++REVOKE UPDATE (Host) ON mysql.global_priv FROM u_nopriv@localhost;
++GRANT UPDATE (Priv) ON mysql.global_priv TO u_nopriv@localhost;
++
++connect (con_nopriv2, localhost, u_nopriv,,test);
++REVOKE DENY SELECT ON test.t1 FROM PUBLIC;
++SELECT * FROM t1;
++disconnect con_nopriv2;
++connection default;
++
++REVOKE UPDATE (Priv) ON mysql.global_priv FROM u_nopriv@localhost;
++DROP USER u_nopriv@localhost;
++
+ --echo #
+ --echo # DB level
+ --echo #
+diff --git a/sql/sql_acl.cc b/sql/sql_acl.cc
+index 70984625..50ac913c 100644
+--- a/sql/sql_acl.cc
++++ b/sql/sql_acl.cc
+@@ -14423,9 +14423,18 @@ bool Sql_cmd_grant::should_bypass_revoke_deny(THD *thd)
+   TABLE_LIST tl;
+   tl.init_one_table(&MYSQL_SCHEMA_NAME, &MYSQL_TABLE_NAME[USER_TABLE],
+                     NULL, TL_WRITE);
+-  return !check_access(thd, UPDATE_ACL, tl.db.str, &tl.grant.privilege,
+-                       &tl.grant.m_internal, 0, 1) &&
+-         !check_grant(thd, UPDATE_ACL, &tl, FALSE, 1, TRUE);
++  if (check_access(thd, UPDATE_ACL, tl.db.str, &tl.grant.privilege,
++                   &tl.grant.m_internal, 0, 1))
++    return false;
++
++  /*
++    A table-level or database-level UPDATE is enough, but UPDATE on some
++    other column of mysql.global_priv is not: DENY lists are stored in the
++    Priv column, so the revoker must hold UPDATE(Priv) specifically.
++  */
++  return get_column_grant(thd, &tl.grant, MYSQL_SCHEMA_NAME.str,
++                          MYSQL_TABLE_NAME[USER_TABLE].str,
++                          "Priv"_Lex_ident_column) & UPDATE_ACL;
+ }
+ 
+ 

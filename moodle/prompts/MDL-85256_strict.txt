@@ -1,0 +1,37 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot run Moodle's test suite. You may run `php -l <file>` and read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-85256: Inbound E-Mail MIME Parsing Issues
+
+When using Inbound Message Processing (tool_messageinbound), Moodle 4.5 encounters fatal errors while parsing certain emails that:
+ * Have incomplete MIME body structures, where expected array keys (e.g., $partstructure[2], $partstructure[5]) are missing.
+
+ * Do not specify a CHARSET in their MIME headers.
+
+*Proposed Solution:*
+
+Missing MIME Structure Keys: Use defensive checks to ensure safe defaults:
+admin/tool/messageinbound/classes/manager.php
+Line 755:
+{code:java}
+$attributes = isset($partstructure[2]) && is_array($partstructure[2]) ? $partstructure[2] : [];
+$parameters = $this->process_message_body_structure_parameters(
+    attributes: $attributes,
+    parameters: $parameters,
+);{code}
+ 
+
+ 
+
+Missing CHARSET: Default to 'UTF-8' when CHARSET is not provided:
+
+*admin/tool/messageinbound/classes/manager.php*
+Lines 779 and 786
+{code:java}
+charset: $parameters['CHARSET'] ?? 'UTF-8',{code}

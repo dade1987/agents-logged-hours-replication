@@ -1,0 +1,374 @@
+diff --git a/.upgradenotes/MDL-88319-help-icon-hook.yml b/.upgradenotes/MDL-88319-help-icon-hook.yml
+new file mode 100644
+index 00000000000..e87d8ba966d
+--- /dev/null
++++ b/.upgradenotes/MDL-88319-help-icon-hook.yml
+@@ -0,0 +1,10 @@
++issueNumber: MDL-88319
++notes:
++  core:
++    - message: >-
++        A new hook `\core\hook\output\before_help_icon_rendered` is dispatched
++        before a help icon is rendered. Callbacks can modify the mutable
++        template context, add HTML before or after the icon using
++        `add_before_icon()` / `add_after_icon()`, or replace the icon output
++        entirely using `set_replacement()`.
++      type: improved
+diff --git a/public/lib/classes/hook/output/before_help_icon_rendered.php b/public/lib/classes/hook/output/before_help_icon_rendered.php
+new file mode 100644
+index 00000000000..0910523fca8
+--- /dev/null
++++ b/public/lib/classes/hook/output/before_help_icon_rendered.php
+@@ -0,0 +1,171 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\hook\output;
++
++use core\output\help_icon;
++use core\output\renderer_base;
++use stdClass;
++
++/**
++ * Hook dispatched before a help icon is rendered.
++ *
++ * Callbacks may:
++ *  - modify the mutable template context (e.g. text, completedoclink, title, url),
++ *  - add HTML before or after the help icon,
++ *  - completely replace the help icon output.
++ *
++ * @package    core
++ * @copyright  2025 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++#[\core\attribute\label('Allows plugins to extend, augment, or replace the help icon output.')]
++#[\core\attribute\tags('output')]
++final class before_help_icon_rendered {
++    /** @var string[] HTML fragments to be placed before the help icon */
++    private array $beforeicon = [];
++
++    /** @var string[] HTML fragments to be placed after the help icon */
++    private array $aftericon = [];
++
++    /** @var string|null Replacement HTML for the help icon, or null to use the default rendering */
++    private ?string $replacement = null;
++
++    /**
++     * Create a new instance of the hook.
++     *
++     * @param renderer_base $renderer The renderer rendering the help icon
++     * @param help_icon $helpicon The help icon being rendered
++     * @param stdClass $context The mutable template context
++     */
++    public function __construct(
++        /** @var renderer_base The renderer rendering the help icon */
++        public readonly renderer_base $renderer,
++        /** @var help_icon The help icon being rendered */
++        public readonly help_icon $helpicon,
++        /** @var stdClass The mutable template context */
++        public readonly stdClass $context,
++    ) {
++    }
++
++    /**
++     * Get the help icon being rendered.
++     *
++     * @return help_icon
++     */
++    public function get_help_icon(): help_icon {
++        return $this->helpicon;
++    }
++
++    /**
++     * Get the identifier of the help string.
++     *
++     * @return string
++     */
++    public function get_identifier(): string {
++        return $this->helpicon->identifier;
++    }
++
++    /**
++     * Get the component of the help string.
++     *
++     * @return string
++     */
++    public function get_component(): string {
++        return $this->helpicon->component;
++    }
++
++    /**
++     * Get the mutable template context.
++     *
++     * Properties of the returned object may be modified directly to change the popover content.
++     *
++     * @return stdClass
++     */
++    public function get_context(): stdClass {
++        return $this->context;
++    }
++
++    /**
++     * Add HTML to be placed immediately before the help icon.
++     *
++     * @param string $html
++     */
++    public function add_before_icon(string $html): void {
++        if ($html !== '') {
++            $this->beforeicon[] = $html;
++        }
++    }
++
++    /**
++     * Add HTML to be placed immediately after the help icon.
++     *
++     * @param string $html
++     */
++    public function add_after_icon(string $html): void {
++        if ($html !== '') {
++            $this->aftericon[] = $html;
++        }
++    }
++
++    /**
++     * Get all HTML to be placed before the help icon.
++     *
++     * @return string
++     */
++    public function get_before_icon(): string {
++        return implode('', $this->beforeicon);
++    }
++
++    /**
++     * Get all HTML to be placed after the help icon.
++     *
++     * @return string
++     */
++    public function get_after_icon(): string {
++        return implode('', $this->aftericon);
++    }
++
++    /**
++     * Completely replace the help icon with the supplied HTML.
++     *
++     * When a replacement is set, the default template rendering is skipped.
++     * Passing null removes any replacement previously set.
++     *
++     * @param string|null $html
++     */
++    public function set_replacement(?string $html): void {
++        $this->replacement = $html;
++    }
++
++    /**
++     * Get the replacement HTML, if any.
++     *
++     * @return string|null
++     */
++    public function get_replacement(): ?string {
++        return $this->replacement;
++    }
++
++    /**
++     * Whether a replacement for the help icon has been set.
++     *
++     * @return bool
++     */
++    public function has_replacement(): bool {
++        return $this->replacement !== null;
++    }
++}
+diff --git a/public/lib/classes/output/core_renderer.php b/public/lib/classes/output/core_renderer.php
+index 96247633e67..39708fa8443 100644
+--- a/public/lib/classes/output/core_renderer.php
++++ b/public/lib/classes/output/core_renderer.php
+@@ -35,6 +35,7 @@ use core\exception\coding_exception;
+ use core\hook\manager as hook_manager;
+ use core\hook\output\after_standard_main_region_html_generation;
+ use core\hook\output\before_footer_html_generation;
++use core\hook\output\before_help_icon_rendered;
+ use core\hook\output\before_html_attributes;
+ use core\hook\output\before_http_headers;
+ use core\hook\output\before_standard_footer_html_generation;
+@@ -2255,7 +2256,18 @@ class core_renderer extends renderer_base {
+      */
+     protected function render_help_icon(help_icon $helpicon) {
+         $context = $helpicon->export_for_template($this);
+-        return $this->render_from_template('core/help_icon', $context);
++
++        // Allow plugins to modify the context, add content around the icon, or replace it entirely.
++        $hook = new before_help_icon_rendered($this, $helpicon, $context);
++        di::get(hook_manager::class)->dispatch($hook);
++
++        if ($hook->has_replacement()) {
++            $output = $hook->get_replacement();
++        } else {
++            $output = $this->render_from_template('core/help_icon', $hook->get_context());
++        }
++
++        return $hook->get_before_icon() . $output . $hook->get_after_icon();
+     }
+ 
+     /**
+diff --git a/public/lib/tests/hook/output/before_help_icon_rendered_test.php b/public/lib/tests/hook/output/before_help_icon_rendered_test.php
+new file mode 100644
+index 00000000000..a60b66d8039
+--- /dev/null
++++ b/public/lib/tests/hook/output/before_help_icon_rendered_test.php
+@@ -0,0 +1,143 @@
++<?php
++// This file is part of Moodle - https://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
++
++namespace core\hook\output;
++
++/**
++ * Tests for before_help_icon_rendered hook.
++ *
++ * @package    core
++ * @copyright  2025 Moodle Pty Ltd
++ * @license    https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++#[\PHPUnit\Framework\Attributes\CoversClass(before_help_icon_rendered::class)]
++#[\PHPUnit\Framework\Attributes\CoversMethod(\core\output\core_renderer::class, 'render_help_icon')]
++final class before_help_icon_rendered_test extends \advanced_testcase {
++    /**
++     * Test that without callbacks the default output is unchanged.
++     */
++    public function test_default_output(): void {
++        global $OUTPUT;
++        $this->resetAfterTest();
++
++        $html = $OUTPUT->help_icon('allowstealthmodules', 'moodle');
++        $this->assertStringContainsString('btn-link', $html);
++        $this->assertStringContainsString('/help.php', $html);
++    }
++
++    /**
++     * Test that the hook exposes the help icon data.
++     */
++    public function test_hook_properties(): void {
++        global $OUTPUT;
++        $this->resetAfterTest();
++
++        $captured = null;
++        $this->redirectHook(before_help_icon_rendered::class, function (before_help_icon_rendered $hook) use (&$captured) {
++            $captured = $hook;
++        });
++        $OUTPUT->help_icon('allowstealthmodules', 'moodle');
++        $this->stopHookRedirections();
++
++        $this->assertInstanceOf(before_help_icon_rendered::class, $captured);
++        $this->assertSame('allowstealthmodules', $captured->get_identifier());
++        $this->assertSame('moodle', $captured->get_component());
++        $this->assertInstanceOf(\core\output\help_icon::class, $captured->get_help_icon());
++        $this->assertInstanceOf(\stdClass::class, $captured->get_context());
++        $this->assertFalse($captured->has_replacement());
++    }
++
++    /**
++     * Test modifying the template context.
++     */
++    public function test_modify_context(): void {
++        global $OUTPUT;
++        $this->resetAfterTest();
++
++        $this->redirectHook(before_help_icon_rendered::class, function (before_help_icon_rendered $hook) {
++            $hook->get_context()->text .= '<p>EXTRA_HELP_CONTENT</p>';
++        });
++        $html = $OUTPUT->help_icon('allowstealthmodules', 'moodle');
++        $this->stopHookRedirections();
++
++        $this->assertStringContainsString('EXTRA_HELP_CONTENT', $html);
++    }
++
++    /**
++     * Test adding HTML before and after the icon.
++     */
++    public function test_add_before_and_after(): void {
++        global $OUTPUT;
++        $this->resetAfterTest();
++
++        $this->redirectHook(before_help_icon_rendered::class, function (before_help_icon_rendered $hook) {
++            $hook->add_before_icon('<span>BEFORE1</span>');
++            $hook->add_before_icon('<span>BEFORE2</span>');
++            $hook->add_after_icon('<span>AFTER1</span>');
++            $hook->add_after_icon('<span>AFTER2</span>');
++        });
++        $html = $OUTPUT->help_icon('allowstealthmodules', 'moodle');
++        $this->stopHookRedirections();
++
++        $this->assertStringStartsWith('<span>BEFORE1</span><span>BEFORE2</span>', $html);
++        $this->assertStringEndsWith('<span>AFTER1</span><span>AFTER2</span>', $html);
++        $this->assertStringContainsString('/help.php', $html);
++    }
++
++    /**
++     * Test replacing the icon.
++     */
++    public function test_set_replacement(): void {
++        global $OUTPUT;
++        $this->resetAfterTest();
++
++        $this->redirectHook(before_help_icon_rendered::class, function (before_help_icon_rendered $hook) {
++            $hook->set_replacement('<a href="#">REPLACED</a>');
++        });
++        $html = $OUTPUT->help_icon('allowstealthmodules', 'moodle');
++        $this->stopHookRedirections();
++
++        $this->assertSame('<a href="#">REPLACED</a>', $html);
++    }
++
++    /**
++     * Test the hook API in isolation.
++     */
++    public function test_hook_api(): void {
++        global $PAGE;
++        $this->resetAfterTest();
++
++        $renderer = $PAGE->get_renderer('core');
++        $icon = new \core\output\help_icon('allowstealthmodules', 'moodle');
++        $context = new \stdClass();
++        $hook = new before_help_icon_rendered($renderer, $icon, $context);
++
++        $this->assertSame('', $hook->get_before_icon());
++        $this->assertSame('', $hook->get_after_icon());
++        $this->assertNull($hook->get_replacement());
++        $this->assertSame($context, $hook->get_context());
++
++        $hook->add_before_icon('');
++        $hook->add_after_icon('');
++        $this->assertSame('', $hook->get_before_icon());
++        $this->assertSame('', $hook->get_after_icon());
++
++        $hook->set_replacement('X');
++        $this->assertTrue($hook->has_replacement());
++        $hook->set_replacement(null);
++        $this->assertFalse($hook->has_replacement());
++    }
++}

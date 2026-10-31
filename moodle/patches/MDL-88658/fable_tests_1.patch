@@ -1,0 +1,86 @@
+diff --git a/public/mod/data/classes/local/exporter/utils.php b/public/mod/data/classes/local/exporter/utils.php
+index cde366a8271..a220309a479 100644
+--- a/public/mod/data/classes/local/exporter/utils.php
++++ b/public/mod/data/classes/local/exporter/utils.php
+@@ -103,7 +103,7 @@ class utils {
+                     $contents = '';
+                     if (isset($content[$field->field->id])) {
+                         $contents = $field->export_text_value($content[$field->field->id]);
+-                        if (!empty($contents) && $field->file_export_supported() && $includefiles
++                        if ($contents !== '' && !is_null($contents) && $field->file_export_supported() && $includefiles
+                             && !is_null($field->export_file_value($record))) {
+                             // For exporting overwrite the content of the column with a unique
+                             // filename, even it is not exactly the name of the file in the
+@@ -113,8 +113,9 @@ class utils {
+                             $exporter->add_file_from_string($contents, $field->export_file_value($record));
+                         }
+                     }
+-                    // Just be double sure.
+-                    $contents = !empty($contents) ? $contents : '';
++                    // Just be double sure. Do not use empty() here, because a value of "0" is a valid value that
++                    // needs to be exported as well.
++                    $contents = is_null($contents) ? '' : (string) $contents;
+                     $exporter->add_to_current_row($contents);
+                 }
+                 if ($tags) {
+diff --git a/public/mod/data/tests/entries_export_test.php b/public/mod/data/tests/entries_export_test.php
+index 8bfda0d392f..eab5cb45399 100644
+--- a/public/mod/data/tests/entries_export_test.php
++++ b/public/mod/data/tests/entries_export_test.php
+@@ -174,6 +174,56 @@ final class entries_export_test extends \advanced_testcase {
+         unlink($tmpdir . '/testexportarchive.zip');
+     }
+ 
++    /**
++     * Tests that a value of "0" is correctly exported and not converted to an empty string.
++     *
++     * @covers \mod_data\local\exporter\utils::data_exportdata
++     */
++    public function test_export_csv_zero_values(): void {
++        global $DB;
++        $this->resetAfterTest();
++
++        /** @var \mod_data_generator $generator */
++        $generator = $this->getDataGenerator()->get_plugin_generator('mod_data');
++        $course = $this->getDataGenerator()->create_course();
++        $teacher = $this->getDataGenerator()->create_and_enrol($course, 'teacher');
++        $this->setUser($teacher);
++
++        $data = $generator->create_instance(['course' => $course->id]);
++        $cm = get_coursemodule_from_instance('data', $data->id);
++
++        $fieldrecord = new \stdClass();
++        $fieldrecord->name = 'numberfield';
++        $fieldrecord->type = 'number';
++        $numberfield = $generator->create_field($fieldrecord, $data);
++
++        $fieldrecord->name = 'textfield';
++        $fieldrecord->type = 'text';
++        $textfield = $generator->create_field($fieldrecord, $data);
++
++        $contents = [
++            $numberfield->field->id => '0',
++            $textfield->field->id => '0',
++        ];
++        $generator->create_entry($data, $contents);
++
++        $exporter = new csv_entries_exporter();
++        $exporter->set_export_file_name('testexportfile');
++        $fieldrecords = $DB->get_records('data_fields', ['dataid' => $data->id], 'id');
++        $fields = [];
++        foreach ($fieldrecords as $fieldrecord) {
++            $fields[] = data_get_field($fieldrecord, $data);
++        }
++        $selectedfields = array_map(fn($field) => $field->field->id, $fields);
++        $currentgroup = groups_get_activity_group($cm);
++        $context = context_module::instance($cm->id);
++
++        utils::data_exportdata($data->id, $fields, $selectedfields, $exporter, $currentgroup, $context,
++            false, false, false, false, false);
++
++        $this->assertEquals("numberfield,textfield\n0,0\n", $exporter->send_file(false));
++    }
++
+     /**
+      * Tests specific ODS exporting functionality.
+      *

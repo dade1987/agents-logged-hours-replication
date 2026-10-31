@@ -1,0 +1,201 @@
+diff --git a/.upgradenotes/MDL-89296-2026102412000000.yml b/.upgradenotes/MDL-89296-2026102412000000.yml
+new file mode 100644
+index 00000000000..20c050efaec
+--- /dev/null
++++ b/.upgradenotes/MDL-89296-2026102412000000.yml
+@@ -0,0 +1,16 @@
++issueNumber: MDL-89296
++notes:
++  core:
++    - message: >-
++        A new `\core\output\html_writer::react_component()` method is available
++        to generate the mount point for a React component. Callers specify only
++        the component module name and its props; prop serialisation, escaping,
++        and the DOM contract used by `react_autoinit` are handled internally.
++      type: improved
++    - message: >-
++        A new `\core\output\react_component_renderable` interface is available.
++        Renderables implementing it are rendered as React components via
++        `html_writer::react_component()` when passed to a renderer's `render()`
++        method. It takes precedence over `named_templatable`, but a matching
++        `render_[renderable_name]` renderer method still takes precedence over it.
++      type: improved
+diff --git a/public/blocks/timeline/block_timeline.php b/public/blocks/timeline/block_timeline.php
+index 9ebb50580c0..a49fafb8ab7 100644
+--- a/public/blocks/timeline/block_timeline.php
++++ b/public/blocks/timeline/block_timeline.php
+@@ -50,7 +50,8 @@ class block_timeline extends block_base {
+         $order = get_user_preferences('block_timeline_user_sort_preference') ?: BLOCK_TIMELINE_SORT_BY_DATES;
+         $limit = get_user_preferences('block_timeline_user_limit_preference') ?: BLOCK_TIMELINE_ACTIVITIES_LIMIT_DEFAULT;
+ 
+-        $props = json_encode([
++        // Mount the React Timeline component directly — no renderer, no template.
++        $mount = \core\output\html_writer::react_component('@moodle/lms/block_timeline/Timeline', [
+             'midnight'           => usergetmidnight(time()),
+             'filter'             => $filter,
+             'order'              => $order,
+@@ -58,13 +59,6 @@ class block_timeline extends block_base {
+             'nocoursesurl'       => $OUTPUT->image_url('courses', 'block_timeline')->out(false),
+             'noeventsurl'        => $OUTPUT->image_url('activities', 'block_timeline')->out(false),
+             'hasenrolledcourses' => !empty($courses),
+-        ], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG);
+-
+-        // Mount the React Timeline component directly — no renderer, no template.
+-        // core/react_autoinit mounts any element carrying these two attributes.
+-        $mount = \html_writer::div('', '', [
+-            'data-react-component' => '@moodle/lms/block_timeline/Timeline',
+-            'data-react-props'     => $props,
+         ]);
+ 
+         $this->content = (object) [
+diff --git a/public/lib/classes/output/html_writer.php b/public/lib/classes/output/html_writer.php
+index 30b7b303ad7..bd63289904c 100644
+--- a/public/lib/classes/output/html_writer.php
++++ b/public/lib/classes/output/html_writer.php
+@@ -846,6 +846,50 @@ class html_writer {
+         return self::tag('div', $content, self::add_class($class, $attributes));
+     }
+ 
++    /**
++     * Generate the mount point for a React component.
++     *
++     * The returned HTML is picked up by the React autoinit system, which mounts the specified component
++     * with the supplied props. The DOM contract used for mounting is an internal implementation detail
++     * and callers should not rely upon it.
++     *
++     * @param string $modulename The React component module name, for example '@moodle/lms/block_timeline/Timeline'
++     * @param array|string|\stdClass|\JsonSerializable $props The props to pass to the component.
++     *     A string is treated as an already JSON-encoded representation of the props.
++     * @return string HTML fragment
++     */
++    public static function react_component(
++        string $modulename,
++        array|string|\stdClass|\JsonSerializable $props,
++    ): string {
++        if ($modulename === '') {
++            throw new coding_exception('A React component module name must be specified.');
++        }
++
++        if (is_string($props)) {
++            if ($props === '') {
++                $props = '{}';
++            } else if (!json_validate($props)) {
++                throw new coding_exception('The React component props must be valid JSON when provided as a string.');
++            }
++            $encodedprops = $props;
++        } else {
++            if (is_array($props) && empty($props)) {
++                // Always provide an object for empty props.
++                $props = new \stdClass();
++            }
++            $encodedprops = json_encode(
++                $props,
++                JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_THROW_ON_ERROR,
++            );
++        }
++
++        return self::div('', '', [
++            'data-react-component' => $modulename,
++            'data-react-props' => $encodedprops,
++        ]);
++    }
++
+     /**
+      * Starts a <div> tag. (Shortcut function.)
+      *
+diff --git a/public/lib/classes/output/plugin_renderer_base.php b/public/lib/classes/output/plugin_renderer_base.php
+index 8d1be78b0f2..333293e2ae2 100644
+--- a/public/lib/classes/output/plugin_renderer_base.php
++++ b/public/lib/classes/output/plugin_renderer_base.php
+@@ -78,6 +78,15 @@ class plugin_renderer_base extends renderer_base {
+             return $this->$rendermethod($widget);
+         }
+ 
++        if ($widget instanceof react_component_renderable) {
++            // This is a React component.
++            // Note: This has a higher priority than the named_templatable, but lower than a render_[widget_name] method.
++            return html_writer::react_component(
++                $widget->get_react_component_name($this),
++                $widget->export_for_react($this),
++            );
++        }
++
+         if ($widget instanceof named_templatable) {
+             // This is a named templatable.
+             // Fetch the template name from the get_template_name function instead.
+diff --git a/public/lib/classes/output/react_component_renderable.php b/public/lib/classes/output/react_component_renderable.php
+new file mode 100644
+index 00000000000..df602fa3243
+--- /dev/null
++++ b/public/lib/classes/output/react_component_renderable.php
+@@ -0,0 +1,50 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\output;
++
++/**
++ * A renderable which is rendered as a React component.
++ *
++ * When a renderable implementing this interface is rendered using {@see renderer_base::render()},
++ * a React component mount point is generated using {@see html_writer::react_component()}.
++ *
++ * This interface takes precedence over {@see named_templatable}, but a correctly named
++ * `render_[renderable_name]` method in the renderer will still take precedence over it.
++ *
++ * @package   core
++ * @copyright Moodle Pty Ltd
++ * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++interface react_component_renderable extends renderable {
++    /**
++     * Get the name of the React component module to mount.
++     *
++     * For example '@moodle/lms/block_timeline/Timeline'.
++     *
++     * @param renderer_base $renderer The renderer requesting the component name
++     * @return string
++     */
++    public function get_react_component_name(renderer_base $renderer): string;
++
++    /**
++     * Export the props to pass to the React component.
++     *
++     * @param renderer_base $renderer The renderer used to render the component
++     * @return array|\stdClass|\JsonSerializable
++     */
++    public function export_for_react(renderer_base $renderer): array|\stdClass|\JsonSerializable;
++}
+diff --git a/public/lib/classes/output/renderer_base.php b/public/lib/classes/output/renderer_base.php
+index 7b840780785..5069b0ac20b 100644
+--- a/public/lib/classes/output/renderer_base.php
++++ b/public/lib/classes/output/renderer_base.php
+@@ -242,6 +242,15 @@ class renderer_base {
+             }
+         }
+ 
++        if ($widget instanceof react_component_renderable) {
++            // This is a React component.
++            // Note: This has a higher priority than the named_templatable, but lower than a render_[widget_name] method.
++            return html_writer::react_component(
++                $widget->get_react_component_name($this),
++                $widget->export_for_react($this),
++            );
++        }
++
+         if ($widget instanceof named_templatable) {
+             // This is a named templatable.
+             // Fetch the template name from the get_template_name function instead.

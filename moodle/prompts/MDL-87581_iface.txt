@@ -1,0 +1,43 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot run Moodle's test suite. You may run `php -l <file>` and read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-87581: Courses uploaded via bulk course creation/copy do not restore the course's summary or overview files
+
+When performing bulk course creation/copy via *Site administration → Courses → Upload courses* (CSV) using a *template course* ({{templatecourse}} / “Restore from course”), the destination courses do not inherit the source course’s *summary* and *overview files* (course image / summary files). This results in incomplete course metadata after bulk copy and forces manual remediation at scale.
+
+h3. Steps to reproduce
+
+# Create *Course TEMPLATE*.
+# Set *Course summary* text and add a *course image / summary file* (overview file).
+# Navigate to *Site administration → Courses → Upload courses*.
+# Upload a CSV to create multiple courses, specifying {{templatecourse}} (shortname of Course TEMPLATE) to bulk copy content. 
+# Complete the upload and open one of the created courses.
+# Inspect *Course settings* → Summary and course image/summary files.
+
+h3. Actual result
+
+* Destination courses are created/copied, but:
+** *Course summary* is *not copied* from the template course.
+** *Course overview files / course image* are *not copied* from the template course.
+
+h3. What’s happening
+
+* {{restore_course_structure_step}} is the step that restores *course-level configuration*, including {{summary}} and {{overviewfiles}}.
+* That step is only added to the restore task when either:
+** restoring to a *new course* (i.e., {{backup::TARGET_NEW_COURSE}}), *or*
+** {{overwrite_conf}} is enabled.
+* {{tool_uploadcourse}} creates the destination course first, then “imports” from the template using {{backup::TARGET_CURRENT_ADDING}} (import into an existing course), not {{backup::TARGET_NEW_COURSE}} (restore that creates the course).
+* Because the destination course already exists and {{overwrite_conf}} is not enabled, the restore task *does not include* {{restore_course_structure_step}}.
+* Net effect: activities/content come across, but {{summary}} and {{overviewfiles}} do *not* which is exactly what we’re observing.
+
+That is a crisp explanation and aligns with the behavior we described.
+
+
+The developers' tests for this issue use these new or changed classes, functions or web services (names and signatures only; you must implement them):
+(nessuna interfaccia nuova usata dai test)

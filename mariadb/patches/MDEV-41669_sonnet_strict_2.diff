@@ -1,0 +1,54 @@
+diff --git a/mysql-test/suite/innodb/t/import_bugs.test b/mysql-test/suite/innodb/t/import_bugs.test
+index 1b7edcf8..e50effbd 100644
+--- a/mysql-test/suite/innodb/t/import_bugs.test
++++ b/mysql-test/suite/innodb/t/import_bugs.test
+@@ -53,6 +53,10 @@ CREATE TABLE t1(
+ 
+ CREATE TABLE t2 LIKE t1;
+ 
++--connect mvcc,localhost,root
++START TRANSACTION WITH CONSISTENT SNAPSHOT;
++--connection default
++
+ ALTER TABLE t2 DISCARD TABLESPACE;
+ 
+ INSERT INTO t1() VALUES();
+@@ -80,6 +84,12 @@ INSERT INTO t2() VALUES();
+ INSERT INTO t2() VALUES();
+ 
+ SELECT * FROM t2 ORDER BY id;
++
++--connection mvcc
++--error ER_TABLE_DEF_CHANGED
++SELECT * FROM t2;
++--disconnect mvcc
++--connection default
+ DROP TABLE t2;
+ 
+ --echo #
+diff --git a/storage/innobase/row/row0import.cc b/storage/innobase/row/row0import.cc
+index c589b8f2..5d3ee98d 100644
+--- a/storage/innobase/row/row0import.cc
++++ b/storage/innobase/row/row0import.cc
+@@ -3728,7 +3728,7 @@ row_import_read_cfg(
+ dberr_t
+ row_import_update_index_root(trx_t* trx, dict_table_t* table, bool reset)
+ {
+-	const dict_index_t*	index;
++	dict_index_t*		index;
+ 	que_t*			graph = 0;
+ 	dberr_t			err = DB_SUCCESS;
+ 
+@@ -3757,6 +3757,12 @@ row_import_update_index_root(trx_t* trx, dict_table_t* table, bool reset)
+ 		index_id_t	index_id;
+ 		table_id_t	table_id;
+ 
++		if (!reset) {
++			/* The imported data does not correspond to any
++			older read view. */
++			index->trx_id = trx->id;
++		}
++
+ 		info = (graph != 0) ? graph->info : pars_info_create();
+ 
+ 		mach_write_to_4(

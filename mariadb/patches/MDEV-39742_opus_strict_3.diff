@@ -1,0 +1,298 @@
+diff --git a/mysql-test/main/func_json_notembedded.result b/mysql-test/main/func_json_notembedded.result
+index 43f52c3f..06194ed4 100644
+--- a/mysql-test/main/func_json_notembedded.result
++++ b/mysql-test/main/func_json_notembedded.result
+@@ -67,3 +67,32 @@ set global max_allowed_packet=default;
+ #
+ # End of 10.6 tests
+ #
++#
++# MDEV-39742 11.4 JSON functions not interuptable
++#
++set global max_allowed_packet=1073741824;
++connect u,localhost,root;
++set group_concat_max_len= 1000000000;
++set @obj=concat_ws('','{', repeat('"a":"b",', 1250000/2), '"c":"d"}');
++set @arr=concat_ws('','[', repeat('1234567,', 1250000/2), '2345678]');
++select length(@obj), length(@arr);
++length(@obj)	length(@arr)
++5000009	5000009
++set max_statement_time=0.0001;
++SET @old_debug= @@debug_dbug;
++SET debug_dbug='+d,json_pause_execution';
++select json_array_intersect('[1]', @arr);
++ERROR 70100: Query execution was interrupted (max_statement_time exceeded)
++select json_object_filter_keys(@obj, '["c"]');
++ERROR 70100: Query execution was interrupted (max_statement_time exceeded)
++select json_object_to_array(@obj);
++ERROR 70100: Query execution was interrupted (max_statement_time exceeded)
++select json_schema_valid('{"type":"object"}', @obj);
++ERROR 70100: Query execution was interrupted (max_statement_time exceeded)
++SET debug_dbug= @old_debug;
++disconnect u;
++connection default;
++set global max_allowed_packet=default;
++#
++# End of 11.4 tests
++#
+diff --git a/mysql-test/main/func_json_notembedded.test b/mysql-test/main/func_json_notembedded.test
+index 67595686..740236dc 100644
+--- a/mysql-test/main/func_json_notembedded.test
++++ b/mysql-test/main/func_json_notembedded.test
+@@ -52,3 +52,32 @@ set global max_allowed_packet=default;
+ --echo #
+ --echo # End of 10.6 tests
+ --echo #
++
++--echo #
++--echo # MDEV-39742 11.4 JSON functions not interuptable
++--echo #
++set global max_allowed_packet=1073741824;
++connect u,localhost,root;
++set group_concat_max_len= 1000000000;
++
++set @obj=concat_ws('','{', repeat('"a":"b",', 1250000/2), '"c":"d"}');
++set @arr=concat_ws('','[', repeat('1234567,', 1250000/2), '2345678]');
++select length(@obj), length(@arr);
++
++set max_statement_time=0.0001;
++disable_abort_on_error;
++SET @old_debug= @@debug_dbug;
++SET debug_dbug='+d,json_pause_execution';
++select json_array_intersect('[1]', @arr);
++select json_object_filter_keys(@obj, '["c"]');
++select json_object_to_array(@obj);
++select json_schema_valid('{"type":"object"}', @obj);
++enable_abort_on_error;
++SET debug_dbug= @old_debug;
++disconnect u;
++connection default;
++set global max_allowed_packet=default;
++
++--echo #
++--echo # End of 11.4 tests
++--echo #
+diff --git a/sql/item_jsonfunc.cc b/sql/item_jsonfunc.cc
+index 789301a6..ec87e3e9 100644
+--- a/sql/item_jsonfunc.cc
++++ b/sql/item_jsonfunc.cc
+@@ -5115,6 +5115,7 @@ bool Item_func_json_schema_valid::val_bool()
+ {
+   json_engine_t ve;
+   int is_valid= 1;
++  THD *thd= current_thd;
+ 
+   if (!schema_parsed)
+   {
+@@ -5134,8 +5135,11 @@ bool Item_func_json_schema_valid::val_bool()
+   if (!val->length())
+     return 1;
+ 
++  JSON_DO_PAUSE_EXECUTION(thd, 0.0002);
++
+   json_scan_start(&ve, val->charset(), (const uchar *) val->ptr(),
+                   (const uchar *) val->end());
++  ve.killed_ptr= (uint32_t *) &thd->killed;
+ 
+   if (json_read_value(&ve))
+     goto end;
+@@ -5160,6 +5164,13 @@ bool Item_func_json_schema_valid::val_bool()
+   }
+ 
+ end:
++  /*
++    The keyword validators work on copies of the engine, so an interruption
++    noticed there is not propagated to ve.s.error.
++  */
++  if (unlikely(!ve.s.error && *ve.killed_ptr))
++    ve.s.error= JE_KILLED;
++
+   if (unlikely(ve.s.error))
+   {
+     is_valid= 0;
+@@ -5207,6 +5218,7 @@ bool Item_func_json_schema_valid::fix_length_and_dec(THD *thd)
+   }
+   json_scan_start(&je, js->charset(), (const uchar *) js->ptr(),
+                   (const uchar *) js->ptr() + js->length());
++  je.killed_ptr= (uint32_t *) &thd->killed;
+   if (!create_object_and_handle_keyword(thd, &je, &keyword_list,
+                                           &all_keywords))
+     schema_parsed= true;
+@@ -5421,7 +5433,7 @@ static bool create_hash(json_engine_t *value, HASH *items, bool &item_hash_inite
+       }
+     }
+   }
+-  return false;
++  return value->s.error != 0;
+ }
+ 
+ 
+@@ -5532,6 +5544,9 @@ bool Item_func_json_array_intersect::
+     free(new_entry);
+   }
+ 
++  if (unlikely(value->s.error))
++    goto error;
++
+   res= false;
+ 
+   if (has_value)
+@@ -5554,10 +5569,15 @@ String* Item_func_json_array_intersect::val_str(String *str)
+ 
+   json_engine_t je2, res_je, je1;
+   String *js2= args[1]->val_json(&tmp_js2), *js1= args[0]->val_json(&tmp_js1);
++  THD *thd= current_thd;
++
++  je2.s.error= 0;
+ 
+   if (!js1 || !js2)
+     goto null_return;
+ 
++  JSON_DO_PAUSE_EXECUTION(thd, 0.0002);
++
+   if (parse_for_each_row)
+   {
+     if (args[0]->null_value)
+@@ -5570,7 +5590,8 @@ String* Item_func_json_array_intersect::val_str(String *str)
+       free_root(&hash_root, MYF(0));
+     root_inited= false;
+     item_hash_inited= false;
+-    prepare_json_and_create_hash(&je1, js1);
++    if (prepare_json_and_create_hash(&je1, js1))
++      goto null_return;
+   }
+ 
+   if (!is_array || args[1]->null_value)
+@@ -5581,6 +5602,7 @@ String* Item_func_json_array_intersect::val_str(String *str)
+ 
+   json_scan_start(&je2, js2->charset(), (const uchar *) js2->ptr(),
+                   (const uchar *) js2->ptr() + js2->length());
++  je2.killed_ptr= (uint32_t *) &thd->killed;
+ 
+   if (json_read_value(&je2) || je2.value_type != JSON_VALUE_ARRAY)
+     goto error_return;
+@@ -5616,13 +5638,17 @@ bool Item_func_json_array_intersect::prepare_json_and_create_hash(json_engine_t
+ {
+   json_scan_start(je1, js->charset(), (const uchar *) js->ptr(),
+                   (const uchar *) js->ptr() + js->length());
++  je1->killed_ptr= (uint32_t *) &current_thd->killed;
+   /*
+     Scan value uses the hash table to get the intersection of two arrays.
+   */
+ 
+   if (my_hash_init(PSI_INSTRUMENT_ME, &seen, je1->s.cs, 0, 0, 0,
+                    get_key_name, NULL, 0))
++  {
++    my_error(ER_OUT_OF_RESOURCES, MYF(0));
+     return true;
++  }
+   seen_hash_inited= true;
+ 
+   if (!root_inited)
+@@ -5632,10 +5658,13 @@ bool Item_func_json_array_intersect::prepare_json_and_create_hash(json_engine_t
+   if (json_read_value(je1)
+      || !(is_array= (je1->value_type == JSON_VALUE_ARRAY)) ||
+       create_hash(je1, &items, item_hash_inited, &hash_root))
++  {
++    if (je1->s.error)
+     {
+-      if (je1->s.error)
+-        report_json_error(js, je1, 0);
++      report_json_error(js, je1, 0);
++      return true;
+     }
++  }
+ 
+   return false;
+ }
+@@ -5660,7 +5689,12 @@ bool Item_func_json_array_intersect::fix_length_and_dec(THD *thd)
+ 
+   js1= args[0]->val_json(&tmp_js1);
+ 
+-  if (js1 && prepare_json_and_create_hash(&je1, js1))
++  /*
++    A JSON syntax error in the constant argument is only reported as a
++    warning; fail here if a real error was raised (e.g. the statement
++    was killed or timed out).
++  */
++  if (js1 && prepare_json_and_create_hash(&je1, js1) && thd->is_error())
+   {
+     return TRUE;
+   }
+@@ -5734,6 +5768,9 @@ static bool filter_keys(json_engine_t *je1, String *str, HASH items)
+     }
+   }
+ 
++  if (unlikely(je1->s.error))
++    goto error;
++
+   res= false;
+ 
+   if (has_value)
+@@ -5753,21 +5790,27 @@ String* Item_func_json_object_filter_keys::val_str(String *str)
+ 
+   json_engine_t je1, res_je;
+   String *js1= args[0]->val_json(&tmp_js1);
++  THD *thd= current_thd;
++
++  je1.s.error= 0;
+ 
+   if (null_value || args[0]->null_value)
+     goto null_return;
+ 
++  JSON_DO_PAUSE_EXECUTION(thd, 0.0002);
++
+   str->set_charset(js1->charset());
+   str->length(0);
+ 
+   json_scan_start(&je1, js1->charset(),(const uchar *) js1->ptr(),
+                   (const uchar *) js1->ptr() + js1->length());
++  je1.killed_ptr= (uint32_t *) &thd->killed;
+ 
+   if (json_read_value(&je1) || je1.value_type != JSON_VALUE_OBJECT)
+     goto error_return;
+ 
+   if(filter_keys(&je1, str, items))
+-    goto null_return;
++    goto error_return;
+ 
+    if (str->length())
+    {
+@@ -5808,6 +5851,7 @@ bool Item_func_json_object_filter_keys::fix_length_and_dec(THD *thd)
+ 
+   json_scan_start(&je2, js2->charset(),(const uchar *) js2->ptr(),
+                   (const uchar *) js2->ptr() + js2->length());
++  je2.killed_ptr= (uint32_t *) &thd->killed;
+   if (!root_inited)
+     init_alloc_root(PSI_NOT_INSTRUMENTED, &hash_root, 1024, 0, MYF(0));
+   root_inited= true;
+@@ -5818,7 +5862,8 @@ bool Item_func_json_object_filter_keys::fix_length_and_dec(THD *thd)
+     if (je2.s.error)
+       report_json_error(js2, &je2, 0);
+     null_value= 1;
+-    return FALSE;
++    set_maybe_null();
++    return thd->is_error();
+   }
+ 
+   max_length= args[0]->max_length;
+@@ -5894,15 +5939,19 @@ String* Item_func_json_object_to_array::val_str(String *str)
+ 
+   json_engine_t je;
+   String *js1= args[0]->val_str(&tmp);
++  THD *thd= current_thd;
+ 
+   if (args[0]->null_value)
+     goto null_return;
+ 
++  JSON_DO_PAUSE_EXECUTION(thd, 0.0002);
++
+   str->set_charset(js1->charset());
+   str->length(0);
+ 
+   json_scan_start(&je, js1->charset(),(const uchar *) js1->ptr(),
+                   (const uchar *) js1->ptr() + js1->length());
++  je.killed_ptr= (uint32_t *) &thd->killed;
+ 
+   if (json_read_value(&je))
+     goto error_return;

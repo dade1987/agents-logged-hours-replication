@@ -1,0 +1,28 @@
+diff --git a/sql/sql_acl.cc b/sql/sql_acl.cc
+index d4a7606d..95d32728 100644
+--- a/sql/sql_acl.cc
++++ b/sql/sql_acl.cc
+@@ -645,7 +645,7 @@ bool ROLE_GRANT_PAIR::init(MEM_ROOT *mem, const char *username,
+ }
+ 
+ #define IP_ADDR_STRLEN (3 + 1 + 3 + 1 + 3 + 1 + 3)
+-#define ACL_KEY_LENGTH (IP_ADDR_STRLEN + 1 + NAME_LEN + \
++#define ACL_KEY_LENGTH (1 + IP_ADDR_STRLEN + 1 + NAME_LEN + \
+                         1 + USERNAME_LENGTH + 1)
+ 
+ #if defined(HAVE_OPENSSL)
+@@ -3704,7 +3704,13 @@ privilege_t acl_get(const char *host, const char *ip,
+   acl_entry *entry;
+   DBUG_ENTER("acl_get");
+ 
+-  tmp_db= strmov(strmov(key, safe_str(ip)) + 1, user) + 1;
++  /*
++    Roles are looked up with empty host and ip. Use a distinct first byte in
++    the key, so that a role cannot share a cache entry with a user of the
++    same name (e.g. user@localhost, whose ip is also empty).
++  */
++  key[0]= (host && !host[0]) ? 'R' : 'U';
++  tmp_db= strmov(strmov(key + 1, safe_str(ip)) + 1, user) + 1;
+   end= strnmov(tmp_db, db, key + sizeof(key) - tmp_db);
+ 
+   if (end >= key + sizeof(key)) // db name was truncated

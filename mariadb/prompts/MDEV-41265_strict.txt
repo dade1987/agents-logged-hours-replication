@@ -1,0 +1,71 @@
+You are a software engineer fixing an issue in MariaDB Server (C/C++). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot build MariaDB or run its test suite. Read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update mysql-test tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDEV-41265: SELECT/ UPDATE RETURNING INTO a single row-field fails with ER_WRONG_NUMBER_OF_COLUMNS_IN_SELECT, even though the column count matches
+
+{code:sql}
+
+CREATE TABLE t1 (a INT, b VARCHAR(10));
+INSERT INTO t1 VALUES (10,'b10');
+
+DELIMITER $$;
+CREATE PROCEDURE p1()
+BEGIN
+  DECLARE r0 ROW (a INT, b VARCHAR(10));
+  SELECT a INTO r0.a FROM t1;
+  SELECT r0.a;
+END;
+$$
+DELIMITER ;$$
+
+
+--error ER_WRONG_NUMBER_OF_COLUMNS_IN_SELECT
+CALL p1;
+DROP PROCEDURE p1;
+
+DELIMITER $$;
+CREATE PROCEDURE p2()
+BEGIN
+  DECLARE r0 ROW (a INT, b VARCHAR(10));
+  UPDATE t1 SET a=a+1 RETURNING a INTO r0.a;
+  SELECT r0.a;
+END;
+$$
+DELIMITER ;$$
+
+--error ER_WRONG_NUMBER_OF_COLUMNS_IN_SELECT
+CALL p2;
+DROP PROCEDURE p2;
+
+DROP TABLE t1;
+{code}
++note that the error is the same - "The used SELECT statements have a different number of columns" - for UPDATE also
+{noformat}
+CREATE TABLE t1 (a INT, b VARCHAR(10));
+INSERT INTO t1 VALUES (10,'b10');
+CREATE PROCEDURE p1()
+BEGIN
+DECLARE r0 ROW (a INT, b VARCHAR(10));
+SELECT a INTO r0.a FROM t1;
+SELECT r0.a;
+END;
+$$
+CALL p1;
+ERROR 21000: The used SELECT statements have a different number of columns
+DROP PROCEDURE p1;
+CREATE PROCEDURE p2()
+BEGIN
+DECLARE r0 ROW (a INT, b VARCHAR(10));
+UPDATE t1 SET a=a+1 RETURNING a INTO r0.a;
+SELECT r0.a;
+END;
+$$
+CALL p2;
+ERROR 21000: The used SELECT statements have a different number of columns
+{noformat}

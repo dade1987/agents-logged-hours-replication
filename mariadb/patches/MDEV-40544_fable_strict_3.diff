@@ -1,0 +1,102 @@
+diff --git a/mysql-test/suite/binlog/r/binlog_mysqlbinlog_force_read.result b/mysql-test/suite/binlog/r/binlog_mysqlbinlog_force_read.result
+new file mode 100644
+index 00000000..c9e2a203
+--- /dev/null
++++ b/mysql-test/suite/binlog/r/binlog_mysqlbinlog_force_read.result
+@@ -0,0 +1,6 @@
++RESET MASTER;
++FLUSH BINARY LOGS;
++# MYSQL_BINLOG --verify-binlog-checksum --force-read --debug=d,simulate_checksum_test_failure MYSQLD_DATADIR/master-bin.000001
++FOUND 4 /# Unknown event/ in binlog_mysqlbinlog_force_read.out
++NOT FOUND /ERROR/ in binlog_mysqlbinlog_force_read.out
++# End of test
+diff --git a/mysql-test/suite/binlog/t/binlog_mysqlbinlog_force_read.test b/mysql-test/suite/binlog/t/binlog_mysqlbinlog_force_read.test
+new file mode 100644
+index 00000000..96e8bd9b
+--- /dev/null
++++ b/mysql-test/suite/binlog/t/binlog_mysqlbinlog_force_read.test
+@@ -0,0 +1,42 @@
++#
++# Purpose:
++#   mariadb-binlog --force-read is documented as "output invalid events as
++# 'Unknown event's rather than error". When an event failed its checksum
++# verification, Log_event::read_log_event() both returned an Unknown_log_event
++# substitute and set an error message, which triggered an assertion in debug
++# builds (DBUG_ASSERT(!res)) and leaked the substitute event in release
++# builds (a second, "hopelessly corrupted", Unknown_log_event was returned
++# instead).
++#
++# Methodology:
++#   Simulate a checksum failure for every event using the
++# simulate_checksum_test_failure debug point and run mariadb-binlog with
++# --verify-binlog-checksum --force-read. It must succeed, print each event as
++# an Unknown event, and print no error.
++#
++# References:
++#   MDEV-40544: Assertion fail / Memory leak in mariadb-binlog --force-read
++#
++
++--source include/have_debug.inc
++--source include/have_log_bin.inc
++
++RESET MASTER;
++FLUSH BINARY LOGS;
++
++--let $MYSQLD_DATADIR= `SELECT @@datadir`
++--let $outfile= $MYSQLTEST_VARDIR/tmp/binlog_mysqlbinlog_force_read.out
++
++--echo # MYSQL_BINLOG --verify-binlog-checksum --force-read --debug=d,simulate_checksum_test_failure MYSQLD_DATADIR/master-bin.000001
++--exec $MYSQL_BINLOG --verify-binlog-checksum --force-read --debug=d,simulate_checksum_test_failure $MYSQLD_DATADIR/master-bin.000001 > $outfile 2>&1
++
++--let SEARCH_FILE= $outfile
++--let SEARCH_PATTERN= # Unknown event
++--source include/search_pattern_in_file.inc
++
++--let SEARCH_PATTERN= ERROR
++--source include/search_pattern_in_file.inc
++
++--remove_file $outfile
++
++--echo # End of test
+diff --git a/sql/log_event.cc b/sql/log_event.cc
+index 5039c21c..dd4f582d 100644
+--- a/sql/log_event.cc
++++ b/sql/log_event.cc
+@@ -1110,15 +1110,20 @@ Log_event* Log_event::read_log_event(const uchar *buf, uint event_len,
+   if (crc_check && event_checksum_test(const_cast<uchar*>(buf), event_len, alg))
+   {
+ #ifdef MYSQL_CLIENT
+-    *error= "Event crc check failed! Most likely there is event corruption.";
+     if (force_opt)
+     {
++      /*
++        --force-read: output the invalid event as an 'Unknown event' rather
++        than reporting an error. The error must not be set, as callers
++        (e.g. Log_event::read_log_event(IO_CACHE*, ...)) assume that an
++        error is never accompanied by a returned event.
++      */
+       event_len-= BINLOG_CHECKSUM_LEN;
+       ev= new Unknown_log_event(buf, fdle);
+       goto exit;
+     }
+-    else
+-      DBUG_RETURN(NULL);
++    *error= "Event crc check failed! Most likely there is event corruption.";
++    DBUG_RETURN(NULL);
+ #else
+     *error= ER_THD_OR_DEFAULT(current_thd, ER_BINLOG_READ_EVENT_CHECKSUM_FAILURE);
+     if (print_errors)
+@@ -1358,6 +1363,13 @@ Log_event* Log_event::read_log_event(const uchar *buf, uint event_len,
+         *error= "Found invalid event in binary log";
+       DBUG_RETURN(0);
+     }
++    /*
++      --force-read: output the invalid event as an 'Unknown event' rather
++      than reporting an error. Clear any error set above (e.g. for the
++      incompatible MySQL 8.0 events), as callers assume that an error is
++      never accompanied by a returned event.
++    */
++    *error= 0;
+     ev= new Unknown_log_event(buf, fdle);
+ #else
+     if (!*error)

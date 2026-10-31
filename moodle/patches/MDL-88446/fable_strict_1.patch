@@ -1,0 +1,55 @@
+diff --git a/public/media/player/videojs/classes/plugin.php b/public/media/player/videojs/classes/plugin.php
+index c9c4320e99c..7b47ade8274 100644
+--- a/public/media/player/videojs/classes/plugin.php
++++ b/public/media/player/videojs/classes/plugin.php
+@@ -279,8 +279,12 @@ class media_videojs_plugin extends core_media_player_native {
+ 
+     public function list_supported_urls(array $urls, array $options = array()) {
+         $result = [];
+-        // Youtube.
++        // Reset the state from any previous embed processed by this same plugin instance.
++        // The ogvtech flag must be reset here (and not only inside the foreach loop below) because
++        // the YouTube early return bypasses the loop, and otherwise a previously processed
++        // Ogv.JS supported media (e.g. .webm/.ogv) would leak its techOrder into the YouTube embed.
+         $this->youtube = false;
++        $this->ogvtech = false;
+         if (count($urls) == 1 && get_config('media_videojs', 'youtube')) {
+             $url = reset($urls);
+ 
+diff --git a/public/media/player/videojs/tests/player_test.php b/public/media/player/videojs/tests/player_test.php
+index 4f0d81eb931..415285b5cf7 100644
+--- a/public/media/player/videojs/tests/player_test.php
++++ b/public/media/player/videojs/tests/player_test.php
+@@ -284,6 +284,32 @@ final class player_test extends \advanced_testcase {
+         $this->assertStringNotContainsString('mediaplugin_videojs', $t);
+     }
+ 
++    /**
++     * Test that a YouTube embed processed after an Ogv.JS supported media (e.g. .webm/.ogv)
++     * by the same plugin instance does not inherit the OgvJS techOrder (MDL-88446).
++     */
++    public function test_youtube_after_ogv_media(): void {
++        set_config('youtube', 1, 'media_videojs');
++        set_config('videoextensions', '.webm,.ogv,.mp4', 'media_videojs');
++
++        $manager = core_media_manager::instance();
++
++        // First embed an Ogv.JS supported media, this sets the ogvtech flag on the plugin instance.
++        $t = $manager->embed_url(new moodle_url('http://example.org/1.webm'));
++        $this->assertStringContainsString('mediaplugin_videojs', $t);
++        $this->assertStringContainsString('&quot;techOrder&quot;: [&quot;OgvJS&quot;]', $t);
++
++        // Now embed a YouTube video with the same manager/plugin instance.
++        $t = $manager->embed_url(new moodle_url('http://www.youtube.com/watch?v=vyrwMmsufJc'));
++        $this->youtube_plugin_engaged($t);
++        $this->assertStringNotContainsString('OgvJS', $t);
++
++        // And an Ogv.JS media again, to be sure the flag is still set when it should be.
++        $t = $manager->embed_url(new moodle_url('http://example.org/2.ogv'));
++        $this->assertStringContainsString('&quot;techOrder&quot;: [&quot;OgvJS&quot;]', $t);
++        $this->assertStringNotContainsString('youtube', $t);
++    }
++
+     /**
+      * Data provider for {@see test_youtube_start_time}
+      *

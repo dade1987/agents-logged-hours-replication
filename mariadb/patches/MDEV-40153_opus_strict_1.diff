@@ -1,0 +1,102 @@
+diff --git a/mysql-test/suite/compat/oracle/r/sp-record.result b/mysql-test/suite/compat/oracle/r/sp-record.result
+index 5b66c6fa..6053c153 100644
+--- a/mysql-test/suite/compat/oracle/r/sp-record.result
++++ b/mysql-test/suite/compat/oracle/r/sp-record.result
+@@ -895,3 +895,32 @@ NULL;
+ END;
+ $$
+ ERROR HY000: Data type 'rec0_t' doesn't support CHARACTER SET attribute.
++#
++# MDEV-40153 Assertion `rec->field->head()->charset == nullptr' failed in Type_handler_row::Column_definition_prepare_stage1
++#
++CREATE PACKAGE pk_crash AS TYPE r IS RECORD (b BLOB); FUNCTION f RETURN r; END;
++$$
++DROP PACKAGE pk_crash;
++CREATE PACKAGE pk1 AS
++TYPE r IS RECORD (a VARBINARY(10), b BLOB, c VARCHAR(10) CHARACTER SET latin1);
++FUNCTION f RETURN r;
++PROCEDURE p(x r);
++END;
++$$
++CREATE PACKAGE BODY pk1 AS
++FUNCTION f RETURN r AS
++v r;
++BEGIN
++v.a:= 'a';
++v.b:= 'b';
++v.c:= 'c';
++RETURN v;
++END;
++PROCEDURE p(x r) AS
++BEGIN
++NULL;
++END;
++END;
++$$
++DROP PACKAGE pk1;
++# End of 13.1 tests
+diff --git a/mysql-test/suite/compat/oracle/t/sp-record.test b/mysql-test/suite/compat/oracle/t/sp-record.test
+index b75a739d..67ebbf2a 100644
+--- a/mysql-test/suite/compat/oracle/t/sp-record.test
++++ b/mysql-test/suite/compat/oracle/t/sp-record.test
+@@ -975,3 +975,40 @@ BEGIN
+ END;
+ $$
+ DELIMITER ;$$
++
++--echo #
++--echo # MDEV-40153 Assertion `rec->field->head()->charset == nullptr' failed in Type_handler_row::Column_definition_prepare_stage1
++--echo #
++
++DELIMITER $$;
++CREATE PACKAGE pk_crash AS TYPE r IS RECORD (b BLOB); FUNCTION f RETURN r; END;
++$$
++DELIMITER ;$$
++DROP PACKAGE pk_crash;
++
++DELIMITER $$;
++CREATE PACKAGE pk1 AS
++  TYPE r IS RECORD (a VARBINARY(10), b BLOB, c VARCHAR(10) CHARACTER SET latin1);
++  FUNCTION f RETURN r;
++  PROCEDURE p(x r);
++END;
++$$
++CREATE PACKAGE BODY pk1 AS
++  FUNCTION f RETURN r AS
++    v r;
++  BEGIN
++    v.a:= 'a';
++    v.b:= 'b';
++    v.c:= 'c';
++    RETURN v;
++  END;
++  PROCEDURE p(x r) AS
++  BEGIN
++    NULL;
++  END;
++END;
++$$
++DELIMITER ;$$
++DROP PACKAGE pk1;
++
++--echo # End of 13.1 tests
+diff --git a/sql/sql_type_row.cc b/sql/sql_type_row.cc
+index 97d48ed3..a5fb807b 100644
+--- a/sql/sql_type_row.cc
++++ b/sql/sql_type_row.cc
+@@ -252,7 +252,14 @@ bool Type_handler_row::
+   {
+     DBUG_ASSERT(rec->field);
+     DBUG_ASSERT(rec->field->elements);
+-    DBUG_ASSERT(rec->field->head()->charset == nullptr); // Not prepared
++    /*
++      Note, we cannot assert that the record fields are not prepared yet
++      by checking that "charset" is nullptr: the parser sets "charset"
++      for binary data types (e.g. BLOB, VARBINARY) and for data types
++      with an explicit CHARACTER SET or COLLATE clause.
++      The original record definition is never prepared in place anyway:
++      we always prepare its deep copy below.
++    */
+     Row_definition_list *row= rec->field->deep_copy(thd);
+     if (!row || thd->lex->sphead->row_fill_field_definitions(thd, row))
+       return true; // Error

@@ -1,0 +1,62 @@
+diff --git a/public/mod/assign/locallib.php b/public/mod/assign/locallib.php
+index 5e81ebf5ab4..db3c83092b4 100644
+--- a/public/mod/assign/locallib.php
++++ b/public/mod/assign/locallib.php
+@@ -2454,8 +2454,14 @@ class assign {
+                 }
+             }
+ 
+-            // Exclude suspended users from the list of participants.
+-            $additionalfilters .= " AND u.suspended = 0 AND u.auth <> 'nologin'";
++            // Exclude system-suspended users from the list of participants when only active users are requested.
++            // Course-level suspension is handled by get_enrolled_sql() via $onlyactive, so this keeps system-level
++            // suspension consistent with it (and with quizzes), where suspended users' submissions remain visible
++            // to users who can view suspended participants.
++            if ($onlyactive) {
++                $additionalfilters .= " AND u.suspended = 0";
++            }
++            $additionalfilters .= " AND u.auth <> 'nologin'";
+ 
+             $sql = "SELECT $fields
+                       FROM {user} u
+diff --git a/public/mod/assign/tests/locallib_test.php b/public/mod/assign/tests/locallib_test.php
+index b66825705c6..4ba229f33f4 100644
+--- a/public/mod/assign/tests/locallib_test.php
++++ b/public/mod/assign/tests/locallib_test.php
+@@ -1017,6 +1017,36 @@ final class locallib_test extends \advanced_testcase {
+         $this->assertCount(10, $assign->list_participants(null, true));
+     }
+ 
++    /**
++     * System-suspended users should be treated like course-suspended users when suspended participants are shown.
++     */
++    public function test_list_participants_system_suspended(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++
++        $course = $this->getDataGenerator()->create_course();
++        $teacher = $this->getDataGenerator()->create_and_enrol($course, 'teacher');
++        $student = $this->getDataGenerator()->create_and_enrol($course, 'student');
++        $systemsuspended = $this->getDataGenerator()->create_and_enrol($course, 'student');
++        $DB->set_field('user', 'suspended', 1, ['id' => $systemsuspended->id]);
++
++        $this->setUser($teacher);
++        $assign = $this->create_instance($course, ['grade' => 100]);
++
++        // Only active users: the system-suspended student is excluded.
++        set_user_preference('grade_report_showonlyactiveenrol', true);
++        $participants = $assign->list_participants(null, true);
++        $this->assertArrayHasKey($student->id, $participants);
++        $this->assertArrayNotHasKey($systemsuspended->id, $participants);
++
++        // Showing suspended participants: the system-suspended student is included, as for course suspension.
++        set_user_preference('grade_report_showonlyactiveenrol', false);
++        $participants = $assign->list_participants(null, true);
++        $this->assertArrayHasKey($student->id, $participants);
++        $this->assertArrayHasKey($systemsuspended->id, $participants);
++    }
++
+     public function test_list_participants_with_group_restriction(): void {
+         global $CFG;
+ 

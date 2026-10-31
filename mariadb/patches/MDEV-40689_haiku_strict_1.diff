@@ -1,0 +1,16 @@
+diff --git a/sql/item_sum.h b/sql/item_sum.h
+index 77e02cac..45ccb238 100644
+--- a/sql/item_sum.h
++++ b/sql/item_sum.h
+@@ -1297,7 +1297,10 @@ class Item_sum_bit :public Item_sum_int
+   {
+     if (as_window_function)
+     {
+-      remove_as_window(args[0]->val_int());
++      ulonglong value= (ulonglong) args[0]->val_int();
++      // NULL values were never added (see add()), so nothing to remove.
++      if (!args[0]->null_value)
++        remove_as_window(value);
+       return;
+     }
+     // Unless we're counting bits, we can not remove anything.

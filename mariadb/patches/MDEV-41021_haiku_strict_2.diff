@@ -1,0 +1,77 @@
+diff --git a/storage/innobase/handler/ha_innodb.cc b/storage/innobase/handler/ha_innodb.cc
+index b60155f9..3796d018 100644
+--- a/storage/innobase/handler/ha_innodb.cc
++++ b/storage/innobase/handler/ha_innodb.cc
+@@ -20126,10 +20126,55 @@ static void innodb_log_archive_update(THD *thd, st_mysql_sys_var*,
+   log_sys.set_archive(*static_cast<const my_bool*>(save), thd);
+ }
+ 
++/** Validate SET GLOBAL innodb_log_archive.
++Changing the setting requires writing the log file header,
++which is not possible in read-only mode.
++@return 0 on success, 1 on failure (the error has been reported) */
++static int innodb_log_archive_check(THD*, st_mysql_sys_var*,
++                                    void *save, st_mysql_value *value)
++{
++  my_bool archive;
++
++  if (value->value_type(value) == MYSQL_VALUE_TYPE_STRING)
++  {
++    char buf[STRING_BUFFER_USUAL_SIZE];
++    int len= sizeof buf;
++    const char *str= value->val_str(value, buf, &len);
++    if (!str)
++      return 1;
++    if (!my_strcasecmp(system_charset_info, str, "ON") ||
++        !my_strcasecmp(system_charset_info, str, "TRUE") ||
++        !strcmp(str, "1"))
++      archive= 1;
++    else if (!my_strcasecmp(system_charset_info, str, "OFF") ||
++             !my_strcasecmp(system_charset_info, str, "FALSE") ||
++             !strcmp(str, "0"))
++      archive= 0;
++    else
++      return 1;
++  }
++  else
++  {
++    long long tmp;
++    if (value->val_int(value, &tmp) < 0 || (tmp != 0 && tmp != 1))
++      return 1;
++    archive= static_cast<my_bool>(tmp);
++  }
++
++  *static_cast<my_bool*>(save)= archive;
++
++  if (archive != log_sys.archive && (high_level_read_only || recv_sys.rpo))
++  {
++    my_error(ER_INNODB_READ_ONLY, MYF(0));
++    return 1;
++  }
++  return 0;
++}
++
+ static MYSQL_SYSVAR_BOOL(log_archive, log_sys.archive,
+   PLUGIN_VAR_OPCMDARG,
+   "Whether log archiving is desired",
+-  nullptr, innodb_log_archive_update, FALSE);
++  innodb_log_archive_check, innodb_log_archive_update, FALSE);
+ 
+ static MYSQL_SYSVAR_UINT64_T(log_archive_start, innodb_log_archive_start,
+   PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+diff --git a/storage/innobase/log/log0log.cc b/storage/innobase/log/log0log.cc
+index ae236359..8820b339 100644
+--- a/storage/innobase/log/log0log.cc
++++ b/storage/innobase/log/log0log.cc
+@@ -767,6 +767,11 @@ void log_t::header_rewrite(my_bool archive) noexcept
+ @param thd      SQL connection */
+ void log_t::set_archive(my_bool archive, THD *thd) noexcept
+ {
++  /* The setting is validated in innodb_log_archive_check();
++  the log file header cannot be rewritten in read-only mode. */
++  if (UNIV_UNLIKELY(high_level_read_only || recv_sys.rpo))
++    return;
++
+   thd_wait_begin(thd, THD_WAIT_DISKIO);
+   tpool::tpool_wait_begin();
+   lsn_t wait_lsn;

@@ -1,0 +1,17 @@
+diff --git a/public/lib/csvlib.class.php b/public/lib/csvlib.class.php
+index 15f972cd350..3812333d603 100644
+--- a/public/lib/csvlib.class.php
++++ b/public/lib/csvlib.class.php
+@@ -176,8 +176,10 @@ class csv_import_reader {
+         $filepointer = fopen($filename, "w");
+         // The information has been stored in csv format, as serialized data has issues
+         // with special characters and line returns.
+-        $storedata = csv_export_writer::print_array($columns, ',', '"', true);
+-        fwrite($filepointer, $storedata);
++        // Formulas must not be escaped here: this is an import cache, not a spreadsheet export.
++        foreach ($columns as $row) {
++            fputcsv($filepointer, $row, ',', '"', '\\');
++        }
+ 
+         fclose($fp);
+         unlink($tempfile);

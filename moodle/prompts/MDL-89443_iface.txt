@@ -1,0 +1,40 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot run Moodle's test suite. You may run `php -l <file>` and read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-89443: Theme CSS generation retains excessive memory
+
+h2. Memory not freed
+
+Despite its [best efforts|https://github.com/moodle/moodle/blob/3deaeb9e4d026b75ba8f2f4a9108f6340a85df7a/public/lib/classes/output/theme_config.php#L1291-L1293], {{get_css_content_from_scss}} does not actually clear memory  after it compiles SCSS due to the SCSS graph being cyclic. All it does is {{unset($compiler)}} which is not enough for the garbage collector to actually free memory. The snippet below shows why, and demonstrates how we can _really_ free memory (see the same snippet on 3v4l [here|https://3v4l.org/YIs7r]):
+
+{code:php}$parent = new stdClass();
+$child = new stdClass();
+$parent->child = $child;
+$child->parent = $parent;
+$reference = WeakReference::create($parent);
+
+unset($parent, $child);
+echo 'After unset: ', $reference->get() ? 'alive' : 'collected', PHP_EOL;
+
+gc_collect_cycles();
+echo 'After cyclic GC: ', $reference->get() ? 'alive' : 'collected';{code}
+
+ScssPHP’s output graph has [exactly this structure|https://github.com/moodle/moodle/blob/v5.2.2/public/lib/scssphp/src/Compiler.php#L1829-L1841]. It stores the parent on the child, and the child on the parent.
+
+h2. Unnecessary CSS retention
+
+The {{build_installed_themes_task}} loads every installed theme and builds them together and {{theme_build_css_for_themes}} retains completed RTL and LTR stylesheets so it can return them to its caller. The task ignores that return value because it only needs the generated CSS to be cached. This causes memory to accumulate throughout the task, i.e.,:
+
+* compile A → retain A
+* compile B → retain A + B
+* compile C → retain A + B + C
+
+
+The developers' tests for this issue use these new or changed classes, functions or web services (names and signatures only; you must implement them):
+(nessuna interfaccia nuova usata dai test)

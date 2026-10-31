@@ -1,0 +1,23 @@
+diff --git a/public/course/lib.php b/public/course/lib.php
+index b40dbc83e1b..6ca0a652397 100644
+--- a/public/course/lib.php
++++ b/public/course/lib.php
+@@ -898,7 +898,17 @@ function course_module_bulk_update_calendar_events($modulename, $courseid = 0) {
+ 
+     foreach ($instances as $instance) {
+         if ($cm = get_coursemodule_from_instance($modulename, $instance->id, $instance->course)) {
+-            course_module_calendar_event_update_process($instance, $cm);
++            if (!empty($cm->deletioninprogress)) {
++                // The module is being deleted, there is no point refreshing its events.
++                continue;
++            }
++            try {
++                course_module_calendar_event_update_process($instance, $cm);
++            } catch (\moodle_exception $e) {
++                // The module (or course) may have been deleted in the meantime. Do not fail the whole task forever.
++                debugging('Unable to refresh calendar events for ' . $modulename . ' instance ' . $instance->id .
++                    ': ' . $e->getMessage(), DEBUG_DEVELOPER);
++            }
+         }
+     }
+     return true;

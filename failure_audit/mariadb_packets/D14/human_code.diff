@@ -1,0 +1,94 @@
+diff --git a/sql/field.cc b/sql/field.cc
+index 9de889a4503..24a1d37af22 100644
+--- a/sql/field.cc
++++ b/sql/field.cc
+@@ -10125,6 +10125,34 @@ int Field_bit::store(const char *from, size_t length, CHARSET_INFO *cs)
+ }
+ 
+ 
++int Field_bit::store_numeric(const char *from, size_t length, CHARSET_INFO *cs)
++{
++  char *end;
++  int error;
++  ulonglong nr= cs->strntoull10rnd(from, length, true, &end, &error);
++  int store_error= store((longlong) nr, true);
++
++  if (unlikely(error == MY_ERRNO_ERANGE))
++  {
++    if (!store_error)
++      set_warning(ER_WARN_DATA_OUT_OF_RANGE, 1);
++    return 1;
++  }
++  if (error == MY_ERRNO_EDOM || from == end)
++  {
++    ErrConvString str(from, length, cs);
++    set_warning_truncated_wrong_value("integer", str.ptr());
++    return 1;
++  }
++  if (test_if_important_data(cs, end, from + length))
++  {
++    set_warning(WARN_DATA_TRUNCATED, 1);
++    return 1;
++  }
++  return store_error;
++}
++
++
+ int Field_bit::store(double nr)
+ {
+   return Field_bit::store((longlong) nr, FALSE);
+diff --git a/sql/field.h b/sql/field.h
+index 1f6ac6450ab..ff9ff071e1c 100644
+--- a/sql/field.h
++++ b/sql/field.h
+@@ -967,6 +967,17 @@ class Field: public Value_source
+   {
+     return store(to, length, cs);
+   }
++  /*
++    Store a number literal as text, possibly with a fraction or exponent,
++    rather than a binary string. Called by store_json_in_field() in JSON_TABLE
++    for JSON numeric values. Types whose string store uses a binary
++    representation can override this without changing string input.
++    As with store(), a nonzero result can indicate a conversion warning.
++  */
++  virtual int store_numeric(const char *from, size_t length, CHARSET_INFO *cs)
++  {
++    return store(from, length, cs);
++  }
+   virtual int  store_binary(const char *to, size_t length)
+   {
+     return store(to, length, &my_charset_bin);
+@@ -5003,6 +5014,7 @@ class Field_bit :public Field {
+   int save_in_field(Field *to) override { return to->store(val_int(), true); }
+   bool memcpy_field_possible(const Field *from) const override{ return false; }
+   int store(const char *to, size_t length, CHARSET_INFO *charset) override;
++  int store_numeric(const char *from, size_t length, CHARSET_INFO *cs) override;
+   int store(double nr) override;
+   int store(longlong nr, bool unsigned_val) override;
+   int store_decimal(const my_decimal *) override;
+diff --git a/sql/json_table.cc b/sql/json_table.cc
+index e5ac60085bf..6466cd399e2 100644
+--- a/sql/json_table.cc
++++ b/sql/json_table.cc
+@@ -360,7 +360,7 @@ int ha_json_table::rnd_init(bool scan)
+ /*
+   @brief
+      Store JSON value in an SQL field, doing necessary special conversions
+-     for JSON's null, true, and false.
++     for JSON's null, true, false, and numeric values.
+ */
+ 
+ static void store_json_in_field(Field *f, const json_engine_t *je)
+@@ -388,7 +388,10 @@ static void store_json_in_field(Field *f, const json_engine_t *je)
+     break;
+   };
+   st_append_json(&res_tmp, je->s.cs, je->value, je->value_len);
+-  f->store((const char *) res_tmp.ptr(), (uint32) res_tmp.length(), je->s.cs);
++  if (je->value_type == JSON_VALUE_NUMBER)
++    f->store_numeric(res_tmp.ptr(), res_tmp.length(), je->s.cs);
++  else
++    f->store(res_tmp.ptr(), res_tmp.length(), je->s.cs);
+ }
+ 
+ 

@@ -1,0 +1,34 @@
+diff --git a/sql/partition_info.cc b/sql/partition_info.cc
+index d1f85e26..6a486e89 100644
+--- a/sql/partition_info.cc
++++ b/sql/partition_info.cc
+@@ -2826,6 +2826,12 @@ bool partition_info::vers_set_interval(THD* thd, Item* interval,
+   vers_info->auto_hist= auto_hist;
+ 
+   /* 1. assign INTERVAL to interval.step */
++  if (interval->with_param() || (starts && starts->with_param()))
++  {
++    /* Parameters are not bound yet at parse time */
++    my_error(ER_PART_WRONG_VALUE, MYF(0), table_name, "INTERVAL");
++    return true;
++  }
+   if (interval->fix_fields_if_needed_for_scalar(thd, &interval))
+     return true;
+   bool error= get_interval_value(thd, interval, int_type, &vers_info->interval.step) ||
+diff --git a/sql/sql_partition_auto_interval.cc b/sql/sql_partition_auto_interval.cc
+index 2f599e64..6a6cda87 100644
+--- a/sql/sql_partition_auto_interval.cc
++++ b/sql/sql_partition_auto_interval.cc
+@@ -402,6 +402,12 @@ bool partition_info::set_range_interval(THD* thd, Item* ival,
+                                         interval_type type,
+                                         const char *table_name)
+ {
++  if (ival->with_param())
++  {
++    /* Parameters are not bound yet at parse time */
++    my_error(ER_PART_WRONG_VALUE, MYF(0), table_name, "INTERVAL");
++    return true;
++  }
+   if (ival->fix_fields_if_needed_for_scalar(thd, &ival))
+     return true;
+   bool error= get_interval_value(thd, ival, type, &interval) ||

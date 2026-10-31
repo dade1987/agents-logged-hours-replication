@@ -1,0 +1,86 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You CAN run Moodle's existing PHPUnit tests: `cd {WS} && vendor/bin/phpunit <path/to/some_test.php>` (the test environment is already initialised). You may also run `php -l <file>` and read code with grep/find/cat. Use absolute paths starting with {WS} in every command.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-88618: TinyMCE: enable Accordion and List Styles (advlist) bundled open-source plugins
+
+h2. Summary:
+
+This ticket enables two TinyMCE plugins that are already part of the TinyMCE distribution bundled with Moodle LMS but are not currently active: Accordion and List Styles (advlist).
+
+This is a Stream 2 delivery increment of Epic [MDL-88546] (Improve TinyMCE editor capability and configurability in Moodle LMS). The Accordion and advlist plugins were reviewed against lib/editor/tiny/classes/manager.php and confirmed as safe to enable. They are open-source, already bundled in the TinyMCE distribution Moodle ships, and deliver meaningful authoring capability at no additional cost.
+
+h2. Problem statement:
+
+Moodle's TinyMCE distribution includes a range of built-in plugins beyond those currently enabled. Currently:
+
+* The Accordion plugin is not active. Users cannot create collapsible accordion-style sections in editor content.
+* The List Styles (advlist) plugin is not active. Users cannot apply additional ordered and unordered list styles (e.g., lower-alpha, upper-roman, disc, circle) when authoring content.
+
+Teachers and course authors are missing useful formatting and layout tools that TinyMCE already provides.
+
+h2. What this ticket delivers:
+
+* Accordion plugin enabled in Moodle TinyMCE. Users can insert and manage collapsible accordion sections in editor content.
+* List Styles (advlist) plugin enabled in Moodle TinyMCE. The plugin extends the existing list controls with additional list style options.
+* No explicit toolbar or menu layout customisation. Both plugins use TinyMCE default behaviour: Accordion is accessible from the Insert menu; advlist extends the existing list toolbar buttons automatically.
+* Conditional wiring into [MDL-88615]: if [MDL-88615] (TinyMCE admin settings: reorganise plugin controls and add enable/disable for native TinyMCE plugins) is already present in the codebase when this ticket lands, Accordion and advlist should appear in its "Manage TinyMCE standard features" toggle table and be subject to site administrator enable/disable control. If [MDL-88615] has not yet landed, the plugins are enabled for all users by default, consistent with other bundled TinyMCE plugins, and integrate cleanly when [MDL-88615] arrives later.
+
+h2. Value:
+
+Teachers and course authors gain two useful authoring tools that TinyMCE already provides. Accordion sections support structured content presentation inside the editor. List Styles improve formatting control for document-style content. Both capabilities are delivered as part of the existing TinyMCE distribution with no additional commercial cost.
+
+h2. Scope — in scope:
+
+* Enable Accordion and advlist plugins in lib/editor/tiny/classes/manager.php (or the equivalent TinyMCE initialisation path).
+* Sensible default configuration for both plugins — no explicit toolbar or menu layout customisation.
+* Conditional wiring into [MDL-88615] toggle infrastructure if that work is already merged at the time this ticket lands.
+* PHPUnit test coverage confirming both plugins are included in the enabled plugin list.
+* Behat test coverage confirming both plugins produce expected editor behaviour.
+* Draft user documentation markdown file as a delivery artefact (not for immediate publication to docs.moodle.org).
+
+h2. Scope — out of scope:
+
+* Explicit toolbar or menu item layout customisation.
+* Admin toggle UI for these plugins — that is MDL-88615's responsibility.
+* Any other bundled plugin enablement beyond Accordion and advlist.
+* Publishing documentation to docs.moodle.org.
+
+h2. Acceptance criteria:
+
+1. The Accordion plugin is active in the TinyMCE editor. Users can insert collapsible accordion sections via the Insert menu or equivalent default TinyMCE access point.
+2. The advlist plugin is active in the TinyMCE editor. Users can apply extended ordered and unordered list styles when working with lists in the editor.
+3. Both plugins use TinyMCE default behaviour only. No explicit toolbar or menu layout changes are made.
+4. The advlist plugin dependency on the lists plugin is verified to be satisfied.
+5. If [MDL-88615] is present when this ticket lands, Accordion and advlist appear in the "Manage TinyMCE standard features" toggle table and can be enabled/disabled by site administrators.
+6. If [MDL-88615] is not present, the plugins are enabled unconditionally and integrate cleanly when [MDL-88615] lands later.
+7. No regressions are introduced to existing editor behaviour including list handling, content filtering, and accessibility checker workflows.
+8. PHPUnit tests confirm both plugins are present in the initialised plugin list.
+9. Behat tests confirm accordion functionality is accessible in the editor and extended list styles are available when working with lists.
+10. A draft user documentation markdown file is attached to this ticket covering both new capabilities and any relevant configuration notes.
+
+h2. Developer direction:
+
+* Start from lib/editor/tiny/classes/manager.php. This file is the authoritative source for which native TinyMCE plugins are enabled by default in Moodle. Add Accordion and advlist to the enabled set here.
+* Review [MDL-88615] as the companion ticket. If [MDL-88615] is already merged when you pick this up, follow its pattern for registering Accordion and advlist as controllable plugins in the "Manage TinyMCE standard features" toggle table. The goal is that either landing order produces a coherent result.
+* Review [MDL-88547] (TinyMCE Premium: Add Markdown plugin support) as a related implementation pattern in the same Epic. It demonstrates how a plugin is registered, wired through admin config, and surfaced through the TinyMCE initialisation path.
+* advlist has a documented dependency on the lists plugin. Confirm lists is already active in Moodle's enabled plugin set before relying on advlist. If it is not, add it as part of this ticket.
+* Do not add explicit toolbar or menu item configuration. Accordion is accessible via TinyMCE Insert menu when enabled. advlist extends the existing list toolbar buttons automatically — no new toolbar items are needed.
+* Plugin documentation: Accordion [https://www.tiny.cloud/docs/tinymce/latest/accordion/|https://www.tiny.cloud/docs/tinymce/latest/accordion/] and List Styles (advlist) [https://www.tiny.cloud/docs/tinymce/latest/advlist/|https://www.tiny.cloud/docs/tinymce/latest/advlist/]
+
+h2. Technical notes:
+
+* Content filtering: Accordion inserts custom HTML elements into editor content. Verify that Moodle's HTML purifier configuration (format_text) does not strip accordion-specific markup on display. If filtering removes accordion elements, the relevant purifier allowlist will need updating — treat this as in scope if encountered.
+* Toolbar scope: Explicit toolbar and menu layout configuration is intentionally out of scope. A follow-on issue is expected to build on [MDL-88615] to provide per-plugin toolbar and menu configuration for administrators.
+* Landing-order contract: The implementation should be designed so that either ordering — this ticket first or [MDL-88615] first — results in a coherent experience with no manual cleanup required in the second ticket.
+
+h2. Dependencies:
+
+* Epic: [MDL-88546] — parent epic for all TinyMCE capability and configurability work.
+* Related ticket (wire into if already merged): [MDL-88615] — TinyMCE admin settings: reorganise plugin controls and add enable/disable for native TinyMCE plugins.
+* Can proceed independently of [MDL-88615] in either landing order.

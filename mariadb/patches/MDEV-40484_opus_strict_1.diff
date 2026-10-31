@@ -1,0 +1,125 @@
+diff --git a/mysql-test/main/view_grant.result b/mysql-test/main/view_grant.result
+index aff05893..3df172b5 100644
+--- a/mysql-test/main/view_grant.result
++++ b/mysql-test/main/view_grant.result
+@@ -2047,4 +2047,40 @@ connection default;
+ disconnect con1;
+ drop user foo@localhost;
+ drop schema foo;
++#
++# MDEV-40484 ambiguous view frm parsing when username includes \n
++#
++create user 'root
++definer_host=localhost
++suid=1'@localhost;
++grant all on test.* to 'root
++definer_host=localhost
++suid=1'@localhost;
++connect u,localhost,'root
++definer_host=localhost
++suid=1';
++select group_concat(user,'@',host) from mysql.global_priv;
++ERROR 42000: SELECT command denied to user 'root
++definer_host=localhost
++suid=1'@'localhost' for table `mysql`.`global_priv`
++create function f() returns text sql security invoker
++return (select group_concat(user,'@',host) from mysql.global_priv);
++create view v as select f();
++ERROR HY000: Incorrect DEFINER value: 'root
++definer_host=localhost
++suid=1'
++select * from v;
++ERROR 42S02: Table 'test.v' doesn't exist
++disconnect u;
++connection default;
++create definer='a\nb'@localhost view v as select 1;
++ERROR HY000: Incorrect DEFINER value: 'a
++b'
++create definer=a@'local\nhost' view v as select 1;
++ERROR HY000: Incorrect DEFINER value: 'local
++host'
++drop function f;
++drop user 'root
++definer_host=localhost
++suid=1'@localhost;
+ # End of 10.6 tests
+diff --git a/mysql-test/main/view_grant.test b/mysql-test/main/view_grant.test
+index 73c2fd51..749c8fc4 100644
+--- a/mysql-test/main/view_grant.test
++++ b/mysql-test/main/view_grant.test
+@@ -2306,6 +2306,43 @@ connection default;
+ disconnect con1;
+ drop user foo@localhost;
+ drop schema foo;
++--echo #
++--echo # MDEV-40484 ambiguous view frm parsing when username includes \n
++--echo #
++create user 'root
++definer_host=localhost
++suid=1'@localhost;
++grant all on test.* to 'root
++definer_host=localhost
++suid=1'@localhost;
++
++--connect u,localhost,'root
++definer_host=localhost
++suid=1'
++
++--error ER_TABLEACCESS_DENIED_ERROR
++select group_concat(user,'@',host) from mysql.global_priv;
++
++create function f() returns text sql security invoker
++  return (select group_concat(user,'@',host) from mysql.global_priv);
++
++--error ER_WRONG_VALUE
++create view v as select f();
++--error ER_NO_SUCH_TABLE
++select * from v;
++--disconnect u
++--connection default
++
++--error ER_WRONG_VALUE
++create definer='a\nb'@localhost view v as select 1;
++--error ER_WRONG_VALUE
++create definer=a@'local\nhost' view v as select 1;
++
++drop function f;
++drop user 'root
++definer_host=localhost
++suid=1'@localhost;
++
+ --echo # End of 10.6 tests
+ 
+ # Wait till we reached the initial number of concurrent sessions
+diff --git a/sql/sql_view.cc b/sql/sql_view.cc
+index ab2d4df9..638e2dd0 100644
+--- a/sql/sql_view.cc
++++ b/sql/sql_view.cc
+@@ -1061,6 +1061,27 @@ static int mysql_register_view(THD *thd, DDL_LOG_STATE *ddl_log_state,
+   view->algorithm= lex->create_view->algorithm;
+   view->definer.user= lex->definer->user;
+   view->definer.host= lex->definer->host;
++  /*
++    definer_user and definer_host are stored in the view .frm file
++    unescaped, as \n-terminated values. A '\n' inside would make the
++    file ambiguous (allowing injection of arbitrary view parameters),
++    so such definers cannot be stored.
++  */
++  {
++    const LEX_CSTRING *bad= NULL;
++    if (view->definer.user.length &&
++        memchr(view->definer.user.str, '\n', view->definer.user.length))
++      bad= &view->definer.user;
++    else if (view->definer.host.length &&
++             memchr(view->definer.host.str, '\n', view->definer.host.length))
++      bad= &view->definer.host;
++    if (bad)
++    {
++      my_error(ER_WRONG_VALUE, MYF(0), "DEFINER", bad->str);
++      error= -1;
++      goto err;
++    }
++  }
+   view->view_suid= lex->create_view->suid;
+   view->with_check= lex->create_view->check;
+ 

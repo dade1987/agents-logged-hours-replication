@@ -1,0 +1,56 @@
+diff --git a/public/reportbuilder/classes/reportbuilder/schedule/message.php b/public/reportbuilder/classes/reportbuilder/schedule/message.php
+index d3c0799cc83..779cddb5b72 100644
+--- a/public/reportbuilder/classes/reportbuilder/schedule/message.php
++++ b/public/reportbuilder/classes/reportbuilder/schedule/message.php
+@@ -89,7 +89,9 @@ class message extends base {
+             $schedule = $this->get_persistent();
+ 
+             $scheduleuserviewas = $schedule->get('userviewas');
+-            $schedulereportempty = $this->get_configdata()['reportempty'] ?? static::REPORT_EMPTY_SEND_EMPTY;
++
++            // Note the configuration value may be stored as a string (e.g. via form submission), so ensure it's cast.
++            $schedulereportempty = (int) ($this->get_configdata()['reportempty'] ?? static::REPORT_EMPTY_SEND_EMPTY);
+ 
+             // Handle schedule configuration as to who the report should be viewed as.
+             if ($scheduleuserviewas === schedule::REPORT_VIEWAS_CREATOR) {
+diff --git a/public/reportbuilder/tests/reportbuilder/schedule/message_test.php b/public/reportbuilder/tests/reportbuilder/schedule/message_test.php
+index b71772bc24f..2cc2f900d12 100644
+--- a/public/reportbuilder/tests/reportbuilder/schedule/message_test.php
++++ b/public/reportbuilder/tests/reportbuilder/schedule/message_test.php
+@@ -146,10 +146,26 @@ final class message_test extends advanced_testcase {
+         $this->assertStringEndsWith("Username\n{$usertwosees}\n", $messagetwoattachment);
+     }
+ 
++    /**
++     * Data provider for {@see test_execute_report_empty}
++     *
++     * @return array[]
++     */
++    public static function execute_report_empty_provider(): array {
++        return [
++            'Integer value' => [message::REPORT_EMPTY_DONT_SEND],
++            'String value (form submission)' => [(string) message::REPORT_EMPTY_DONT_SEND],
++        ];
++    }
++
+     /**
+      * Test executing for a schedule that is configured to not send empty reports
++     *
++     * @param string|int $reportempty
++     *
++     * @dataProvider execute_report_empty_provider
+      */
+-    public function test_execute_report_empty(): void {
++    public function test_execute_report_empty(string|int $reportempty): void {
+         $this->resetAfterTest();
+         $this->setAdminUser();
+ 
+@@ -164,7 +180,7 @@ final class message_test extends advanced_testcase {
+             'reportid' => $report->get('id'),
+             'name' => 'My schedule',
+             'audiences' => json_encode([$audience->get_persistent()->get('id')]),
+-            'configdata' => json_encode(['reportempty' => message::REPORT_EMPTY_DONT_SEND]),
++            'configdata' => json_encode(['reportempty' => $reportempty]),
+         ]);
+ 
+         $this->expectOutputString("Sending schedule: My schedule (Schedule an email)\n" .

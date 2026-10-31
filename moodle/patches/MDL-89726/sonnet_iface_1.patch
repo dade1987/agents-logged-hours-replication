@@ -1,0 +1,66 @@
+diff --git a/public/lib/classes/output/requirements/import_map.php b/public/lib/classes/output/requirements/import_map.php
+index 7c1b1e5f69b..9173444336e 100644
+--- a/public/lib/classes/output/requirements/import_map.php
++++ b/public/lib/classes/output/requirements/import_map.php
+@@ -123,6 +123,26 @@ class import_map implements \JsonSerializable {
+         return $importmap;
+     }
+ 
++    /**
++     * Get the specifiers of concrete (non-prefix) import map entries which should be preloaded.
++     *
++     * Prefix entries (those ending in a slash) are excluded, as are the per-theme variants of themable
++     * entries. A themable entry is represented by its plain specifier, which resolves to the active theme.
++     *
++     * @return string[] List of specifiers, each of which is a key in the serialized import map.
++     */
++    public function get_preload_specifiers(): array {
++        $specifiers = [];
++        foreach (array_keys($this->imports) as $specifier) {
++            if (str_ends_with($specifier, '/')) {
++                continue;
++            }
++            $specifiers[] = $specifier;
++        }
++
++        return $specifiers;
++    }
++
+     /**
+      * Set the list of available themes by name.
+      *
+diff --git a/public/lib/classes/output/requirements/page_requirements_manager.php b/public/lib/classes/output/requirements/page_requirements_manager.php
+index f13039d2d28..2bf79191110 100644
+--- a/public/lib/classes/output/requirements/page_requirements_manager.php
++++ b/public/lib/classes/output/requirements/page_requirements_manager.php
+@@ -1063,14 +1063,28 @@ class page_requirements_manager {
+         $themes = core_component::get_all_plugins_list('theme');
+         $importmap->set_available_themes(array_keys($themes));
+ 
+-        return html_writer::tag(
++        $serialized = $importmap->jsonSerialize();
++        $output = html_writer::tag(
+             'script',
+             json_encode(
+-                $importmap,
++                $serialized,
+                 JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES
+             ),
+             ['type' => 'importmap'],
+         );
++
++        // The modulepreload links must come after the import map so that bare specifiers resolve correctly.
++        foreach ($importmap->get_preload_specifiers() as $specifier) {
++            if (empty($serialized['imports'][$specifier])) {
++                continue;
++            }
++            $output .= html_writer::empty_tag('link', [
++                'rel' => 'modulepreload',
++                'href' => $serialized['imports'][$specifier],
++            ]) . "\n";
++        }
++
++        return $output;
+     }
+ 
+     /**

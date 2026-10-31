@@ -1,0 +1,123 @@
+diff --git a/mysql-test/main/sp-row.result b/mysql-test/main/sp-row.result
+index 1714cf8a..fe75695b 100644
+--- a/mysql-test/main/sp-row.result
++++ b/mysql-test/main/sp-row.result
+@@ -2550,4 +2550,41 @@ eq	counter
+ 1	4
+ 1	5
+ DROP FUNCTION f1;
++#
++# MDEV-41265 SELECT/ UPDATE RETURNING INTO a single row-field fails with ER_WRONG_NUMBER_OF_COLUMNS_IN_SELECT
++#
++CREATE TABLE t1 (a INT, b VARCHAR(10));
++INSERT INTO t1 VALUES (10,'b10');
++CREATE PROCEDURE p1()
++BEGIN
++DECLARE r0 ROW (a INT, b VARCHAR(10));
++SELECT a INTO r0.a FROM t1;
++SELECT r0.a;
++END;
++$$
++CALL p1;
++r0.a
++10
++DROP PROCEDURE p1;
++CREATE PROCEDURE p1()
++BEGIN
++DECLARE r0 ROW (a INT, b VARCHAR(10));
++SELECT a, b INTO r0.a FROM t1;
++END;
++$$
++CALL p1;
++ERROR 21000: The used SELECT statements have a different number of columns
++DROP PROCEDURE p1;
++CREATE PROCEDURE p1()
++BEGIN
++DECLARE r0 ROW TYPE OF t1;
++SELECT b INTO r0.b FROM t1;
++SELECT r0.b;
++END;
++$$
++CALL p1;
++r0.b
++b10
++DROP PROCEDURE p1;
++DROP TABLE t1;
+ # End of 11.8 tests
+diff --git a/mysql-test/main/sp-row.test b/mysql-test/main/sp-row.test
+index b1f128b6..37750232 100644
+--- a/mysql-test/main/sp-row.test
++++ b/mysql-test/main/sp-row.test
+@@ -1755,4 +1755,50 @@ DROP FUNCTION f1;
+ 
+ --enable_ps2_protocol
+ 
++
++--echo #
++--echo # MDEV-41265 SELECT/ UPDATE RETURNING INTO a single row-field fails with ER_WRONG_NUMBER_OF_COLUMNS_IN_SELECT
++--echo #
++
++CREATE TABLE t1 (a INT, b VARCHAR(10));
++INSERT INTO t1 VALUES (10,'b10');
++
++DELIMITER $$;
++CREATE PROCEDURE p1()
++BEGIN
++  DECLARE r0 ROW (a INT, b VARCHAR(10));
++  SELECT a INTO r0.a FROM t1;
++  SELECT r0.a;
++END;
++$$
++DELIMITER ;$$
++CALL p1;
++DROP PROCEDURE p1;
++
++DELIMITER $$;
++CREATE PROCEDURE p1()
++BEGIN
++  DECLARE r0 ROW (a INT, b VARCHAR(10));
++  SELECT a, b INTO r0.a FROM t1;
++END;
++$$
++DELIMITER ;$$
++--error ER_WRONG_NUMBER_OF_COLUMNS_IN_SELECT
++CALL p1;
++DROP PROCEDURE p1;
++
++DELIMITER $$;
++CREATE PROCEDURE p1()
++BEGIN
++  DECLARE r0 ROW TYPE OF t1;
++  SELECT b INTO r0.b FROM t1;
++  SELECT r0.b;
++END;
++$$
++DELIMITER ;$$
++CALL p1;
++DROP PROCEDURE p1;
++
++DROP TABLE t1;
++
+ --echo # End of 11.8 tests
+diff --git a/sql/sql_type_row.cc b/sql/sql_type_row.cc
+index c81e13d0..9ac86590 100644
+--- a/sql/sql_type_row.cc
++++ b/sql/sql_type_row.cc
+@@ -125,7 +125,7 @@ class my_var_sp_row_field: public my_var_sp
+                            bool *assign_as_row) const override
+   {
+     *assign_as_row= false;
+-    return select_list.elements == 1;
++    return select_list.elements != 1;
+   }
+   bool set(THD *thd, Item *item) override
+   {
+@@ -151,7 +151,7 @@ class my_var_sp_row_field_by_name: public my_var_sp
+                            bool *assign_as_row) const override
+   {
+     *assign_as_row= false;
+-    return select_list.elements == 1;
++    return select_list.elements != 1;
+   }
+   bool set(THD *thd, Item *item) override
+   {

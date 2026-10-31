@@ -1,0 +1,133 @@
+diff --git a/public/mod/assign/locallib.php b/public/mod/assign/locallib.php
+index 2901a49b29a..90de9c5c816 100644
+--- a/public/mod/assign/locallib.php
++++ b/public/mod/assign/locallib.php
+@@ -6656,11 +6656,15 @@ class assign {
+             $userid = $USER->id;
+         }
+ 
++        // Apply any user or group overrides so that the effective dates for this user are used.
++        $this->update_effective_access($userid);
++        $instance = $this->get_instance($userid);
++
+         $time = \core\di::get(\core\clock::class)->time();
+         $dateopen = true;
+         $finaldate = false;
+-        if ($this->get_instance()->cutoffdate) {
+-            $finaldate = $this->get_instance()->cutoffdate;
++        if ($instance->cutoffdate) {
++            $finaldate = $instance->cutoffdate;
+         }
+ 
+         if ($flags === false) {
+@@ -6681,9 +6685,9 @@ class assign {
+         }
+ 
+         if ($finaldate) {
+-            $dateopen = ($this->get_instance()->allowsubmissionsfromdate <= $time && $time <= $finaldate);
++            $dateopen = ($instance->allowsubmissionsfromdate <= $time && $time <= $finaldate);
+         } else {
+-            $dateopen = ($this->get_instance()->allowsubmissionsfromdate <= $time);
++            $dateopen = ($instance->allowsubmissionsfromdate <= $time);
+         }
+ 
+         if (!$dateopen) {
+diff --git a/public/mod/assign/tests/locallib_test.php b/public/mod/assign/tests/locallib_test.php
+index 39dd09e146c..eb557ba4e82 100644
+--- a/public/mod/assign/tests/locallib_test.php
++++ b/public/mod/assign/tests/locallib_test.php
+@@ -2593,6 +2593,94 @@ You can see it appended to your <a href="' . $assignurl .
+         $this->assertEquals(false, $assign->testable_submissions_open($student->id));
+     }
+ 
++    /**
++     * Test that user and group overrides are taken into account by submissions_open,
++     * regardless of which user is currently logged in.
++     *
++     * @covers \assign::submissions_open
++     */
++    public function test_submissions_open_with_overrides(): void {
++        $this->resetAfterTest();
++
++        $course = $this->getDataGenerator()->create_course();
++        $teacher = $this->getDataGenerator()->create_and_enrol($course, 'teacher');
++        $student = $this->getDataGenerator()->create_and_enrol($course, 'student');
++        $otherstudent = $this->getDataGenerator()->create_and_enrol($course, 'student');
++        $groupstudent = $this->getDataGenerator()->create_and_enrol($course, 'student');
++
++        $group = $this->getDataGenerator()->create_group(['courseid' => $course->id]);
++        groups_add_member($group, $groupstudent);
++
++        $generator = $this->getDataGenerator()->get_plugin_generator('mod_assign');
++
++        $now = time();
++        $tomorrow = $now + DAYSECS;
++        $yesterday = $now - DAYSECS;
++
++        // Cut-off date in the past: closed for everyone by default.
++        $assign = $this->create_instance($course, ['duedate' => $yesterday, 'cutoffdate' => $yesterday]);
++
++        // User override which removes the cut-off date.
++        $generator->create_override([
++            'assignid' => $assign->get_instance()->id,
++            'userid' => $student->id,
++            'cutoffdate' => 0,
++        ]);
++        // Group override which moves the cut-off date into the future.
++        $generator->create_override([
++            'assignid' => $assign->get_instance()->id,
++            'groupid' => $group->id,
++            'cutoffdate' => $tomorrow,
++        ]);
++
++        // Check as the teacher (e.g. from the grading table) as well as the students themselves.
++        foreach ([$teacher, $student, $otherstudent, $groupstudent] as $user) {
++            $this->setUser($user);
++            $this->assertTrue($assign->testable_submissions_open($student->id));
++            $this->assertTrue($assign->testable_submissions_open($groupstudent->id));
++            $this->assertFalse($assign->testable_submissions_open($otherstudent->id));
++        }
++
++        // Cut-off date in the future: open for everyone by default.
++        $assign = $this->create_instance($course, ['duedate' => $yesterday, 'cutoffdate' => $tomorrow]);
++
++        // User override which moves the cut-off date into the past.
++        $generator->create_override([
++            'assignid' => $assign->get_instance()->id,
++            'userid' => $student->id,
++            'cutoffdate' => $yesterday,
++        ]);
++        // Group override which moves the cut-off date into the past.
++        $generator->create_override([
++            'assignid' => $assign->get_instance()->id,
++            'groupid' => $group->id,
++            'cutoffdate' => $yesterday,
++        ]);
++
++        foreach ([$teacher, $student, $otherstudent, $groupstudent] as $user) {
++            $this->setUser($user);
++            $this->assertFalse($assign->testable_submissions_open($student->id));
++            $this->assertFalse($assign->testable_submissions_open($groupstudent->id));
++            $this->assertTrue($assign->testable_submissions_open($otherstudent->id));
++        }
++
++        // An extension still takes precedence over an earlier (overridden) cut-off date.
++        $this->setUser($teacher);
++        $assign->testable_save_user_extension($student->id, $tomorrow);
++        $this->assertTrue($assign->testable_submissions_open($student->id));
++
++        // Override of the allow submissions from date into the future closes submissions for that user only.
++        $assign = $this->create_instance($course, ['allowsubmissionsfromdate' => $yesterday]);
++        $generator->create_override([
++            'assignid' => $assign->get_instance()->id,
++            'userid' => $student->id,
++            'allowsubmissionsfromdate' => $tomorrow,
++        ]);
++        $this->setUser($teacher);
++        $this->assertFalse($assign->testable_submissions_open($student->id));
++        $this->assertTrue($assign->testable_submissions_open($otherstudent->id));
++    }
++
+     public function test_get_graders(): void {
+         global $DB;
+ 

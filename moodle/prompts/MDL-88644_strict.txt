@@ -1,0 +1,81 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot run Moodle's test suite. You may run `php -l <file>` and read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-88644: Draft → draft file copy corrupts files.source metadata
+
+h2. Problem
+
+The {{file_save_draft_area_files}} function unwraps draft file *files.source* metadata to the plain source filename even when the destination file area is also a draft.
+
+That’s correct when saving draft files into a final file area, but it’s wrong when resuming an autosave  where files are copied from one draft area to another draft area.
+
+h2. Issue
+
+When calling {{file_save_draft_area_files($sourcedraftid, $usercontext->id, 'user', 'draft', $destinationdraftid);}}
+
+h3. Expected result
+
+The destination draft file keeps serialised draft metadata in *files.source*, e.g., a serialized stdClass containing source and original.
+
+h3. Actual result
+
+The destination draft file gets set to the *plain file name*. This later causes paths that expect draft *files.source* metadata to call something like {{unserialize_object('driverslicense.jpg')}}which results in notices like  {{unserialize(): Error at offset 0 of 11 bytes}}.
+
+This appears related to [https://moodle.atlassian.net/browse/MDL-87353|https://moodle.atlassian.net/browse/MDL-87353|smart-link], but that issue seems to have fixed the unsafe unserialisation issue without preserving draft source metadata during draft → draft copies.
+
+h2. Replication
+
+The issue can be replicated with a PHPUnit test in *lib/tests/filelib_test.php*
+
+{code:php}public function test_file_save_draft_area_files_preserves_source_metadata_for_draft_destination(): void {
+    global $USER;
+
+    $this->resetAfterTest(true);
+    $this->setAdminUser();
+
+    $fs = get_file_storage();
+    $syscontext = \context_system::instance();
+    $usercontext = \context_user::instance($USER->id);
+
+    $filename = 'license.jpg';
+    $originalrecord = [
+        'contextid' => $syscontext->id,
+        'component' => 'core',
+        'filearea' => 'unittest',
+        'itemid' => 0,
+        'filepath' => '/',
+        'filename' => $filename,
+    ];
+
+    $fs->create_file_from_string($originalrecord, 'Original file content');
+    $source = (object)[
+        'source' => $filename,
+        'original' => $fs->pack_reference($originalrecord),
+    ];
+
+    $serialisedsource = serialize($source);
+    $sourcedraftitemid = file_get_unused_draft_itemid();
+    $sourcefile = $fs->create_file_from_string([
+        'contextid' => $usercontext->id,
+        'component' => 'user',
+        'filearea' => 'draft',
+        'itemid' => $sourcedraftitemid,
+        'filepath' => '/',
+        'filename' => $filename,
+    ], 'Draft file content');
+
+    $sourcefile->set_source($serialisedsource);
+    $destinationdraftitemid = file_get_unused_draft_itemid();
+
+    file_save_draft_area_files($sourcedraftitemid, $usercontext->id, 'user', 'draft', $destinationdraftitemid);
+
+    $destinationfile = $fs->get_file($usercontext->id, 'user', 'draft', $destinationdraftitemid, '/', $filename);
+    $this->assertInstanceOf(\stored_file::class, $destinationfile);
+    $this->assertSame($serialisedsource, $destinationfile->get_source());
+}{code}

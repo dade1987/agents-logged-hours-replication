@@ -1,0 +1,122 @@
+diff --git a/mysql-test/suite/roles/role_user_acl_cache.result b/mysql-test/suite/roles/role_user_acl_cache.result
+new file mode 100644
+index 00000000..a01d0706
+--- /dev/null
++++ b/mysql-test/suite/roles/role_user_acl_cache.result
+@@ -0,0 +1,33 @@
++#
++# MDEV-40541 role vs user@localhost acl_cache key confusion
++#
++create database db;
++create table db.t1(a varchar(40));
++insert into db.t1 values ('role-cache-collision-row');
++create role r1;
++create user r1@localhost identified by 'r1pass';
++create user u1@'127.0.0.1' identified by 'u1pass';
++grant select on db.* to r1@localhost;
++grant r1 to u1@'127.0.0.1';
++connect r1,localhost,r1,r1pass;
++select a from db.t1;
++a
++role-cache-collision-row
++connect u1,127.0.0.1,u1,u1pass,,$MASTER_MYPORT;
++set role r1;
++show grants;
++Grants for u1@127.0.0.1
++GRANT USAGE ON *.* TO `r1`
++GRANT USAGE ON *.* TO `u1`@`127.0.0.1` IDENTIFIED BY PASSWORD '*4C5C0A2C80D7567C7CFBDFC09409901AADC4B390'
++GRANT `r1` TO `u1`@`127.0.0.1`
++select a from db.t1;
++ERROR 42000: SELECT command denied to user 'u1'@'127.0.0.1' for table `db`.`t1`
++use db;
++ERROR 42000: Access denied for user 'u1'@'127.0.0.1' to database 'db'
++disconnect u1;
++disconnect r1;
++connection default;
++drop role r1;
++drop user r1@localhost;
++drop user u1@'127.0.0.1';
++drop database db;
+diff --git a/mysql-test/suite/roles/role_user_acl_cache.test b/mysql-test/suite/roles/role_user_acl_cache.test
+new file mode 100644
+index 00000000..5420c990
+--- /dev/null
++++ b/mysql-test/suite/roles/role_user_acl_cache.test
+@@ -0,0 +1,34 @@
++--source include/not_embedded.inc
++--echo #
++--echo # MDEV-40541 role vs user@localhost acl_cache key confusion
++--echo #
++create database db;
++create table db.t1(a varchar(40));
++insert into db.t1 values ('role-cache-collision-row');
++
++create role r1;
++create user r1@localhost identified by 'r1pass';
++create user u1@'127.0.0.1' identified by 'u1pass';
++
++grant select on db.* to r1@localhost;
++grant r1 to u1@'127.0.0.1';
++
++connect r1,localhost,r1,r1pass;
++select a from db.t1;
++
++connect u1,127.0.0.1,u1,u1pass,,$MASTER_MYPORT;
++set role r1;
++--sorted_result
++show grants;
++--error ER_TABLEACCESS_DENIED_ERROR
++select a from db.t1;
++--error ER_DBACCESS_DENIED_ERROR
++use db;
++disconnect u1;
++disconnect r1;
++
++connection default;
++drop role r1;
++drop user r1@localhost;
++drop user u1@'127.0.0.1';
++drop database db;
+diff --git a/sql/sql_acl.cc b/sql/sql_acl.cc
+index d4a7606d..35b05a56 100644
+--- a/sql/sql_acl.cc
++++ b/sql/sql_acl.cc
+@@ -645,7 +645,12 @@ bool ROLE_GRANT_PAIR::init(MEM_ROOT *mem, const char *username,
+ }
+ 
+ #define IP_ADDR_STRLEN (3 + 1 + 3 + 1 + 3 + 1 + 3)
+-#define ACL_KEY_LENGTH (IP_ADDR_STRLEN + 1 + NAME_LEN + \
++/*
++  acl_cache key is: <ip or '@'host> \0 <user> \0 <db>
++  The first part can be a host name (prefixed by '@') when ip is not known,
++  e.g. for local socket connections or for roles (empty host).
++*/
++#define ACL_KEY_LENGTH (1 + HOSTNAME_LENGTH + 1 + NAME_LEN + \
+                         1 + USERNAME_LENGTH + 1)
+ 
+ #if defined(HAVE_OPENSSL)
+@@ -3704,7 +3709,23 @@ privilege_t acl_get(const char *host, const char *ip,
+   acl_entry *entry;
+   DBUG_ENTER("acl_get");
+ 
+-  tmp_db= strmov(strmov(key, safe_str(ip)) + 1, user) + 1;
++  /*
++    The cache key must uniquely identify (host, ip, user). When ip is
++    known it determines the result. When it is not (local socket connections,
++    roles), use the host name instead, prefixed with '@', a character that
++    can never appear in an ip address. This way a role "r1" (empty host and
++    ip) and a user "r1@localhost" connected via socket get different keys.
++  */
++  if (ip && ip[0])
++    tmp_db= strnmov(key, ip, HOSTNAME_LENGTH + 1);
++  else
++  {
++    key[0]= '@';
++    tmp_db= strnmov(key + 1, safe_str(host), HOSTNAME_LENGTH);
++  }
++  *tmp_db++= 0;
++  tmp_db= strnmov(tmp_db, user, USERNAME_LENGTH);
++  *tmp_db++= 0;
+   end= strnmov(tmp_db, db, key + sizeof(key) - tmp_db);
+ 
+   if (end >= key + sizeof(key)) // db name was truncated

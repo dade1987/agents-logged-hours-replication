@@ -1,0 +1,139 @@
+diff --git a/public/admin/tool/customlang/locallib.php b/public/admin/tool/customlang/locallib.php
+index c76ff7829fb..b534e13648c 100644
+--- a/public/admin/tool/customlang/locallib.php
++++ b/public/admin/tool/customlang/locallib.php
+@@ -41,12 +41,38 @@ class tool_customlang_utils {
+     /** @var array cache of {@link self::list_components()} results */
+     private static $components = null;
+ 
++    /**
++     * The maximum progress percentage that can be reported while the checkout is still running.
++     *
++     * The progress is based on a rough estimate of the number of strings, so on sites with many
++     * plugins the real workload may exceed the estimate. The progress bar must never show 100%
++     * until the checkout has actually finished.
++     */
++    const MAX_CHECKOUT_PROGRESS_PERCENT = 99;
++
+     /**
+      * This class can not be instantiated
+      */
+     private function __construct() {
+     }
+ 
++    /**
++     * Calculates the checkout progress percentage for the given number of processed strings.
++     *
++     * The returned value is based on {@see self::ROUGH_NUMBER_OF_STRINGS} and is capped at
++     * {@see self::MAX_CHECKOUT_PROGRESS_PERCENT} so that 100% is only ever displayed once the
++     * checkout is really complete.
++     *
++     * @param int $done number of strings processed so far
++     * @return int progress percentage in the range 0 to 99
++     */
++    public static function calculate_checkout_percent(int $done): int {
++        $done = max(0, $done);
++        $percent = (int) floor($done / self::ROUGH_NUMBER_OF_STRINGS * 100);
++
++        return min($percent, self::MAX_CHECKOUT_PROGRESS_PERCENT);
++    }
++
+     /**
+      * Returns a list of all components installed on the server
+      *
+@@ -154,7 +180,7 @@ class tool_customlang_utils {
+ 
+                 if (!is_null($progressbar)) {
+                     $done++;
+-                    $donepercent = floor(min($done, self::ROUGH_NUMBER_OF_STRINGS) / self::ROUGH_NUMBER_OF_STRINGS * 100);
++                    $donepercent = self::calculate_checkout_percent($done);
+                     $progressbar->update_full($donepercent, $strinprogress);
+                 }
+ 
+diff --git a/public/admin/tool/customlang/tests/locallib_test.php b/public/admin/tool/customlang/tests/locallib_test.php
+new file mode 100644
+index 00000000000..f6125d3d088
+--- /dev/null
++++ b/public/admin/tool/customlang/tests/locallib_test.php
+@@ -0,0 +1,81 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace tool_customlang;
++
++use tool_customlang_utils;
++
++defined('MOODLE_INTERNAL') || die();
++
++global $CFG;
++require_once($CFG->dirroot . '/admin/tool/customlang/locallib.php');
++
++/**
++ * Unit tests for the tool_customlang_utils class.
++ *
++ * @package    tool_customlang
++ * @category   test
++ * @copyright  2025 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ * @covers     \tool_customlang_utils
++ */
++final class locallib_test extends \advanced_testcase {
++
++    /**
++     * Data provider for test_calculate_checkout_percent().
++     *
++     * @return array
++     */
++    public static function calculate_checkout_percent_provider(): array {
++        $rough = tool_customlang_utils::ROUGH_NUMBER_OF_STRINGS;
++        return [
++            'nothing done' => [0, 0],
++            'negative is treated as zero' => [-5, 0],
++            'one string' => [1, 0],
++            'quarter' => [(int) ($rough / 4), 25],
++            'half' => [(int) ($rough / 2), 50],
++            'just below the estimate' => [$rough - 1, 99],
++            'exactly the estimate' => [$rough, 99],
++            'above the estimate' => [$rough + 1, 99],
++            'far above the estimate' => [$rough * 10, 99],
++        ];
++    }
++
++    /**
++     * Test that the checkout progress never reaches 100% before completion.
++     *
++     * @dataProvider calculate_checkout_percent_provider
++     * @param int $done
++     * @param int $expected
++     */
++    public function test_calculate_checkout_percent(int $done, int $expected): void {
++        $this->assertSame($expected, tool_customlang_utils::calculate_checkout_percent($done));
++    }
++
++    /**
++     * Test that the progress is monotonic and always below 100 during processing.
++     */
++    public function test_calculate_checkout_percent_never_reaches_100(): void {
++        $previous = 0;
++        $max = tool_customlang_utils::ROUGH_NUMBER_OF_STRINGS * 2;
++        for ($done = 0; $done <= $max; $done += 97) {
++            $percent = tool_customlang_utils::calculate_checkout_percent($done);
++            $this->assertGreaterThanOrEqual($previous, $percent);
++            $this->assertLessThan(100, $percent);
++            $previous = $percent;
++        }
++    }
++}

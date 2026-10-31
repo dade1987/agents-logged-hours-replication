@@ -1,0 +1,19 @@
+diff --git a/sql/sql_tvc.cc b/sql/sql_tvc.cc
+index 46835972..838ac8c2 100644
+--- a/sql/sql_tvc.cc
++++ b/sql/sql_tvc.cc
+@@ -894,6 +894,14 @@ static bool cmp_row_types(Item* item1, Item* item2)
+   {
+     Item *inner= item1->element_index(i);
+     Item *outer= item2->element_index(i);
++    /*
++      Nested rows (e.g. ROW(a,(a,a)) IN ((1,(1,1)),...)) are not supported
++      by the transformation. Type_handler_row does not implement
++      subquery_type_allows_materialization(), so bail out early.
++    */
++    if (inner->result_type() == ROW_RESULT ||
++        outer->result_type() == ROW_RESULT)
++      return true;
+     if (!inner->type_handler()->subquery_type_allows_materialization(inner,
+                                                                      outer,
+                                                                      true))

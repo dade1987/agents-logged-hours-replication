@@ -1,0 +1,110 @@
+diff --git a/mysql-test/main/vector_innodb.result b/mysql-test/main/vector_innodb.result
+index 0b82acc3..3dd1f48c 100644
+--- a/mysql-test/main/vector_innodb.result
++++ b/mysql-test/main/vector_innodb.result
+@@ -387,4 +387,19 @@ ERROR 42S02: Table 'test.t1' doesn't exist in engine
+ DROP TABLE t2,t1;
+ Warnings:
+ Warning	1932	Table 'test.t1' doesn't exist in engine
++#
++# MDEV-40229 I_S.VECTOR_INDEXES: Unclear or inconsistent semantics of INDEX_SIZE
++#
++CREATE TABLE t1 (pk int AUTO_INCREMENT PRIMARY KEY,
++a vector(1) NOT NULL, vector(a)) ENGINE=InnoDB;
++INSERT INTO t1 (a) SELECT VEC_FromText(concat('[', seq, ']')) FROM seq_1_to_10000;
++ANALYZE TABLE t1;
++Table	Op	Msg_type	Msg_text
++test.t1	analyze	status	Engine-independent statistics collected
++test.t1	analyze	status	OK
++SELECT index_length > 16384 AS index_length_grew FROM information_schema.tables
++WHERE table_schema = database() AND table_name = 't1';
++index_length_grew
++1
++DROP TABLE t1;
+ # End of 11.8 tests
+diff --git a/mysql-test/main/vector_innodb.test b/mysql-test/main/vector_innodb.test
+index e083d958..e2dc77ac 100644
+--- a/mysql-test/main/vector_innodb.test
++++ b/mysql-test/main/vector_innodb.test
+@@ -382,4 +382,15 @@ INSERT INTO t1 VALUES (0,'');
+ # cleanup
+ DROP TABLE t2,t1;
+ 
++--echo #
++--echo # MDEV-40229 I_S.VECTOR_INDEXES: Unclear or inconsistent semantics of INDEX_SIZE
++--echo #
++CREATE TABLE t1 (pk int AUTO_INCREMENT PRIMARY KEY,
++                 a vector(1) NOT NULL, vector(a)) ENGINE=InnoDB;
++INSERT INTO t1 (a) SELECT VEC_FromText(concat('[', seq, ']')) FROM seq_1_to_10000;
++ANALYZE TABLE t1;
++SELECT index_length > 16384 AS index_length_grew FROM information_schema.tables
++  WHERE table_schema = database() AND table_name = 't1';
++DROP TABLE t1;
++
+ --echo # End of 11.8 tests
+diff --git a/sql/handler.cc b/sql/handler.cc
+index 56a784d3..37e537cf 100644
+--- a/sql/handler.cc
++++ b/sql/handler.cc
+@@ -5674,9 +5674,27 @@ handler::ha_analyze(THD* thd, HA_CHECK_OPT* check_opt)
+ {
+   DBUG_ASSERT(table_share->tmp_table != NO_TMP_TABLE ||
+               m_lock_type != F_UNLCK);
++  int error;
+   mark_trx_read_write();
+ 
+-  return analyze(thd, check_opt);
++  if ((error= analyze(thd, check_opt)))
++    return error;
++  /*
++    Update statistics of high-level indexes too, otherwise e.g.
++    INFORMATION_SCHEMA.TABLES.INDEX_LENGTH would not reflect the
++    actual size of the vector index after ANALYZE.
++  */
++  for (uint i= table->s->keys; i < table->s->total_keys; i++)
++  {
++    DBUG_ASSERT(table->s->hlindexes() == 1);
++    if (table->hlindex_open(i) || table->hlindex_lock(i))
++      return HA_ADMIN_FAILED;
++    int hl_error= table->hlindex->file->analyze(thd, check_opt);
++    if (hl_error && hl_error != HA_ADMIN_ALREADY_DONE &&
++        hl_error != HA_ADMIN_NOT_IMPLEMENTED)
++      return hl_error;
++  }
++  return error;
+ }
+ 
+ 
+diff --git a/sql/sql_show.cc b/sql/sql_show.cc
+index ed108adf..a668fa3f 100644
+--- a/sql/sql_show.cc
++++ b/sql/sql_show.cc
+@@ -6083,13 +6083,21 @@ static int get_schema_tables_record(THD *thd, TABLE_LIST *tables,
+ 
+       if (show_table->s->hlindexes())
+       {
+-          // make sure hlindex is opened
+-          if (show_table->hlindex || !show_table->hlindex_open(show_table->s->keys))
+-          {
+-              handler *hi= show_table->hlindex->file;
+-              if (!hi->info(HA_STATUS_VARIABLE))
+-                  file->stats.index_file_length+= hi->stats.data_file_length;
+-          }
++        // make sure hlindex is opened
++        if (show_table->hlindex ||
++            !show_table->hlindex_open(show_table->s->keys))
++        {
++          /*
++            The size of a high-level (vector) index is the total size
++            of its secondary table: both its data and its own indexes.
++            Request the same kind of statistics as for the main table,
++            so that both are equally up to date.
++          */
++          handler *hi= show_table->hlindex->file;
++          if (!hi->info(HA_STATUS_VARIABLE | HA_STATUS_TIME))
++            file->stats.index_file_length+= hi->stats.data_file_length +
++                                            hi->stats.index_file_length;
++        }
+       }
+ 
+       enum row_type row_type = file->get_row_type();

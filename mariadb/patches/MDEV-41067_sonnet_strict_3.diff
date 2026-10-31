@@ -1,0 +1,56 @@
+diff --git a/mysql-test/main/func_json.test b/mysql-test/main/func_json.test
+index c6045cb2..055b8ab8 100644
+--- a/mysql-test/main/func_json.test
++++ b/mysql-test/main/func_json.test
+@@ -4451,3 +4451,11 @@ SELECT JSON_SCHEMA_VALID(@schema, @value);
+ SELECT JSON_SCHEMA_VALID( '{"enum": ["x"]}', CONVERT(CONCAT('"', REPEAT('e', 100000), '"') USING ucs2)) AS r;
+ 
+ --echo # End of 11.4 tests
++
++--echo #
++--echo # MDEV-41067: wrong result with json_overlaps and empty nested array
++--echo #
++select json_overlaps('[[1]]', '[[]]');
++select json_overlaps('[[1]]', '[[],123]');
++select json_overlaps('[[]]', '[[1]]');
++select json_overlaps('[[1]]', '[[1]]');
+diff --git a/sql/item_jsonfunc.cc b/sql/item_jsonfunc.cc
+index 615d0cb4..78383ee9 100644
+--- a/sql/item_jsonfunc.cc
++++ b/sql/item_jsonfunc.cc
+@@ -4791,10 +4791,23 @@ static bool json_compare_arr_and_obj(json_engine_t *js, json_engine_t *value)
+ 
+ bool json_compare_arrays_in_order(json_engine_t *js, json_engine_t *value)
+ {
+-  bool res= false;
+-  while (json_scan_next(js) == 0 && json_scan_next(value) == 0 &&
+-         js->state == JST_VALUE && value->state == JST_VALUE)
++  bool res;
++  for (;;)
+   {
++    /* Always advance both, so that both states are valid afterwards. */
++    if (json_scan_next(js) || json_scan_next(value))
++    {
++      json_skip_current_level(js, value);
++      return FALSE;
++    }
++    bool js_item= js->state == JST_VALUE;
++    bool value_item= value->state == JST_VALUE;
++    if (!js_item || !value_item)
++    {
++      /* Equal only if both arrays have ended at the same time. */
++      res= !js_item && !value_item;
++      break;
++    }
+     if (json_read_value(js) || json_read_value(value))
+       return FALSE;
+     if (js->value_type != value->value_type)
+@@ -4809,8 +4822,6 @@ bool json_compare_arrays_in_order(json_engine_t *js, json_engine_t *value)
+       return FALSE;
+     }
+   }
+-  res= (value->state == JST_ARRAY_END || value->state == JST_OBJ_END ?
+-        TRUE : FALSE);
+   json_skip_current_level(js, value);
+   return res;
+ }

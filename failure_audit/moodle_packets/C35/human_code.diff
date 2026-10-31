@@ -1,0 +1,146 @@
+diff --git a/.upgradenotes/MDL-89528-2026082006051782.yml b/.upgradenotes/MDL-89528-2026082006051782.yml
+new file mode 100644
+index 00000000000..7478bf1a55f
+--- /dev/null
++++ b/.upgradenotes/MDL-89528-2026082006051782.yml
+@@ -0,0 +1,32 @@
++issueNumber: MDL-89528
++notes:
++  core:
++    - message: >
++        Support for Attribute-based Dependency Injection has been added:
++
++
++        ```php
++
++        class example_class {
++            #[\DI\Attribute\Inject]
++            private \core\formatting $formatter;
++        }
++
++        // Fetch the example class using the `get` method for entries
++        // stored in the container.
++        $example1 = di::get(\core\tests\di\example_class::class);
++        // Fetch the example class using the `make` method for entries
++        // built on each call.
++        $example2 = di::make(\core\tests\di\example_class::class);
++
++        ```
++
++
++        Attribute-based Dependency Injection is the best practice and
++        recommended approach for use in controllers.
++
++
++        This also makes it easier to support the use of Dependency
++        Injection in other areas of the codebase, such as legacy code,
++        and factories using the `make` method.
++      type: improved
+diff --git a/public/admin/classes/reportbuilder/local/entities/task_log.php b/public/admin/classes/reportbuilder/local/entities/task_log.php
+index c1f9294d2cd..13c4fe4d7d4 100644
+--- a/public/admin/classes/reportbuilder/local/entities/task_log.php
++++ b/public/admin/classes/reportbuilder/local/entities/task_log.php
+@@ -73,7 +73,7 @@ class task_log extends base {
+     public static function format_classname(string $classname): string {
+         $output = '';
+         if (class_exists($classname)) {
+-            $task = new $classname();
++            $task = \core\di::make($classname);
+             if ($task instanceof \core\task\task_base) {
+                 $output = $task->get_name();
+             }
+diff --git a/public/course/format/classes/local/overview/overviewfactory.php b/public/course/format/classes/local/overview/overviewfactory.php
+index 8dc9bc53ce5..b4c9052aac6 100644
+--- a/public/course/format/classes/local/overview/overviewfactory.php
++++ b/public/course/format/classes/local/overview/overviewfactory.php
+@@ -39,7 +39,7 @@ class overviewfactory {
+             $classname = resourceoverview::class;
+         }
+ 
+-        $result = \core\di::get_container()->make($classname, ['cm' => $cm]);
++        $result = \core\di::make($classname, ['cm' => $cm]);
+         if (!($result instanceof activityoverviewbase)) {
+             throw new \coding_exception("Class $classname must extend " . activityoverviewbase::class);
+         }
+diff --git a/public/lib/classes/di.php b/public/lib/classes/di.php
+index 46dd11354eb..77a1e4fdd9d 100644
+--- a/public/lib/classes/di.php
++++ b/public/lib/classes/di.php
+@@ -32,7 +32,7 @@ class di {
+     /**
+      * Get the DI Container.
+      *
+-     * @return ContainerInterface
++     * @return \DI\Container
+      */
+     public static function get_container(): ContainerInterface {
+         if (!isset(self::$container)) {
+@@ -78,6 +78,31 @@ class di {
+         $container->set($id, $value);
+     }
+ 
++
++    /**
++     * Build an entry of the container by its name.
++     *
++     * This method behave like get() except resolves the entry again every time.
++     * For example if the entry is a class then a new instance will be created each time.
++     *
++     * This method makes the container behave like a factory.
++     *
++     * @param string $name      Entry name or a class name.
++     * @param array  $params    Optional parameters to use to build the entry. Use this to force
++     *                          specific parameters to specific values. Parameters not defined in this
++     *                          array will be resolved using the container.
++     * @return mixed
++     */
++    public static function make(
++        string $name,
++        array $params = [],
++    ): mixed {
++        return self::get_container()->make(
++            $name,
++            $params,
++        );
++    }
++
+     /**
+      * Create a new Container Instance.
+      *
+@@ -89,10 +114,12 @@ class di {
+         // Configure the Container builder.
+         $builder = new \DI\ContainerBuilder();
+ 
+-        // At the moment we are using autowiring, but not automatic attribute injection.
+-        // Automatic attribute injection is a php-di specific feature.
++        // Enable autowiring.
+         $builder->useAutowiring(true);
+ 
++        // Enable the use of attributes for autowiring. This is a php-di specific feature.
++        $builder->useAttributes(true);
++
+         if (!$CFG->debugdeveloper) {
+             // Enable compilation of the container and write proxies to disk in production.
+             // See https://php-di.org/doc/performances.html for information.
+diff --git a/public/lib/classes/task/manager.php b/public/lib/classes/task/manager.php
+index 1bd67857f72..29ad301c81c 100644
+--- a/public/lib/classes/task/manager.php
++++ b/public/lib/classes/task/manager.php
+@@ -376,7 +376,7 @@ class manager {
+         if (!class_exists($classname)) {
+             throw new \moodle_exception('invalidtaskclassname', '', '', $record->classname);
+         }
+-        $task = new $classname();
++        $task = \core\di::make($classname);
+         if (isset($record->nextruntime)) {
+             $task->set_next_run_time($record->nextruntime);
+         }
+@@ -428,7 +428,7 @@ class manager {
+             return false;
+         }
+         /** @var \core\task\scheduled_task $task */
+-        $task = new $classname();
++        $task = \core\di::make($classname);
+ 
+         if ($override) {
+             // Update values with those defined in the config, if any are set.

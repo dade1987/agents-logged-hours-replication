@@ -1,0 +1,22 @@
+diff --git a/sql/sql_tvc.cc b/sql/sql_tvc.cc
+index 46835972..a9462cc2 100644
+--- a/sql/sql_tvc.cc
++++ b/sql/sql_tvc.cc
+@@ -894,6 +894,17 @@ static bool cmp_row_types(Item* item1, Item* item2)
+   {
+     Item *inner= item1->element_index(i);
+     Item *outer= item2->element_index(i);
++    /*
++      A nested row element has Type_handler_row, which does not support
++      subquery_type_allows_materialization(). Compare its elements
++      recursively instead.
++    */
++    if (inner->cols() > 1)
++    {
++      if (cmp_row_types(inner, outer))
++        return true;
++      continue;
++    }
+     if (!inner->type_handler()->subquery_type_allows_materialization(inner,
+                                                                      outer,
+                                                                      true))

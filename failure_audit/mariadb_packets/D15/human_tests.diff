@@ -1,0 +1,103 @@
+diff --git a/mysql-test/main/view_grant.result b/mysql-test/main/view_grant.result
+index aff058930b7..55c3e091879 100644
+--- a/mysql-test/main/view_grant.result
++++ b/mysql-test/main/view_grant.result
+@@ -2047,4 +2047,51 @@ connection default;
+ disconnect con1;
+ drop user foo@localhost;
+ drop schema foo;
++use test;
++#
++# MDEV-40484 ambiguous view frm parsing when username includes \n
++#
++create user 'root
++definer_host=localhost
++suid=1'@localhost;
++connect u,localhost,'root
++definer_host=localhost
++suid=1';
++select user(), current_user();
++user()	root
++definer_host=localhost
++suid=1@localhost
++current_user()	root
++definer_host=localhost
++suid=1@localhost
++select group_concat(user,'@',host) from mysql.global_priv;
++ERROR 42000: SELECT command denied to user 'root
++definer_host=localhost
++suid=1'@'localhost' for table `mysql`.`global_priv`
++create function f() returns text sql security invoker
++return (select group_concat(user,'@',host) from mysql.global_priv);
++create view v as select f();
++select * from v;
++ERROR HY000: View 'test.v' references invalid table(s) or column(s) or function(s) or definer/invoker of view lack rights to use them
++disconnect u;
++connection default;
++select * from information_schema.views where table_schema='test';
++TABLE_CATALOG	def
++TABLE_SCHEMA	test
++TABLE_NAME	v
++VIEW_DEFINITION	select `f`() AS `f()`
++CHECK_OPTION	NONE
++IS_UPDATABLE	NO
++DEFINER	root
++definer_host=localhost
++suid=1@localhost
++SECURITY_TYPE	DEFINER
++CHARACTER_SET_CLIENT	latin1
++COLLATION_CONNECTION	latin1_swedish_ci
++ALGORITHM	UNDEFINED
++drop view v;
++drop function f;
++drop user 'root
++definer_host=localhost
++suid=1'@localhost;
+ # End of 10.6 tests
+diff --git a/mysql-test/main/view_grant.test b/mysql-test/main/view_grant.test
+index 73c2fd5117b..33189b75e20 100644
+--- a/mysql-test/main/view_grant.test
++++ b/mysql-test/main/view_grant.test
+@@ -2306,6 +2306,42 @@ connection default;
+ disconnect con1;
+ drop user foo@localhost;
+ drop schema foo;
++use test;
++
++--echo #
++--echo # MDEV-40484 ambiguous view frm parsing when username includes \n
++--echo #
++create user 'root
++definer_host=localhost
++suid=1'@localhost;
++
++connect u,localhost,'root
++definer_host=localhost
++suid=1';
++
++query_vertical select user(), current_user();
++
++--error ER_TABLEACCESS_DENIED_ERROR
++select group_concat(user,'@',host) from mysql.global_priv;
++
++create function f() returns text sql security invoker
++  return (select group_concat(user,'@',host) from mysql.global_priv);
++
++create view v as select f();
++
++--error ER_VIEW_INVALID
++select * from v;
++disconnect u;
++connection default;
++
++query_vertical select * from information_schema.views where table_schema='test';
++
++drop view v;
++drop function f;
++drop user 'root
++definer_host=localhost
++suid=1'@localhost;
++
+ --echo # End of 10.6 tests
+ 
+ # Wait till we reached the initial number of concurrent sessions

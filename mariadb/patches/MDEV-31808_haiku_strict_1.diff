@@ -1,0 +1,22 @@
+diff --git a/sql/sql_base.cc b/sql/sql_base.cc
+index 379337af..990f73a6 100644
+--- a/sql/sql_base.cc
++++ b/sql/sql_base.cc
+@@ -4993,8 +4993,16 @@ bool open_and_lock_internal_tables(TABLE *table, bool lock_table)
+   MDL_savepoint mdl_savepoint= thd->mdl_context.mdl_savepoint();
+   TABLE_LIST *tmp= table->internal_tables;
+   DML_prelocking_strategy prelocking_strategy;
++  /*
++    When lock_table is set we are called while the statement already holds
++    locks (e.g. ALTER TABLE ... LOCK=EXCLUSIVE, where the original table was
++    flushed and is at the head of thd->open_tables). Opening the internal
++    tables must not treat that self-induced flush as a request to reopen all
++    tables: that would close the tables we have locked and break thd->lock.
++  */
++  uint open_flags= lock_table ? MYSQL_OPEN_IGNORE_FLUSH : 0;
+ 
+-  if (open_tables(thd, thd->lex->create_info, &tmp, &counter, 0,
++  if (open_tables(thd, thd->lex->create_info, &tmp, &counter, open_flags,
+                   &prelocking_strategy))
+     goto err;
+ 

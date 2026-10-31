@@ -1,0 +1,88 @@
+diff --git a/mysql-test/suite/innodb_fts/r/opt.result b/mysql-test/suite/innodb_fts/r/opt.result
+index c050a4da..e36d6aca 100644
+--- a/mysql-test/suite/innodb_fts/r/opt.result
++++ b/mysql-test/suite/innodb_fts/r/opt.result
+@@ -1655,3 +1655,21 @@ f1
+ 1
+ DROP TABLE t1;
+ # End of test for Bug#22679209
++#
++# MDEV-40621 InnoDB: Failing assertion: doc_id == src_node->last_doc_id
++#
++CREATE TABLE t1 (id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, body MEDIUMTEXT,
++FULLTEXT KEY ftidx (body)) ENGINE=InnoDB;
++INSERT INTO t1 (body) SELECT REPEAT('megaword ', 30) FROM seq_1_to_260;
++SET @saved_optimize_fulltext_only = @@GLOBAL.innodb_optimize_fulltext_only;
++SET GLOBAL innodb_optimize_fulltext_only = ON;
++DELETE FROM t1 WHERE id = 1;
++OPTIMIZE TABLE t1;
++Table	Op	Msg_type	Msg_text
++test.t1	optimize	status	OK
++SELECT COUNT(*) FROM t1 WHERE MATCH(body) AGAINST('megaword' IN BOOLEAN MODE);
++COUNT(*)
++259
++SET GLOBAL innodb_optimize_fulltext_only = @saved_optimize_fulltext_only;
++DROP TABLE t1;
++# End of 13.1 tests
+diff --git a/mysql-test/suite/innodb_fts/t/opt.test b/mysql-test/suite/innodb_fts/t/opt.test
+index 253ac03d..b7dd5637 100644
+--- a/mysql-test/suite/innodb_fts/t/opt.test
++++ b/mysql-test/suite/innodb_fts/t/opt.test
+@@ -1086,3 +1086,19 @@ MATCH (body) AGAINST ('table' IN BOOLEAN MODE));
+ DROP TABLE t1;
+ 
+ --echo # End of test for Bug#22679209
++
++--echo #
++--echo # MDEV-40621 InnoDB: Failing assertion: doc_id == src_node->last_doc_id
++--echo #
++--source include/have_sequence.inc
++CREATE TABLE t1 (id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, body MEDIUMTEXT,
++                 FULLTEXT KEY ftidx (body)) ENGINE=InnoDB;
++INSERT INTO t1 (body) SELECT REPEAT('megaword ', 30) FROM seq_1_to_260;
++SET @saved_optimize_fulltext_only = @@GLOBAL.innodb_optimize_fulltext_only;
++SET GLOBAL innodb_optimize_fulltext_only = ON;
++DELETE FROM t1 WHERE id = 1;
++OPTIMIZE TABLE t1;
++SELECT COUNT(*) FROM t1 WHERE MATCH(body) AGAINST('megaword' IN BOOLEAN MODE);
++SET GLOBAL innodb_optimize_fulltext_only = @saved_optimize_fulltext_only;
++DROP TABLE t1;
++--echo # End of 13.1 tests
+diff --git a/storage/innobase/fts/fts0exec.cc b/storage/innobase/fts/fts0exec.cc
+index 197eebc6..aeefcb6c 100644
+--- a/storage/innobase/fts/fts0exec.cc
++++ b/storage/innobase/fts/fts0exec.cc
+@@ -802,13 +802,30 @@ dberr_t AuxRecordReader::default_word_processor(
+ 
+   if (ilist_data && ilist_len != UNIV_SQL_NULL && ilist_len > 0)
+   {
+-    node->ilist_size_alloc= node->ilist_size= ilist_len;
+-    if (ilist_len)
++    if (rec_offs_nth_extern(offsets, 6))
+     {
++      /* The ilist is stored off-page: rec_get_nth_field() only
++      returned the locally stored prefix together with the BLOB
++      pointer. Fetch the complete ilist from the external pages. */
++      mem_heap_t *ilist_heap= mem_heap_create(ilist_len + 1000);
++      ulint external_len;
++      byte *external_ilist= btr_copy_externally_stored_field(
++        &external_len, ilist_data, index->table->space->zip_size(),
++        ilist_len, ilist_heap);
++      if (external_len)
++      {
++        node->ilist_size_alloc= node->ilist_size= external_len;
++        node->ilist= static_cast<byte*>(ut_malloc_nokey(external_len));
++        memcpy(node->ilist, external_ilist, external_len);
++      }
++      mem_heap_free(ilist_heap);
++    }
++    else
++    {
++      node->ilist_size_alloc= node->ilist_size= ilist_len;
+       node->ilist= static_cast<byte*>(ut_malloc_nokey(ilist_len));
+       memcpy(node->ilist, ilist_data, ilist_len);
+     }
+-    if (ilist_len == 0) return DB_SUCCESS_LOCKED_REC;
+   }
+ 
+   if (this->total_memory)

@@ -1,0 +1,104 @@
+diff --git a/mysql-test/main/func_json.result b/mysql-test/main/func_json.result
+index dd40304f..340149a9 100644
+--- a/mysql-test/main/func_json.result
++++ b/mysql-test/main/func_json.result
+@@ -1805,5 +1805,29 @@ SELECT JSON_EXISTS('[[[[[Y[[[[[[[[[[[[[[[[[[Vn]]]]]]]]]]]]]],]]:]]]](', '$[0 to
+ je
+ NULL
+ #
++# MDEV-39817 JSON_ARRAYAGG() returns garbage because of off-by-one error
++#
++set session group_concat_max_len = 9;
++create temporary table t (c varchar(20) character set latin1);
++insert into t values ('ab'), ('cd'), ('ef');
++select json_arrayagg(c order by c) from t;
++json_arrayagg(c order by c)
++["ab","cd"]
++Warnings:
++Warning	1260	Row 3 was cut by JSON_ARRAYAGG()
++select json_arrayagg(c) from t;
++json_arrayagg(c)
++["ab","cd"]
++Warnings:
++Warning	1260	Row 3 was cut by JSON_ARRAYAGG()
++set session group_concat_max_len = 10;
++select json_arrayagg(c order by c) from t;
++json_arrayagg(c order by c)
++["ab","cd"]
++Warnings:
++Warning	1260	Row 3 was cut by JSON_ARRAYAGG()
++drop temporary table t;
++set session group_concat_max_len = default;
++#
+ # End of 10.6 tests
+ #
+diff --git a/mysql-test/main/func_json.test b/mysql-test/main/func_json.test
+index 842ce772..c01ecfe9 100644
+--- a/mysql-test/main/func_json.test
++++ b/mysql-test/main/func_json.test
+@@ -1256,6 +1256,34 @@ SELECT JSON_EXISTS(CONCAT('[', REPEAT('[', 4000), 'Y', REPEAT(']', 4000), ', 1]'
+ SELECT JSON_EXISTS('[[[[[Y[[[[n[[[[[[[[[[[n[[[Vn]]]]]]]]]]]]]],]]:]]]](', '$[0 to rrrrrRR-1]') as je;
+ SELECT JSON_EXISTS('[[[[[Y[[[[[[[[[[[[[[[[[[Vn]]]]]]]]]]]]]],]]:]]]](', '$[0 to rrrrRR-1]') as je;
+ 
++--echo #
++--echo # MDEV-39817 JSON_ARRAYAGG() returns garbage because of off-by-one error
++--echo #
++
++set session group_concat_max_len = 9;
++create temporary table t (c varchar(20) character set latin1);
++insert into t values ('ab'), ('cd'), ('ef');
++select json_arrayagg(c order by c) from t;
++select json_arrayagg(c) from t;
++set session group_concat_max_len = 10;
++select json_arrayagg(c order by c) from t;
++drop temporary table t;
++set session group_concat_max_len = default;
++
++--echo #
++--echo # MDEV-39817 JSON_ARRAYAGG() returns garbage because of off-by-one error
++--echo #
++
++set session group_concat_max_len = 9;
++create temporary table t (c varchar(20) character set latin1);
++insert into t values ('ab'), ('cd'), ('ef');
++select json_arrayagg(c order by c) from t;
++select json_arrayagg(c) from t;
++set session group_concat_max_len = 10;
++select json_arrayagg(c order by c) from t;
++drop temporary table t;
++set session group_concat_max_len = default;
++
+ --echo #
+ --echo # End of 10.6 tests
+ --echo #
+diff --git a/sql/item_jsonfunc.cc b/sql/item_jsonfunc.cc
+index cf5bb9be..a690d74e 100644
+--- a/sql/item_jsonfunc.cc
++++ b/sql/item_jsonfunc.cc
+@@ -4094,13 +4094,24 @@ void Item_func_json_arrayagg::cut_max_length(String *result,
+   if (result->length() == 0)
+     return;
+ 
+-  if (result->ptr()[result->length() - 1] != '"' ||
+-      max_length == 0)
++  if (result->ptr()[result->length() - 1] != '"')
+   {
+     Item_func_group_concat::cut_max_length(result, old_length, max_length);
+     return;
+   }
+ 
++  /*
++    The closing quote has to fit too. If there is no room left for
++    anything of the current row besides it, drop the whole row.
++    Note that max_length - 1 can be less than old_length here, so it must
++    not be passed down: the cut would go backwards and produce garbage.
++  */
++  if (max_length <= old_length + 1)
++  {
++    result->length(old_length);
++    return;
++  }
++
+   Item_func_group_concat::cut_max_length(result, old_length, max_length-1);
+   result->append('"');
+ }

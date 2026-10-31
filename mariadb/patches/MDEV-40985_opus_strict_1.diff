@@ -1,0 +1,55 @@
+diff --git a/mysql-test/suite/versioning/r/alter.result b/mysql-test/suite/versioning/r/alter.result
+index 52c35f47..64cbf19c 100644
+--- a/mysql-test/suite/versioning/r/alter.result
++++ b/mysql-test/suite/versioning/r/alter.result
+@@ -881,3 +881,10 @@ t1	CREATE TABLE `t1` (
+ ) ENGINE=MyISAM DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci WITH SYSTEM VERSIONING
+ drop table t1;
+ # End of 10.5 tests
++#
++# MDEV-40985 row_end access out of bounds in ALTER TABLE
++#
++CREATE TABLE t1 (c1 TEXT,v1 INT AS(1),v2 INT AS(1),v3 INT AS(1),v4 INT AS(1),v5 INT AS(1),FULLTEXT(c1)) ENGINE=InnoDB WITH SYSTEM VERSIONING;
++ALTER TABLE t1 FORCE;
++DROP TABLE t1;
++# End of 10.6 tests
+diff --git a/mysql-test/suite/versioning/t/alter.test b/mysql-test/suite/versioning/t/alter.test
+index 85d40b1e..eec4dbea 100644
+--- a/mysql-test/suite/versioning/t/alter.test
++++ b/mysql-test/suite/versioning/t/alter.test
+@@ -781,3 +781,12 @@ show create table t1;
+ drop table t1;
+ 
+ --echo # End of 10.5 tests
++
++--echo #
++--echo # MDEV-40985 row_end access out of bounds in ALTER TABLE
++--echo #
++CREATE TABLE t1 (c1 TEXT,v1 INT AS(1),v2 INT AS(1),v3 INT AS(1),v4 INT AS(1),v5 INT AS(1),FULLTEXT(c1)) ENGINE=InnoDB WITH SYSTEM VERSIONING;
++ALTER TABLE t1 FORCE;
++DROP TABLE t1;
++
++--echo # End of 10.6 tests
+diff --git a/storage/innobase/handler/handler0alter.cc b/storage/innobase/handler/handler0alter.cc
+index 99413f79..a1610fc5 100644
+--- a/storage/innobase/handler/handler0alter.cc
++++ b/storage/innobase/handler/handler0alter.cc
+@@ -4322,8 +4322,17 @@ ha_innobase_inplace_ctx::create_key_defs(
+ 		index->fields[0].descending = false;
+ 		index->fields[0].is_v_col = false;
+ 		if (nfields == 2) {
+-			index->fields[1].col_no
++			/* Convert the MySQL field number of row_end
++			into the InnoDB column number, which excludes
++			virtual columns. */
++			const uint end_fieldno
+ 				= altered_table->s->vers.end_fieldno;
++			ulint num_v = 0;
++			for (uint i = 0; i < end_fieldno; i++) {
++				num_v += !altered_table->field[i]
++					->stored_in_db();
++			}
++			index->fields[1].col_no = end_fieldno - num_v;
+ 			index->fields[1].prefix_len = 0;
+ 			index->fields[1].descending = false;
+ 			index->fields[1].is_v_col = false;

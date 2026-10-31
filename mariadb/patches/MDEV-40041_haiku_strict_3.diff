@@ -1,0 +1,87 @@
+diff --git a/mysql-test/suite/vcol/r/vcol_session_func_trigger.result b/mysql-test/suite/vcol/r/vcol_session_func_trigger.result
+new file mode 100644
+index 00000000..2df31ce6
+--- /dev/null
++++ b/mysql-test/suite/vcol/r/vcol_session_func_trigger.result
+@@ -0,0 +1,16 @@
++#
++# MDEV-40041 Assertion `fixed()' failed in Item_func_connection_id::val_int
++# on INSERT w/ TRIGGER under LOCK TABLES
++#
++SET sql_mode='';
++CREATE TABLE t (c INT);
++LOCK TABLE t WRITE;
++CREATE OR REPLACE TABLE t (a INT AS (CONNECTION_ID()));
++CREATE TRIGGER a BEFORE INSERT ON t FOR EACH ROW SET @a:=1;
++INSERT INTO t VALUES ('');
++SELECT a = CONNECTION_ID() AS same FROM t;
++same
++1
++UNLOCK TABLES;
++DROP TABLE t;
++SET sql_mode=DEFAULT;
+diff --git a/mysql-test/suite/vcol/t/vcol_session_func_trigger.test b/mysql-test/suite/vcol/t/vcol_session_func_trigger.test
+new file mode 100644
+index 00000000..573c88e6
+--- /dev/null
++++ b/mysql-test/suite/vcol/t/vcol_session_func_trigger.test
+@@ -0,0 +1,14 @@
++--echo #
++--echo # MDEV-40041 Assertion `fixed()' failed in Item_func_connection_id::val_int
++--echo # on INSERT w/ TRIGGER under LOCK TABLES
++--echo #
++SET sql_mode='';
++CREATE TABLE t (c INT);
++LOCK TABLE t WRITE;
++CREATE OR REPLACE TABLE t (a INT AS (CONNECTION_ID()));
++CREATE TRIGGER a BEFORE INSERT ON t FOR EACH ROW SET @a:=1;
++INSERT INTO t VALUES ('');
++SELECT a = CONNECTION_ID() AS same FROM t;
++UNLOCK TABLES;
++DROP TABLE t;
++SET sql_mode=DEFAULT;
+diff --git a/sql/sql_base.cc b/sql/sql_base.cc
+index eabad770..bcafebc3 100644
+--- a/sql/sql_base.cc
++++ b/sql/sql_base.cc
+@@ -9373,12 +9373,17 @@ fill_record_n_invoke_before_triggers(THD *thd, TABLE *table,
+     }
+ 
+     /*
+-      Re-calculate virtual fields to cater for cases when base columns are
+-      updated by the triggers.
++      The trigger may have run a statement (e.g. SET) that closed the tables
++      opened under LOCK TABLES, which cleans up the session-dependent virtual
++      column expressions. Refix them before they are evaluated.
+     */
+     if (table->vfield)
++    {
++      if (table->vcol_fix_expr(thd))
++        return TRUE;
+       result|= table->update_virtual_fields(table->file,
+                                             VCOL_UPDATE_FOR_WRITE);
++    }
+   }
+   return result;
+ }
+diff --git a/sql/table.cc b/sql/table.cc
+index d4cb5a79..27ea1ca2 100644
+--- a/sql/table.cc
++++ b/sql/table.cc
+@@ -3874,10 +3874,13 @@ bool TABLE::vcol_fix_expr(THD *thd)
+   if (pos_in_table_list->placeholder() || vcol_refix_list.is_empty())
+     return false;
+ 
+-  if (!thd->stmt_arena->is_conventional() &&
+-      vcol_refix_list.head()->expr->fixed())
++  if (vcol_refix_list.head()->expr->fixed())
+   {
+-    /* NOTE: Under trigger we already have fixed expressions */
++    /*
++      Expressions are still fixed, nothing to do. This is the case under
++      a trigger or stored routine, which keeps the expressions fixed while
++      it runs.
++    */
+     return false;
+   }
+ 

@@ -1,0 +1,94 @@
+diff --git a/public/lib/classes/task/manager.php b/public/lib/classes/task/manager.php
+index 1bd67857f72..9bd2c952596 100644
+--- a/public/lib/classes/task/manager.php
++++ b/public/lib/classes/task/manager.php
+@@ -1391,6 +1391,10 @@ class manager {
+     /**
+      * Sets the next run time for a scheduled task.
+      *
++     * Only the database record is updated, the passed task object is left untouched. This means that if
++     * the task is currently running, the change is detected and preserved when the running task completes
++     * (see {@see scheduled_task_complete}), rather than being overwritten by the next scheduled time.
++     *
+      * @param scheduled_task $task Task to modify
+      * @param int $nextruntime timestamp
+      * @throws \dml_exception If there is a database error
+@@ -1460,7 +1464,13 @@ class manager {
+         if ($record) {
+             $record->lastruntime = $clock->time();
+             $record->faildelay = 0;
+-            $record->nextruntime = $task->get_next_scheduled_time();
++            // If the next run time was changed while this task was running (for example by a "Run ASAP"
++            // request, or by the schedule being reconfigured), honour that change rather than clobbering
++            // it with the next time calculated from the schedule. Otherwise the request would be reported
++            // as successful but silently discarded.
++            if ((int)$record->nextruntime === (int)$task->get_next_run_time()) {
++                $record->nextruntime = $task->get_next_scheduled_time();
++            }
+             $record->timestarted = null;
+             $record->hostname = null;
+             $record->pid = null;
+diff --git a/public/lib/tests/task/manager_test.php b/public/lib/tests/task/manager_test.php
+index 7e28d285776..f27bf93bc98 100644
+--- a/public/lib/tests/task/manager_test.php
++++ b/public/lib/tests/task/manager_test.php
+@@ -702,4 +702,59 @@ final class manager_test extends \advanced_testcase {
+         $this->assertNotNull($next);
+         manager::scheduled_task_complete($next);
+     }
++
++    /**
++     * Test that a "Run ASAP" request made while a scheduled task is running is not clobbered
++     * when the running task completes.
++     *
++     * @covers ::scheduled_task_complete
++     * @covers ::set_scheduled_task_nextruntime
++     */
++    public function test_set_scheduled_task_nextruntime_while_running(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $this->preventResetByRollback();
++        $clock = $this->mock_clock_with_frozen(
++            (new \DateTimeImmutable('2026-01-01 12:00:00', \core_date::get_server_timezone_object()))->getTimestamp(),
++        );
++
++        // Disable all the tasks, so we can insert our own and be sure it's the only one being run.
++        $DB->set_field('task_scheduled', 'disabled', 1);
++
++        $task = new scheduled_test_task();
++        $task->set_month('*');
++        $task->set_hour('0');
++        $task->set_next_run_time($clock->time() - HOURSECS);
++        $DB->insert_record('task_scheduled', manager::record_from_scheduled_task($task));
++
++        // Start running the task (this takes the lock).
++        $running = manager::get_next_scheduled_task($clock->time());
++        $this->assertNotNull($running);
++        manager::scheduled_task_starting($running);
++
++        // While it is running, request that it be run ASAP.
++        $asaptime = $clock->time() - HOURSECS;
++        manager::set_scheduled_task_nextruntime($running, $asaptime);
++
++        // Now the running task completes.
++        manager::scheduled_task_complete($running);
++
++        // The ASAP request must have been preserved, not overwritten by the next scheduled time.
++        $record = $DB->get_record('task_scheduled', ['classname' => get_class($task)], '*', MUST_EXIST);
++        $this->assertEquals($asaptime, $record->nextruntime);
++        $this->assertEquals($clock->time(), $record->lastruntime);
++
++        // And the task is picked up again by the next cron run.
++        $next = manager::get_next_scheduled_task($clock->time() + 10);
++        $this->assertNotNull($next);
++        $this->assertInstanceOf(scheduled_test_task::class, $next);
++        manager::scheduled_task_complete($next);
++
++        // After a normal completion, the next run time is calculated from the schedule as usual.
++        $record = $DB->get_record('task_scheduled', ['classname' => get_class($task)], '*', MUST_EXIST);
++        $this->assertEquals($next->get_next_scheduled_time(), $record->nextruntime);
++        $this->assertGreaterThan($clock->time(), $record->nextruntime);
++        $this->assertNull(manager::get_next_scheduled_task($clock->time() + 20));
++    }
+ }

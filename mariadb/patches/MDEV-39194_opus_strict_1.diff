@@ -1,0 +1,85 @@
+diff --git a/mysql-test/main/func_group.result b/mysql-test/main/func_group.result
+index 6c5e3571..55e4b238 100644
+--- a/mysql-test/main/func_group.result
++++ b/mysql-test/main/func_group.result
+@@ -2589,4 +2589,19 @@ def					AVG(1)	253	7	7	Y	0	39	8
+ 1	MAX(1)	AVG(1)
+ 1	1	1.00000
+ one	max	avg
++#
++# MDEV-39194 SUM(b'1100') and SUM(DISTINCT b'1100') return different results
++#
++SELECT SUM(b'1100'), SUM(DISTINCT b'1100');
++SUM(b'1100')	SUM(DISTINCT b'1100')
++12	12
++SELECT AVG(b'1100'), AVG(DISTINCT b'1100');
++AVG(b'1100')	AVG(DISTINCT b'1100')
++12.0000	12.0000
++SELECT SUM(0x0C), SUM(DISTINCT 0x0C);
++SUM(0x0C)	SUM(DISTINCT 0x0C)
++12	12
++SELECT SUM(0xFFFFFFFFFFFFFFFF), SUM(DISTINCT 0xFFFFFFFFFFFFFFFF);
++SUM(0xFFFFFFFFFFFFFFFF)	SUM(DISTINCT 0xFFFFFFFFFFFFFFFF)
++18446744073709551615	18446744073709551615
+ # End of 10.11 tests
+diff --git a/mysql-test/main/func_group.test b/mysql-test/main/func_group.test
+index 045ddfeb..4f2d49d1 100644
+--- a/mysql-test/main/func_group.test
++++ b/mysql-test/main/func_group.test
+@@ -1814,4 +1814,12 @@ SELECT 1, MAX(1), AVG(1) UNION ALL SELECT 'one', 'max', 'avg';
+ enable_view_protocol;
+ disable_metadata;
+ 
++--echo #
++--echo # MDEV-39194 SUM(b'1100') and SUM(DISTINCT b'1100') return different results
++--echo #
++SELECT SUM(b'1100'), SUM(DISTINCT b'1100');
++SELECT AVG(b'1100'), AVG(DISTINCT b'1100');
++SELECT SUM(0x0C), SUM(DISTINCT 0x0C);
++SELECT SUM(0xFFFFFFFFFFFFFFFF), SUM(DISTINCT 0xFFFFFFFFFFFFFFFF);
++
+ --echo # End of 10.11 tests
+diff --git a/sql/sql_type.cc b/sql/sql_type.cc
+index 74917bbc..6fd4c3a9 100644
+--- a/sql/sql_type.cc
++++ b/sql/sql_type.cc
+@@ -2415,6 +2415,26 @@ Type_handler_int_result::make_num_distinct_aggregator_field(MEM_ROOT *mem_root,
+ }
+ 
+ 
++/**
++  Hex hybrid literals (0xHHHH, b'0101') behave as unsigned integers
++  in numeric context, e.g. in SUM() and AVG().
++  Create an unsigned BIGINT field, so the value is not truncated
++  according to the (string) length of the literal, as a DOUBLE field
++  created by default would do.
++*/
++Field *
++Type_handler_hex_hybrid::make_num_distinct_aggregator_field(MEM_ROOT *mem_root,
++                                                            const Item *item)
++                                                            const
++{
++  return new(mem_root)
++         Field_longlong(NULL, MAX_BIGINT_WIDTH,
++                        (uchar *) (item->maybe_null() ? "" : 0),
++                        item->maybe_null() ? 1 : 0, Field::NONE,
++                        &item->name, 0, true/*unsigned*/);
++}
++
++
+ /***********************************************************************/
+ 
+ Field *Type_handler_tiny::make_conversion_table_field(MEM_ROOT *root,
+diff --git a/sql/sql_type.h b/sql/sql_type.h
+index 9be4eeb3..30e89cae 100644
+--- a/sql/sql_type.h
++++ b/sql/sql_type.h
+@@ -7182,6 +7182,8 @@ class Type_handler_hex_hybrid: public Type_handler_varchar
+ public:
+   virtual ~Type_handler_hex_hybrid() = default;
+   const Type_handler *cast_to_int_type_handler() const override;
++  Field *make_num_distinct_aggregator_field(MEM_ROOT *, const Item *)
++                                            const override;
+   bool Item_hybrid_func_fix_attributes(THD *thd, const LEX_CSTRING &name,
+                                        Type_handler_hybrid_field_type *h,
+                                        Type_all_attributes *attr,

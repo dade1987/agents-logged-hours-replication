@@ -1,0 +1,31 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot run Moodle's test suite. You may run `php -l <file>` and read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-89711: Quiz: get_effective_open_close_times() renamed without deprecation, breaking public API
+
+As part of [https://moodle.atlassian.net/browse/MDL-82521|https://moodle.atlassian.net/browse/MDL-82521|smart-link], override_manager::get_effective_open_close_times() was renamed to get_effective_times() with no backwards-compatible shim.
+
+get_effective_open_close_times() is a public static method that shipped in Moodle 5.2. Renaming/removing a released public API method without going through Moodle's deprecation process breaks any code (plugins, or other core callers) that still calls the old name.
+
+Steps to reproduce:
+
+# Call mod_quiz\local\override_manager::get_effective_open_close_times($quizid, $userid) on a site running the version that includes the [https://moodle.atlassian.net/browse/MDL-82521|https://moodle.atlassian.net/browse/MDL-82521|smart-link] patch.
+# Observe a fatal error: Call to undefined method.
+
+Expected: The Moodle 5.2 public method get_effective_open_close_times() should continue to exist and work (e.g. by delegating to get_effective_times()), and be marked and processed via the standard staged deprecation flow, rather than being removed outright.
+
+Suggested fix:
+
+* Re-add get_effective_open_close_times() as a wrapper that calls get_effective_times() and returns only the timeopen/timeclose keys (to preserve its original return contract), marked @deprecated since Moodle x.x, with an entry added to mod/quiz/deprecatedlib.php per the deprecation guidelines.
+
+Raised by Cameron Ball on MDL-82521: [https://moodle.atlassian.net/browse/MDL-82521?focusedCommentId=1176252|https://moodle.atlassian.net/browse/MDL-82521?focusedCommentId=1176252|smart-link] 
+
+
+The developers' tests for this issue use these new or changed classes, functions or web services (names and signatures only; you must implement them):
+- public/mod/quiz/classes/local/override_manager.php (namespace mod_quiz\local): public static function get_effective_open_close_times(int $quizid, int $userid): array

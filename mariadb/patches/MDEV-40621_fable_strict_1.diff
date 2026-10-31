@@ -1,0 +1,111 @@
+diff --git a/mysql-test/suite/innodb_fts/r/optimize_ext_ilist.result b/mysql-test/suite/innodb_fts/r/optimize_ext_ilist.result
+new file mode 100644
+index 00000000..8932c59e
+--- /dev/null
++++ b/mysql-test/suite/innodb_fts/r/optimize_ext_ilist.result
+@@ -0,0 +1,28 @@
++#
++# MDEV-40621 InnoDB: Failing assertion: doc_id == src_node->last_doc_id
++#
++CREATE TABLE t1 (id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
++body MEDIUMTEXT, FULLTEXT KEY ftidx (body)) ENGINE=InnoDB;
++INSERT INTO t1 (body) SELECT REPEAT('megaword ', 30) FROM seq_1_to_260;
++SET @saved_optimize_fulltext_only = @@GLOBAL.innodb_optimize_fulltext_only;
++SET GLOBAL innodb_optimize_fulltext_only = ON;
++DELETE FROM t1 WHERE id = 1;
++OPTIMIZE TABLE t1;
++Table	Op	Msg_type	Msg_text
++test.t1	optimize	status	OK
++SELECT COUNT(*) FROM t1 WHERE MATCH(body) AGAINST('megaword' IN BOOLEAN MODE);
++COUNT(*)
++259
++DELETE FROM t1 WHERE id IN (2, 130, 260);
++OPTIMIZE TABLE t1;
++Table	Op	Msg_type	Msg_text
++test.t1	optimize	status	OK
++SELECT COUNT(*) FROM t1 WHERE MATCH(body) AGAINST('megaword' IN BOOLEAN MODE);
++COUNT(*)
++256
++SELECT COUNT(*) FROM t1 WHERE MATCH(body) AGAINST('+megaword' IN BOOLEAN MODE)
++AND id IN (1, 2, 130, 260);
++COUNT(*)
++0
++SET GLOBAL innodb_optimize_fulltext_only = @saved_optimize_fulltext_only;
++DROP TABLE t1;
+diff --git a/mysql-test/suite/innodb_fts/t/optimize_ext_ilist.test b/mysql-test/suite/innodb_fts/t/optimize_ext_ilist.test
+new file mode 100644
+index 00000000..ce4a839d
+--- /dev/null
++++ b/mysql-test/suite/innodb_fts/t/optimize_ext_ilist.test
+@@ -0,0 +1,25 @@
++--source include/have_innodb.inc
++--source include/have_sequence.inc
++
++--echo #
++--echo # MDEV-40621 InnoDB: Failing assertion: doc_id == src_node->last_doc_id
++--echo #
++
++# The ilist of a word in the FTS auxiliary index table must be read
++# completely by OPTIMIZE TABLE even when it is stored off-page.
++
++CREATE TABLE t1 (id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
++                 body MEDIUMTEXT, FULLTEXT KEY ftidx (body)) ENGINE=InnoDB;
++INSERT INTO t1 (body) SELECT REPEAT('megaword ', 30) FROM seq_1_to_260;
++SET @saved_optimize_fulltext_only = @@GLOBAL.innodb_optimize_fulltext_only;
++SET GLOBAL innodb_optimize_fulltext_only = ON;
++DELETE FROM t1 WHERE id = 1;
++OPTIMIZE TABLE t1;
++SELECT COUNT(*) FROM t1 WHERE MATCH(body) AGAINST('megaword' IN BOOLEAN MODE);
++DELETE FROM t1 WHERE id IN (2, 130, 260);
++OPTIMIZE TABLE t1;
++SELECT COUNT(*) FROM t1 WHERE MATCH(body) AGAINST('megaword' IN BOOLEAN MODE);
++SELECT COUNT(*) FROM t1 WHERE MATCH(body) AGAINST('+megaword' IN BOOLEAN MODE)
++  AND id IN (1, 2, 130, 260);
++SET GLOBAL innodb_optimize_fulltext_only = @saved_optimize_fulltext_only;
++DROP TABLE t1;
+diff --git a/storage/innobase/fts/fts0exec.cc b/storage/innobase/fts/fts0exec.cc
+index 197eebc6..4b6d3504 100644
+--- a/storage/innobase/fts/fts0exec.cc
++++ b/storage/innobase/fts/fts0exec.cc
+@@ -764,6 +764,31 @@ dberr_t AuxRecordReader::default_word_processor(
+   ulint ilist_len;
+   const byte* ilist_data= rec_get_nth_field(rec, offsets, 6, &ilist_len);
+ 
++  /* The ilist can be stored externally (off-page BLOB) when it is
++  larger than what fits in the record. In that case, rec_get_nth_field()
++  returns only the locally stored prefix together with the BLOB
++  reference. Fetch the complete field, otherwise OPTIMIZE TABLE
++  would work on a truncated ilist. */
++  mem_heap_t *ilist_heap= nullptr;
++  if (ilist_data && ilist_len != UNIV_SQL_NULL
++      && rec_offs_nth_extern(offsets, 6))
++  {
++    ilist_heap= mem_heap_create(ilist_len + 1000);
++    ulint external_len;
++    byte *external_ilist= btr_copy_externally_stored_field(
++      &external_len, ilist_data, index->table->space->zip_size(),
++      ilist_len, ilist_heap);
++    if (!external_ilist)
++    {
++      /* Incomplete externally stored field (fresh insert being
++      rolled back); pretend that the record does not exist. */
++      mem_heap_free(ilist_heap);
++      return DB_SUCCESS;
++    }
++    ilist_data= external_ilist;
++    ilist_len= external_len;
++  }
++
+   fts_word_t *word;
+   bool is_word_init= false;
+ 
+@@ -811,6 +836,9 @@ dberr_t AuxRecordReader::default_word_processor(
+     if (ilist_len == 0) return DB_SUCCESS_LOCKED_REC;
+   }
+ 
++  if (ilist_heap)
++    mem_heap_free(ilist_heap);
++
+   if (this->total_memory)
+   {
+     if (is_word_init)

@@ -1,0 +1,94 @@
+diff --git a/mysql-test/suite/innodb_fts/r/misc.result b/mysql-test/suite/innodb_fts/r/misc.result
+index 9c9e16f4..a4aa992d 100644
+--- a/mysql-test/suite/innodb_fts/r/misc.result
++++ b/mysql-test/suite/innodb_fts/r/misc.result
+@@ -1876,3 +1876,20 @@ id	a
+ 1	know database
+ 2	good database
+ DROP TABLE t1;
++#
++# MDEV-40621 InnoDB: Failing assertion: doc_id == src_node->last_doc_id
++#
++CREATE TABLE t1 (id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, body MEDIUMTEXT,
++FULLTEXT KEY ftidx (body)) ENGINE=InnoDB;
++INSERT INTO t1 (body) SELECT REPEAT('megaword ', 30) FROM seq_1_to_260;
++SET @saved_optimize_fulltext_only = @@GLOBAL.innodb_optimize_fulltext_only;
++SET GLOBAL innodb_optimize_fulltext_only = ON;
++DELETE FROM t1 WHERE id = 1;
++OPTIMIZE TABLE t1;
++Table	Op	Msg_type	Msg_text
++test.t1	optimize	status	OK
++SET GLOBAL innodb_optimize_fulltext_only = @saved_optimize_fulltext_only;
++SELECT COUNT(*) FROM t1 WHERE MATCH(body) AGAINST('megaword');
++COUNT(*)
++259
++DROP TABLE t1;
+diff --git a/mysql-test/suite/innodb_fts/t/misc.test b/mysql-test/suite/innodb_fts/t/misc.test
+index f3c10d16..52c44cdb 100644
+--- a/mysql-test/suite/innodb_fts/t/misc.test
++++ b/mysql-test/suite/innodb_fts/t/misc.test
+@@ -1511,3 +1511,18 @@ SELECT * FROM t1 WHERE MATCH (a) AGAINST ('good *' IN NATURAL LANGUAGE MODE WITH
+ SELECT * FROM t1 WHERE MATCH (a) AGAINST ('g* database' IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION);
+ 
+ DROP TABLE t1;
++
++--echo #
++--echo # MDEV-40621 InnoDB: Failing assertion: doc_id == src_node->last_doc_id
++--echo #
++--source include/have_sequence.inc
++CREATE TABLE t1 (id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, body MEDIUMTEXT,
++                 FULLTEXT KEY ftidx (body)) ENGINE=InnoDB;
++INSERT INTO t1 (body) SELECT REPEAT('megaword ', 30) FROM seq_1_to_260;
++SET @saved_optimize_fulltext_only = @@GLOBAL.innodb_optimize_fulltext_only;
++SET GLOBAL innodb_optimize_fulltext_only = ON;
++DELETE FROM t1 WHERE id = 1;
++OPTIMIZE TABLE t1;
++SET GLOBAL innodb_optimize_fulltext_only = @saved_optimize_fulltext_only;
++SELECT COUNT(*) FROM t1 WHERE MATCH(body) AGAINST('megaword');
++DROP TABLE t1;
+diff --git a/storage/innobase/fts/fts0exec.cc b/storage/innobase/fts/fts0exec.cc
+index 197eebc6..a68583ce 100644
+--- a/storage/innobase/fts/fts0exec.cc
++++ b/storage/innobase/fts/fts0exec.cc
+@@ -764,6 +764,28 @@ dberr_t AuxRecordReader::default_word_processor(
+   ulint ilist_len;
+   const byte* ilist_data= rec_get_nth_field(rec, offsets, 6, &ilist_len);
+ 
++  /* The ilist column may be stored externally (off-page) when it
++  does not fit in the record. In that case, rec_get_nth_field()
++  returns only the locally stored prefix followed by the BLOB
++  pointer, so the whole column must be fetched from the BLOB pages. */
++  mem_heap_t* ilist_heap= nullptr;
++  if (ilist_data && ilist_len != UNIV_SQL_NULL
++      && rec_offs_nth_extern(offsets, 6))
++  {
++    ilist_heap= mem_heap_create(ilist_len + 1000);
++    ulint external_len;
++    const byte* external_ilist= btr_copy_externally_stored_field(
++      &external_len, ilist_data, index->table->space->zip_size(),
++      ilist_len, ilist_heap);
++    if (!external_ilist)
++    {
++      mem_heap_free(ilist_heap);
++      return DB_CORRUPTION;
++    }
++    ilist_data= external_ilist;
++    ilist_len= external_len;
++  }
++
+   fts_word_t *word;
+   bool is_word_init= false;
+ 
+@@ -808,9 +830,11 @@ dberr_t AuxRecordReader::default_word_processor(
+       node->ilist= static_cast<byte*>(ut_malloc_nokey(ilist_len));
+       memcpy(node->ilist, ilist_data, ilist_len);
+     }
+-    if (ilist_len == 0) return DB_SUCCESS_LOCKED_REC;
+   }
+ 
++  if (ilist_heap)
++    mem_heap_free(ilist_heap);
++
+   if (this->total_memory)
+   {
+     if (is_word_init)

@@ -1,0 +1,175 @@
+diff --git a/public/admin/tool/uploadcourse/classes/course.php b/public/admin/tool/uploadcourse/classes/course.php
+index b4a35053d3a..83227fa7a8f 100644
+--- a/public/admin/tool/uploadcourse/classes/course.php
++++ b/public/admin/tool/uploadcourse/classes/course.php
+@@ -361,6 +361,28 @@ class tool_uploadcourse_course {
+         return $this->id;
+     }
+ 
++    /**
++     * Set the value of a setting of the restore plan, if the setting exists and is not locked.
++     *
++     * @param restore_controller $rc the restore controller.
++     * @param string $name the name of the setting.
++     * @param mixed $value the value to set.
++     * @return bool whether the value could be set.
++     */
++    protected function set_restore_setting_value(restore_controller $rc, string $name, $value): bool {
++        $plan = $rc->get_plan();
++        if (!$plan->setting_exists($name)) {
++            return false;
++        }
++        try {
++            $plan->get_setting($name)->set_value($value);
++        } catch (base_setting_exception $e) {
++            // The setting is locked, we can not change it.
++            return false;
++        }
++        return true;
++    }
++
+     /**
+      * Get the directory of the object to restore.
+      *
+@@ -918,8 +940,30 @@ class tool_uploadcourse_course {
+             if ($rc->get_status() == backup::STATUS_REQUIRE_CONV) {
+                 $rc->convert();
+             }
++
++            $overwriteconf = false;
++            if ($this->do === self::DO_CREATE) {
++                // The course has just been created, so we also want to restore the course configuration from the
++                // template (summary, overview files, tags, etc.), which otherwise is not restored when importing
++                // into an existing course. The names of the course are kept, and the data provided in the upload
++                // (or the defaults) are applied again after the restore so that they always take priority.
++                $overwriteconf = $this->set_restore_setting_value($rc, 'overwrite_conf', true);
++                if ($overwriteconf) {
++                    $this->set_restore_setting_value($rc, 'course_fullname', false);
++                    $this->set_restore_setting_value($rc, 'course_shortname', false);
++                }
++            }
++
+             if ($rc->execute_precheck()) {
+                 $rc->execute_plan();
++
++                if ($overwriteconf) {
++                    // Re-apply the course data from the upload over the configuration coming from the template.
++                    $coursedata = (object) $this->data;
++                    $coursedata->id = $course->id;
++                    update_course($coursedata);
++                }
++
+                 $this->status('courserestored', new lang_string('courserestored', 'tool_uploadcourse'));
+             } else {
+                 $this->error('errorwhilerestoringcourse', new lang_string('errorwhilerestoringcourse', 'tool_uploadcourse'));
+diff --git a/public/admin/tool/uploadcourse/tests/course_test.php b/public/admin/tool/uploadcourse/tests/course_test.php
+index 60dfa4f208c..4d4b950401e 100644
+--- a/public/admin/tool/uploadcourse/tests/course_test.php
++++ b/public/admin/tool/uploadcourse/tests/course_test.php
+@@ -956,6 +956,106 @@ final class course_test extends \advanced_testcase {
+         $this->assertTrue($found);
+     }
+ 
++    /**
++     * Test that the summary and overview files of the template course are copied when creating a course.
++     */
++    public function test_restore_course_summary_and_overviewfiles(): void {
++        global $DB;
++        $this->initialise_test();
++        $this->setAdminUser();
++
++        $c1 = $this->getDataGenerator()->create_course([
++            'summary' => 'Template summary',
++            'summaryformat' => FORMAT_MARKDOWN,
++            'startdate' => mktime(0, 0, 0, 1, 1, 2020),
++        ]);
++        $c1context = \context_course::instance($c1->id);
++        $fs = get_file_storage();
++        $fs->create_file_from_string([
++            'contextid' => $c1context->id,
++            'component' => 'course',
++            'filearea' => 'overviewfiles',
++            'itemid' => 0,
++            'filepath' => '/',
++            'filename' => 'image.png',
++        ], 'Course image content');
++        $fs->create_file_from_string([
++            'contextid' => $c1context->id,
++            'component' => 'course',
++            'filearea' => 'summary',
++            'itemid' => 0,
++            'filepath' => '/',
++            'filename' => 'summaryfile.txt',
++        ], 'Summary file content');
++
++        $mode = tool_uploadcourse_processor::MODE_CREATE_NEW;
++        $updatemode = tool_uploadcourse_processor::UPDATE_ALL_WITH_DATA_ONLY;
++
++        // Creating a course without a summary: the summary and the files come from the template course.
++        $data = [
++            'shortname' => 'A1',
++            'templatecourse' => $c1->shortname,
++            'category' => 1,
++            'fullname' => 'Fullname A1',
++            'startdate' => '8 June 2021',
++            'visible' => '0',
++        ];
++        $co = new tool_uploadcourse_course($mode, $updatemode, $data);
++        $this->assertTrue($co->prepare());
++        $co->proceed();
++        $course = $DB->get_record('course', ['shortname' => 'A1'], '*', MUST_EXIST);
++        $this->assertEquals('Fullname A1', $course->fullname);
++        $this->assertEquals('A1', $course->shortname);
++        $this->assertEquals(0, $course->visible);
++        $this->assertEquals(mktime(0, 0, 0, 6, 8, 2021), $course->startdate);
++        $this->assertEquals('Template summary', $course->summary);
++        $this->assertEquals(FORMAT_MARKDOWN, $course->summaryformat);
++        $context = \context_course::instance($course->id);
++        $files = $fs->get_area_files($context->id, 'course', 'overviewfiles', 0, 'filename', false);
++        $this->assertCount(1, $files);
++        $file = reset($files);
++        $this->assertEquals('image.png', $file->get_filename());
++        $this->assertEquals('Course image content', $file->get_content());
++        $files = $fs->get_area_files($context->id, 'course', 'summary', 0, 'filename', false);
++        $this->assertCount(1, $files);
++        $file = reset($files);
++        $this->assertEquals('summaryfile.txt', $file->get_filename());
++
++        // Creating a course with a summary: the summary from the upload takes priority over the template course.
++        $data = [
++            'shortname' => 'B1',
++            'templatecourse' => $c1->shortname,
++            'summary' => 'B',
++            'category' => 1,
++            'fullname' => 'Fullname B1',
++        ];
++        $co = new tool_uploadcourse_course($mode, $updatemode, $data);
++        $this->assertTrue($co->prepare());
++        $co->proceed();
++        $course = $DB->get_record('course', ['shortname' => 'B1'], '*', MUST_EXIST);
++        $this->assertEquals('Fullname B1', $course->fullname);
++        $this->assertEquals('B', $course->summary);
++        $context = \context_course::instance($course->id);
++        $files = $fs->get_area_files($context->id, 'course', 'overviewfiles', 0, 'filename', false);
++        $this->assertCount(1, $files);
++
++        // Updating an existing course from a template does not overwrite its configuration.
++        $c2 = $this->getDataGenerator()->create_course(['shortname' => 'C2', 'summary' => 'C2 summary']);
++        $mode = tool_uploadcourse_processor::MODE_UPDATE_ONLY;
++        $data = [
++            'shortname' => 'C2',
++            'templatecourse' => $c1->shortname,
++        ];
++        $co = new tool_uploadcourse_course($mode, $updatemode, $data);
++        $this->assertTrue($co->prepare());
++        $co->proceed();
++        $course = $DB->get_record('course', ['id' => $c2->id], '*', MUST_EXIST);
++        $this->assertEquals('C2 summary', $course->summary);
++        $context = \context_course::instance($course->id);
++        $files = $fs->get_area_files($context->id, 'course', 'overviewfiles', 0, 'filename', false);
++        $this->assertCount(0, $files);
++    }
++
+     public function test_restore_file(): void {
+         global $DB;
+         $this->initialise_test();

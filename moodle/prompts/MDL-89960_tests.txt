@@ -1,0 +1,18 @@
+You are a software engineer fixing an issue in Moodle (PHP). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You CAN run Moodle's existing PHPUnit tests: `cd {WS} && vendor/bin/phpunit <path/to/some_test.php>` (the test environment is already initialised). You may also run `php -l <file>` and read code with grep/find/cat. Use absolute paths starting with {WS} in every command.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update PHPUnit tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDL-89960: Marking workflows feedback shows markers names on feedback when grader identity hidden and some feedback from un-allocated markers
+
+When marker names were added to the individual feedback comments on assignments with multiple markers, it did not factor in the {{Hide grader identity from students}} setting, so although the “Graded by” section is still correctly hidden on the student’s view, individual feedback comments still list the graders' names alongside their comments.
+
+!MDL-89960-unpatched.png|width=716,alt="MDL-89960-unpatched.png"!
+
+The same applies to feedback annotated PDFs and feedback attached files. All 3 places need to hide the marker name, *unless* the user has the capability to view hidden graders.
+
+Additionally, we should only be sharing all of this feedback with the student for markers who are allocated to the submission. Currently if someone leaves a feedback comment or attachment, they are being shown to the student even if they have been unallocated (eg they were replaced by another marker), which should not be the case because they are not an active marker (and those records are simply retained in the database to avoid dataloss). This does not affect annotations, which already check and include just the currently assigned markers.

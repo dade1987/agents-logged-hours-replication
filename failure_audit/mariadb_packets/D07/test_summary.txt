@@ -1,0 +1,124 @@
+Evaluation: the agent's diff (without its own mysql-test changes) was applied on the parent commit, the developers' mysql-test files from the fix were added, the server was built (debug) and the fix's mtr tests were run: ['main.func_json']
+On the parent commit these tests FAIL; with the human fix they PASS.
+
+AGENT RESULT: FAIL
+main.func_json                           w1 [ fail ]
+        Test ended at 2026-10-28 07:37:14
+
+CURRENT_TEST: main.func_json
+mysqltest: At line 2144: query 'SELECT 1 FROM (SELECT CASE WHEN x * x THEN x END as a FROM ( SELECT json_insert ( '1' , ( 'x' % 'x' ) , 1 , '$.a' , 2 ) as x ) dt2 ) dt WHERE a' failed: <Unknown> (2013): Lost connection to server during query
+
+The result from queries just before the failure was:
+< snip >
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'x'
+Warning	1292	Truncated incorrect DOUBLE value: 'x'
+Warning	1292	Truncated incorrect DOUBLE value: 'x'
+Warning	1292	Truncated incorrect DOUBLE value: 'x'
+SELECT 1 FROM (SELECT CASE WHEN x * x THEN x END as a FROM ( SELECT json_array_append ( 'x' , ( 'x' % 'x' ) , 1 , 'x' , 1 ) as x ) dt2 ) dt WHERE a;
+1
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'x'
+Warning	1292	Truncated incorrect DOUBLE value: 'x'
+Warning	1292	Truncated incorrect DOUBLE value: 'x'
+Warning	1292	Truncated incorrect DOUBLE value: 'x'
+SELECT 1 FROM (SELECT CASE WHEN x * x THEN x END as a FROM ( SELECT json_array_insert ( '[1]' , ( 'x' % 'x' ) , 1 , '$[0]' , 9 ) as x ) dt2 ) dt WHERE a;
+1
+Warnings:
+Warning	1292	Truncated incorrect DOUBLE value: 'x'
+Warning	1292	Truncated incorrect DOUBLE value: 'x'
+Warning	1292	Truncated incorrect DOUBLE value: 'x'
+Warning	1292	Truncated incorrect DOUBLE value: 'x'
+SELECT 1 FROM (SELECT CASE WHEN x * x THEN x END as a FROM ( SELECT json_insert ( '1' , ( 'x' % 'x' ) , 1 , '$.a' , 2 ) as x ) dt2 ) dt WHERE a;
+
+More results from queries before failure can be found in /home/mtr/var/t/1/log/func_json.log
+
+
+Server [mysqld.1 - pid: 27703, winpid: 27703, exit: 256] failed during test run
+Server log from this test:
+----------SERVER LOG START-----------
+$ /home/user/mdb_build_dbg/sql/mariadbd --defaults-group-suffix=.1 --defaults-file=/home/mtr/var/t/1/my.cnf --log-output=file --core-file --loose-debug-sync-timeout=300
+2026-10-28  7:37:08 0 [Warning] Could not increase number of max_open_files to more than 1024 (request: 32186)
+2026-10-28  7:37:08 0 [Warning] Changed limits: max_open_files: 1024  max_connections: 151 (was 151)  table_cache: 421 (was 2000)
+2026-10-28  7:37:08 0 [Note] Starting MariaDB 10.11.19-MariaDB-debug-log source revision 5e8ab3a4f59109ab283b41474c0df1cac803b30e server_uid NzS151uu8ZVD58aPAFsNZrW2jyI= as process 27704
+2026-10-28  7:37:08 0 [Note] Plugin 'partition' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'SEQUENCE' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'InnoDB' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'INNODB_FT_CONFIG' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'INNODB_SYS_TABLESTATS' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'INNODB_CMP_PER_INDEX' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'INNODB_FT_DELETED' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'INNODB_CMP' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'THREAD_POOL_WAITS' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'INNODB_CMP_RESET' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'THREAD_POOL_QUEUES' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'INNODB_SYS_FIELDS' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'INNODB_BUFFER_PAGE_LRU' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'FEEDBACK' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'INNODB_FT_INDEX_TABLE' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'INNODB_CMPMEM' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'THREAD_POOL_GROUPS' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'INNODB_CMP_PER_INDEX_RESET' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'INNODB_SYS_FOREIGN_COLS' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'INNODB_FT_INDEX_CACHE' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'INNODB_BUFFER_POOL_STATS' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'INNODB_FT_BEING_DELETED' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'INNODB_SYS_FOREIGN' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'INNODB_CMPMEM_RESET' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'INNODB_FT_DEFAULT_STOPWORD' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'INNODB_SYS_TABLES' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'INNODB_SYS_COLUMNS' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'INNODB_SYS_TABLESPACES' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'INNODB_SYS_INDEXES' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'INNODB_SYS_VIRTUAL' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'user_variables' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'INNODB_TABLESPACES_ENCRYPTION' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'THREAD_POOL_STATS' is disabled.
+2026-10-28  7:37:08 0 [Note] Plugin 'unix_socket' is disabled.
+2026-10-28  7:37:08 0 [Warning] /home/user/mdb_build_dbg/sql/mariadbd: unknown option '--loose-pam-debug'
+2026-10-28  7:37:08 0 [Warning] /home/user/mdb_build_dbg/sql/mariadbd: unknown option '--loose-aria'
+2026-10-28  7:37:08 0 [Note] Server socket created on IP: '127.0.0.1', port: '19000'.
+2026-10-28  7:37:08 0 [Note] /home/user/mdb_build_dbg/sql/mariadbd: ready for connections.
+Version: '10.11.19-MariaDB-debug-log'  socket: '/home/mtr/var/t/tmp/1/mysqld.1.sock'  port: 19000  Source distribution
+261028  7:37:08 [ERROR] /home/user/mdb_build_dbg/sql/mariadbd got signal 11 ;
+Sorry, we probably made a mistake, and this is a bug.
+
+Your assistance in bug reporting will enable us to fix this for the next release.
+To report this bug, see https://mariadb.com/docs/general-resources/community/community/bug-tracking/reporting-bugs about how to report
+a bug on https://jira.mariadb.org/.
+
+Please include the information from the server start above, to the end of the
+information below.
+
+Server version: 10.11.19-MariaDB-debug-log source revision: 5e8ab3a4f59109ab283b41474c0df1cac803b30e
+
+The information page at https://mariadb.com/docs/server/reference/product-development/mariadb-fault-finding/how-to-produce-a-full-stack-trace-for-mariadbdcontains instructions to obtain a better version of the backtrace below.
+Following these instructions will help MariaDB developers provide a fix quicker.
+
+Attempting backtrace. Include this in the bug report.
+(note: Retrieving this information may fail)
+
+Thread pointer: 0x7f206c000dc8
+stack_bottom = 0x7f20899b0000 thread_stack 0x49000
+mysys/stacktrace.c:215(my_print_stacktrace)[0x5652b1f457b5]
+sql/signal_handler.cc:232(handle_fatal_signal)[0x5652b15bbe22]
+libc_sigaction.c:0(__restore_rt)[0x7f208f645330]
+strings/json_lib.c:50(json_string_set_cs)[0x5652b1fcfa68]
+strings/json_lib.c:1444(json_find_path)[0x5652b1fd2506]
+sql/item_jsonfunc.cc:3440(Item_func_json_insert::val_str(String*))[0x5652b144b703]
+sql/item_strfunc.cc:189(Item_str_func::val_real())[0x5652b1698e0e]
+sql/item_func.cc:1429(Item_func_mul::real_op())[0x5652b1657cbe]
+sql/item_func.h:930(Item_func_hybrid_field_type::val_real_from_real_op())[0x5652b14aa83d]
+sql/sql_type.cc:5645(Type_handler_real_result::Item_func_hybrid_field_type_val_real(Item_func_hybrid_field_type*) const)[0x5652b14932c8]
+sql/item_func.h:977(Item_func_hybrid_field_type::val_real())[0x5652b119b15a]
+sql/sql_type.cc:5249(Type_handler_real_result::Item_val_bool(Item*) const)[0x5652b1491ce5]
+sql/item.h:1740(Item::val_bool())[0x5652b104f4e8]
+sql/item_cmpfunc.cc:3087(Item_func_case_searched::find_item())[0x5652b161c838]
+sql/item_cmpfunc.cc:3121(Item_func_case::str_op(String*))[0x5652b161ca74]
+sql/item_func.h:912(Item_func_hybrid_field_type::str_op_with_null_check(String*))[0x5652b14aa710]
+sql/item_func.cc:1017(Item_func_hybrid_field_type::val_decimal_from_str_op(my_decimal*))[0x5652b165656b]
+sql/sql_type.cc:5815(Type_handler_string_result::Item_func_hybrid_field_type_val_decimal(Item_func_hybrid_field_type*, my_decimal*) const)[0x5652b149367d]
+sql/item_func.h:990(Item_func_hybrid_field_type::val_decimal(my_decimal*))[0x5652b119b365]
+sql/item.h:1836(Item::val_decimal_result(my_decimal*))[0x5652b101133a]
+sql/item.cc:10967(Item_cache_decimal::cache_value())[0x5652b1602b4c]
+sql/item.h:7675(Item_cache::has_value())[0x5652b14ada9c]

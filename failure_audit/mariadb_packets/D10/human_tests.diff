@@ -1,0 +1,60 @@
+diff --git a/mysql-test/main/func_json.result b/mysql-test/main/func_json.result
+index 71c6c1f3367..2af8dbfceff 100644
+--- a/mysql-test/main/func_json.result
++++ b/mysql-test/main/func_json.result
+@@ -5419,9 +5419,13 @@ NULL
+ select json_array_intersect(@arr1, @obj1);
+ json_array_intersect(@arr1, @obj1)
+ NULL
++Warnings:
++Warning	4038	Syntax error in JSON text in argument 2 to function 'json_array_intersect' at position 1
+ select json_array_intersect(@arr1, @num1);
+ json_array_intersect(@arr1, @num1)
+ NULL
++Warnings:
++Warning	4038	Syntax error in JSON text in argument 2 to function 'json_array_intersect' at position 1
+ select json_array_intersect(@num1, @bool1);
+ json_array_intersect(@num1, @bool1)
+ NULL
+diff --git a/mysql-test/main/func_json_notembedded.result b/mysql-test/main/func_json_notembedded.result
+index 43f52c3f2ca..e32442c1146 100644
+--- a/mysql-test/main/func_json_notembedded.result
++++ b/mysql-test/main/func_json_notembedded.result
+@@ -16,6 +16,8 @@ select json_array_append(@arr, '$[0]', 1);
+ ERROR 70100: Query execution was interrupted (max_statement_time exceeded)
+ select json_array_insert(@arr, '$[0]', 1);
+ ERROR 70100: Query execution was interrupted (max_statement_time exceeded)
++select json_array_intersect(@arr, @arr);
++ERROR 70100: Query execution was interrupted (max_statement_time exceeded)
+ select json_insert(@obj, '$.meta', 1);
+ ERROR 70100: Query execution was interrupted (max_statement_time exceeded)
+ select json_compact(@arr);
+@@ -54,6 +56,8 @@ select json_remove(@obj,'$.foo');
+ ERROR 70100: Query execution was interrupted (max_statement_time exceeded)
+ select json_replace(@obj,'$.foo',1);
+ ERROR 70100: Query execution was interrupted (max_statement_time exceeded)
++select json_schema_valid(@obj, '{"type":"object"}');
++ERROR 70100: Query execution was interrupted (max_statement_time exceeded)
+ select json_set(@arr,'$[1000]',1);
+ ERROR 70100: Query execution was interrupted (max_statement_time exceeded)
+ select json_valid(@arr);
+diff --git a/mysql-test/main/func_json_notembedded.test b/mysql-test/main/func_json_notembedded.test
+index 67595686783..5c177074e81 100644
+--- a/mysql-test/main/func_json_notembedded.test
++++ b/mysql-test/main/func_json_notembedded.test
+@@ -21,6 +21,7 @@ SET @old_debug= @@debug_dbug;
+ SET debug_dbug='+d,json_pause_execution';
+ select json_array_append(@arr, '$[0]', 1);
+ select json_array_insert(@arr, '$[0]', 1);
++select json_array_intersect(@arr, @arr);
+ select json_insert(@obj, '$.meta', 1);
+ select json_compact(@arr);
+ select json_contains(@obj, '"d"', '$.c');
+@@ -40,6 +41,7 @@ select json_normalize(@obj);
+ select json_overlaps(@obj, @arr);
+ select json_remove(@obj,'$.foo');
+ select json_replace(@obj,'$.foo',1);
++select json_schema_valid(@obj, '{"type":"object"}');
+ select json_set(@arr,'$[1000]',1);
+ select json_valid(@arr);
+ select ST_AsTEXT(ST_GeomFromGeoJSON(JSON_OBJECT("type", "Point", "coordinates", @arr),2)) as exp;

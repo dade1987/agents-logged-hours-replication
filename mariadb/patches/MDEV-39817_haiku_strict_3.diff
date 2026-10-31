@@ -1,0 +1,27 @@
+diff --git a/sql/item_jsonfunc.cc b/sql/item_jsonfunc.cc
+index cf5bb9be..51bbc519 100644
+--- a/sql/item_jsonfunc.cc
++++ b/sql/item_jsonfunc.cc
+@@ -4101,6 +4101,22 @@ void Item_func_json_arrayagg::cut_max_length(String *result,
+     return;
+   }
+ 
++  /*
++    The last element is a JSON string. One byte of max_length is reserved
++    for its closing quote. The new element starts after the separator
++    that precedes it (if any). If no part of the string itself fits into
++    max_length - 1 bytes, drop the element entirely: the cut must not
++    start before old_length, and no quote may be appended after a
++    separator.
++  */
++  size_t elem_start= old_length +
++                     (old_length ? get_separator()->length() : 0);
++  if (max_length - 1 <= elem_start)
++  {
++    result->length(old_length);
++    return;
++  }
++
+   Item_func_group_concat::cut_max_length(result, old_length, max_length-1);
+   result->append('"');
+ }

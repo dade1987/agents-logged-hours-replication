@@ -1,0 +1,156 @@
+diff --git a/public/question/bank/managecategories/category.php b/public/question/bank/managecategories/category.php
+index 03233628c5c..d4948d32e55 100644
+--- a/public/question/bank/managecategories/category.php
++++ b/public/question/bank/managecategories/category.php
+@@ -64,8 +64,10 @@ if ($todelete) {
+     // Second pass, if we still have questions to move, setup the form.
+     if ($questionstomove) {
+         $categorycontext = context::instance_by_id($category->contextid);
++        // The category can only be deleted along with its questions if none of them are in use.
++        $candelete = empty($manager->get_in_use_question_ids_in_category($todelete));
+         $moveform = new question_move_form($thispageurl,
+-            ['contexts' => [$categorycontext], 'currentcat' => "$todelete"]);
++            ['contexts' => [$categorycontext], 'currentcat' => "$todelete", 'candelete' => $candelete]);
+         if ($moveform->is_cancelled()) {
+             $thispageurl->remove_all_params();
+             if (!is_null($cmid)) {
+@@ -75,8 +77,12 @@ if ($todelete) {
+             }
+             redirect($thispageurl);
+         } else if ($formdata = $moveform->get_data()) {
+-            list($tocategoryid, $tocontextid) = explode(',', $formdata->category);
+-            $manager->move_questions_and_delete_category($formdata->delete, $tocategoryid);
++            if (isset($formdata->deleteall)) {
++                $manager->delete_questions_and_category($todelete);
++            } else {
++                list($tocategoryid, $tocontextid) = explode(',', $formdata->category);
++                $manager->move_questions_and_delete_category($formdata->delete, $tocategoryid);
++            }
+             $thispageurl->remove_params('cat', 'category');
+             redirect($thispageurl);
+         }
+diff --git a/public/question/bank/managecategories/classes/form/question_move_form.php b/public/question/bank/managecategories/classes/form/question_move_form.php
+index 9d1ffc29f88..de6aeffe76e 100644
+--- a/public/question/bank/managecategories/classes/form/question_move_form.php
++++ b/public/question/bank/managecategories/classes/form/question_move_form.php
+@@ -43,10 +43,20 @@ class question_move_form extends moodleform {
+ 
+         $currentcat = $this->_customdata['currentcat'];
+         $contexts = $this->_customdata['contexts'];
++        $candelete = !empty($this->_customdata['candelete']);
+ 
+         $mform->addElement('questioncategory', 'category', get_string('category', 'question'), compact('contexts', 'currentcat'));
+ 
+-        $this->add_action_buttons(true, get_string('categorymoveto', 'question'));
++        $buttonarray = [];
++        $buttonarray[] = $mform->createElement('submit', 'submitbutton', get_string('categorymoveto', 'question'));
++        if ($candelete) {
++            // Only offered when no question in the category is in use, as those questions must be kept.
++            $buttonarray[] = $mform->createElement('submit', 'deleteall',
++                get_string('deleteallquestionsandcategory', 'qbank_managecategories'));
++        }
++        $buttonarray[] = $mform->createElement('cancel');
++        $mform->addGroup($buttonarray, 'buttonar', '', ' ', false);
++        $mform->closeHeaderBefore('buttonar');
+ 
+         $mform->addElement('hidden', 'delete', $currentcat);
+         $mform->setType('delete', PARAM_INT);
+diff --git a/public/question/bank/managecategories/lang/en/qbank_managecategories.php b/public/question/bank/managecategories/lang/en/qbank_managecategories.php
+index 00b849eeab4..94a93f5af7e 100644
+--- a/public/question/bank/managecategories/lang/en/qbank_managecategories.php
++++ b/public/question/bank/managecategories/lang/en/qbank_managecategories.php
+@@ -29,6 +29,7 @@ $string['categoryincategory'] = 'Cannot move category in same category.';
+ $string['categorymoved'] = 'The category has been moved successfully.';
+ $string['categorymovedto'] = 'Category moved to <a href="{$a->url}">{$a->name}</a>.';
+ $string['confirmdelete'] = 'Delete category "{$a}"?. Any child categories will be moved to this category\'s parent.';
++$string['deleteallquestionsandcategory'] = 'Delete questions and category';
+ $string['descriptionnotdisplayed'] = 'Categories description not displayed';
+ $string['displaydescription'] = 'Categories description displayed';
+ $string['editcategoryname'] = 'New name for {$a}';
+diff --git a/public/question/classes/category_manager.php b/public/question/classes/category_manager.php
+index 3dbb4696085..c54ab7f1cc9 100644
+--- a/public/question/classes/category_manager.php
++++ b/public/question/classes/category_manager.php
+@@ -65,16 +65,45 @@ class category_manager {
+      *
+      * @param int $oldcat id of the old category.
+      * @param int $newcat id of the new category.
++     * @param int[] $questionids ids of the questions to move. If empty, all the questions in the old category are moved.
++     * @throws \coding_exception if questions remain in the old category after the move, as they would be orphaned.
+      */
+-    public function move_questions_and_delete_category(int $oldcat, int $newcat): void {
++    public function move_questions_and_delete_category(int $oldcat, int $newcat, array $questionids = []): void {
+         global $DB;
+         $transaction = $DB->start_delegated_transaction();
+         $this->require_can_delete_category($oldcat);
+-        $this->move_questions($oldcat, $newcat);
++        $this->move_questions($oldcat, $newcat, $questionids);
++        if (!empty($this->get_real_question_ids_in_category($oldcat))) {
++            throw new \coding_exception('Question category ' . $oldcat . ' still contains questions and cannot be deleted.');
++        }
+         $this->delete_category($oldcat);
+         $transaction->allow_commit();
+     }
+ 
++    /**
++     * Delete all the questions in a category, and then delete the category.
++     *
++     * This is only possible when none of the questions in the category are in use. Use
++     * {@see self::get_in_use_question_ids_in_category()} to check this beforehand.
++     *
++     * @param int $categoryid id of the category to delete, along with its questions.
++     * @throws \coding_exception if any question in the category is in use.
++     */
++    public function delete_questions_and_category(int $categoryid): void {
++        global $DB;
++        $this->require_can_delete_category($categoryid);
++        if (!empty($this->get_in_use_question_ids_in_category($categoryid))) {
++            throw new \coding_exception('Question category ' . $categoryid . ' contains questions in use and cannot be deleted.');
++        }
++        $transaction = $DB->start_delegated_transaction();
++        foreach ($this->get_real_question_ids_in_category($categoryid) as $questionid) {
++            // Child questions are deleted along with their parent, so skipping already deleted ones is safe.
++            question_delete_question($questionid);
++        }
++        $this->delete_category($categoryid);
++        $transaction->allow_commit();
++    }
++
+     /**
+      * Checks whether the category is a "Top" category (with no parent).
+      *
+@@ -128,13 +157,32 @@ class category_manager {
+      *
+      * @param int $oldcat id of the old category.
+      * @param int $newcat id of the new category.
++     * @param int[] $questionids ids of the questions to move. If empty, all the real questions in the old category are moved.
+      * @throws \dml_exception
+      */
+-    public function move_questions(int $oldcat, int $newcat): void {
+-        $questionids = $this->get_real_question_ids_in_category($oldcat);
++    public function move_questions(int $oldcat, int $newcat, array $questionids = []): void {
++        if (empty($questionids)) {
++            $questionids = $this->get_real_question_ids_in_category($oldcat);
++        }
+         question_move_questions_to_category($questionids, $newcat);
+     }
+ 
++    /**
++     * Returns ids of the real questions in the given category that are in use, e.g. by a quiz attempt.
++     *
++     * @param int $categoryid id of the category.
++     * @return int[] array of in-use question ids.
++     */
++    public function get_in_use_question_ids_in_category(int $categoryid): array {
++        $inuse = [];
++        foreach ($this->get_real_question_ids_in_category($categoryid) as $questionid) {
++            if (questions_in_use([$questionid])) {
++                $inuse[] = $questionid;
++            }
++        }
++        return $inuse;
++    }
++
+     /**
+      * Check the user can manage categories in the given context.
+      *

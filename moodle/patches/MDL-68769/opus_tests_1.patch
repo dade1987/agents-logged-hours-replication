@@ -1,0 +1,96 @@
+diff --git a/public/lib/classes/task/refresh_mod_calendar_events_task.php b/public/lib/classes/task/refresh_mod_calendar_events_task.php
+index 3e2641aea06..9d872a3de8d 100644
+--- a/public/lib/classes/task/refresh_mod_calendar_events_task.php
++++ b/public/lib/classes/task/refresh_mod_calendar_events_task.php
+@@ -71,7 +71,16 @@ class refresh_mod_calendar_events_task extends adhoc_task {
+             }
+             // Refresh events.
+             mtrace('Refreshing events for ' . $plugin->name);
+-            course_module_bulk_update_calendar_events($plugin->name, $courseid);
++            try {
++                course_module_bulk_update_calendar_events($plugin->name, $courseid);
++            } catch (\Throwable $e) {
++                // An error here (e.g. an activity or course deleted after this task was queued) must not
++                // make the whole task fail, otherwise it would be retried forever. Report it and move on.
++                mtrace('Error refreshing events for ' . $plugin->name . ': ' . $e->getMessage());
++                if (!empty($e->debuginfo)) {
++                    mtrace('Debug info: ' . $e->debuginfo);
++                }
++            }
+         }
+     }
+ }
+diff --git a/public/lib/tests/task/refresh_mod_calendar_events_task_test.php b/public/lib/tests/task/refresh_mod_calendar_events_task_test.php
+new file mode 100644
+index 00000000000..33c0bb2cd79
+--- /dev/null
++++ b/public/lib/tests/task/refresh_mod_calendar_events_task_test.php
+@@ -0,0 +1,68 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\task;
++
++/**
++ * Unit tests for the refresh_mod_calendar_events_task adhoc task.
++ *
++ * @package   core
++ * @copyright 2026 Moodle Pty Ltd
++ * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ * @covers    \core\task\refresh_mod_calendar_events_task
++ */
++final class refresh_mod_calendar_events_task_test extends \advanced_testcase {
++
++    /**
++     * Test the task runs normally.
++     */
++    public function test_execute(): void {
++        $this->resetAfterTest();
++
++        $course = $this->getDataGenerator()->create_course();
++        $this->getDataGenerator()->create_module('assign', ['course' => $course->id]);
++
++        $task = new refresh_mod_calendar_events_task();
++        $task->set_custom_data(['courseid' => $course->id, 'plugins' => ['assign']]);
++
++        $this->expectOutputRegex('/Refreshing events for assign/');
++        $task->execute();
++    }
++
++    /**
++     * Test that an orphaned/broken activity does not make the task throw an exception (and loop in faildelay).
++     */
++    public function test_execute_with_broken_activity(): void {
++        global $DB;
++        $this->resetAfterTest();
++
++        $course = $this->getDataGenerator()->create_course();
++        $this->getDataGenerator()->create_module('assign', ['course' => $course->id]);
++
++        // Simulate the course being removed from under the activity.
++        $DB->delete_records('course', ['id' => $course->id]);
++
++        $task = new refresh_mod_calendar_events_task();
++        $task->set_custom_data(['courseid' => $course->id, 'plugins' => ['assign']]);
++
++        ob_start();
++        $task->execute();
++        $output = ob_get_clean();
++
++        $this->assertStringContainsString('Refreshing events for assign', $output);
++        $this->assertStringContainsString('Error refreshing events for assign', $output);
++    }
++}

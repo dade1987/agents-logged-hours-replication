@@ -1,0 +1,41 @@
+You are a software engineer fixing an issue in MariaDB Server (C/C++). The full source code, at the state just before the issue was fixed, is in {WS}.
+
+Rules (part of a scientific experiment; follow them strictly):
+- Read and modify files ONLY inside {WS}. Do not read any other directory on this machine.
+- Do not use the internet, git, or any web tool. Do not search for the issue online.
+- You cannot build MariaDB or run its test suite. Read code with grep/find/cat.
+- Make the code change that resolves the issue directly in the files under {WS}. You may add or update mysql-test tests if useful.
+- When finished, reply with: (1) the list of files you changed, (2) a 2-3 sentence summary of the fix, (3) your confidence 0-100 that the fix is correct.
+
+Issue MDEV-40544: Assertion fail / Memory leak in `mariadb-binlog --force-read`
+
+h2. Code Analysis
+{{Log_event::read_log_event(IO_CACHE*, ...)}} has an assertion saying that error cases should not generate an event: {code:c++}
+  if (unlikely(error))
+  {
+    DBUG_ASSERT(!res);
+{code}
+But a checksum error in {{Log_event::read_log_event(const uchar *buf, ...)}} outputs both an error message and, under {{--force-read}}, an {{Unknown_log_event}} substitute.
+
+MDEV-35643's explicit refute of {{TRANSACTION_PAYLOAD_EVENT}} and {{PARTIAL_UPDATE_ROWS_EVENT}} events also have the same problematic code pattern.
+(This means a +perfectly valid+ MySQL binlog can trigger this bug.)
+
+On non-debug (release) builds that don't include assertions, the snippet immediately after this assertion ends the function without cleaning up the unexpected {{Unknown_log_event}}, which is a memory leak. {code:c++}
+    if (force_opt)
+      DBUG_RETURN(new Unknown_log_event());
+{code}
+
+h2. MTR Reproduction
+{code:sql}
+--source include/have_debug.inc
+--source include/have_binlog_format_mixed.inc # format-agnostic
+RESET MASTER;
+FLUSH BINARY LOGS;
+
+--let $MYSQLD_DATADIR= `SELECT @@datadir`
+--echo #MYSQL_BINLOG --verify-binlog-checksum --force-read --debug=d,simulate_checksum_test_failure #MYSQLD_DATADIR/master-bin.000001 2>&1
+--exec $MYSQL_BINLOG --verify-binlog-checksum --force-read --debug=d,simulate_checksum_test_failure $MYSQLD_DATADIR/master-bin.000001 2>&1
+{code}
+
+h2. Fix Recommendation
+Since {{--force-read}} is defined as "output invalid events as 'Unknown event's rather than error", the conditions above should output an {{Unknown_log_event}} but not an error.

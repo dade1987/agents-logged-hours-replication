@@ -1,0 +1,17 @@
+diff --git a/public/mod/h5pactivity/classes/local/manager.php b/public/mod/h5pactivity/classes/local/manager.php
+index acb0a063802..8eac9d69ffd 100644
+--- a/public/mod/h5pactivity/classes/local/manager.php
++++ b/public/mod/h5pactivity/classes/local/manager.php
+@@ -318,7 +318,11 @@ class manager {
+         }
+ 
+         $usersjoin = $this->get_active_users_join();
+-        $sql = "SELECT COUNT(*)
++        if ($usersjoin->cannotmatchanyrows) {
++            return 0;
++        }
++        // Users enrolled with several methods can produce duplicated rows, so count distinct attempts.
++        $sql = "SELECT COUNT(DISTINCT ha.id)
+                  FROM {user} u $usersjoin->joins
+                  WHERE $usersjoin->wheres";
+         $params = array_merge($usersjoin->params);

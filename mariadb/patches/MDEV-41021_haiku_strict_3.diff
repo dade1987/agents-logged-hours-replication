@@ -1,0 +1,63 @@
+diff --git a/storage/innobase/handler/ha_innodb.cc b/storage/innobase/handler/ha_innodb.cc
+index b60155f9..da5b2cd3 100644
+--- a/storage/innobase/handler/ha_innodb.cc
++++ b/storage/innobase/handler/ha_innodb.cc
+@@ -20118,6 +20118,49 @@ static MYSQL_SYSVAR_BOOL(data_file_write_through, fil_system.write_through,
+   "Whether each write to data files writes through",
+   nullptr, innodb_data_file_write_through_update, FALSE);
+ 
++/** Validate SET GLOBAL innodb_log_archive.
++Changing the value is not possible in read-only mode, because the
++log header would have to be rewritten.
++@return 0 if the value can be assigned, 1 on error */
++static int innodb_log_archive_check(THD*, st_mysql_sys_var*, void *save,
++                                    st_mysql_value *value)
++{
++  my_bool archive;
++
++  if (value->value_type(value) == MYSQL_VALUE_TYPE_STRING)
++  {
++    char buff[8];
++    int len= sizeof buff;
++    const char *str= value->val_str(value, buff, &len);
++    if (!str)
++      return 1;
++    if (!my_strcasecmp_latin1(str, "ON"))
++      archive= 1;
++    else if (!my_strcasecmp_latin1(str, "OFF"))
++      archive= 0;
++    else
++      return 1;
++  }
++  else
++  {
++    long long tmp;
++    if (value->val_int(value, &tmp) < 0 || (tmp != 0 && tmp != 1))
++      return 1;
++    archive= tmp != 0;
++  }
++
++  *static_cast<my_bool*>(save)= archive;
++
++  if (archive != log_sys.archive &&
++      (srv_read_only_mode || recv_sys.rpo))
++  {
++    my_error(ER_INNODB_READ_ONLY, MYF(0));
++    return 1;
++  }
++
++  return 0;
++}
++
+ static void innodb_log_archive_update(THD *thd, st_mysql_sys_var*,
+                                       void *, const void *save) noexcept
+ {
+@@ -20129,7 +20172,7 @@ static void innodb_log_archive_update(THD *thd, st_mysql_sys_var*,
+ static MYSQL_SYSVAR_BOOL(log_archive, log_sys.archive,
+   PLUGIN_VAR_OPCMDARG,
+   "Whether log archiving is desired",
+-  nullptr, innodb_log_archive_update, FALSE);
++  innodb_log_archive_check, innodb_log_archive_update, FALSE);
+ 
+ static MYSQL_SYSVAR_UINT64_T(log_archive_start, innodb_log_archive_start,
+   PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,

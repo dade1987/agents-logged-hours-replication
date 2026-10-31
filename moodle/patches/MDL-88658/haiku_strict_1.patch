@@ -1,0 +1,51 @@
+diff --git a/public/mod/data/classes/local/exporter/utils.php b/public/mod/data/classes/local/exporter/utils.php
+index cde366a8271..38b503291cf 100644
+--- a/public/mod/data/classes/local/exporter/utils.php
++++ b/public/mod/data/classes/local/exporter/utils.php
+@@ -102,8 +102,9 @@ class utils {
+                 foreach ($fields as $field) {
+                     $contents = '';
+                     if (isset($content[$field->field->id])) {
+-                        $contents = $field->export_text_value($content[$field->field->id]);
+-                        if (!empty($contents) && $field->file_export_supported() && $includefiles
++                        $contents = (string) $field->export_text_value($content[$field->field->id]);
++                        // Do not use empty() here: it would also drop the valid value "0".
++                        if ($contents !== '' && $field->file_export_supported() && $includefiles
+                             && !is_null($field->export_file_value($record))) {
+                             // For exporting overwrite the content of the column with a unique
+                             // filename, even it is not exactly the name of the file in the
+@@ -113,8 +114,6 @@ class utils {
+                             $exporter->add_file_from_string($contents, $field->export_file_value($record));
+                         }
+                     }
+-                    // Just be double sure.
+-                    $contents = !empty($contents) ? $contents : '';
+                     $exporter->add_to_current_row($contents);
+                 }
+                 if ($tags) {
+diff --git a/public/mod/data/field/file/field.class.php b/public/mod/data/field/file/field.class.php
+index a78760c825d..c4a14a7802e 100644
+--- a/public/mod/data/field/file/field.class.php
++++ b/public/mod/data/field/file/field.class.php
+@@ -225,7 +225,7 @@ class data_field_file extends data_field_base {
+      * @return string the value which will be stored in the exported file for this field
+      */
+     public function export_text_value(stdClass $record): string {
+-        return !empty($record->content) ? $record->content : '';
++        return $record->content ?? '';
+     }
+ 
+     /**
+diff --git a/public/mod/data/field/picture/field.class.php b/public/mod/data/field/picture/field.class.php
+index 89a66798c8c..d5a97bd5fff 100644
+--- a/public/mod/data/field/picture/field.class.php
++++ b/public/mod/data/field/picture/field.class.php
+@@ -368,7 +368,7 @@ class data_field_picture extends data_field_base {
+      * @return string the value which will be stored in the exported file for this field
+      */
+     public function export_text_value(stdClass $record): string {
+-        return !empty($record->content) ? $record->content : '';
++        return $record->content ?? '';
+     }
+ 
+     /**

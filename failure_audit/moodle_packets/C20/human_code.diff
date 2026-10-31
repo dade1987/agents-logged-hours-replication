@@ -1,0 +1,108 @@
+diff --git a/public/lib/classes/oauth2/server/repository/access_token_repository.php b/public/lib/classes/oauth2/server/repository/access_token_repository.php
+index 123d2cd8202..5ccdc08e7a6 100644
+--- a/public/lib/classes/oauth2/server/repository/access_token_repository.php
++++ b/public/lib/classes/oauth2/server/repository/access_token_repository.php
+@@ -19,6 +19,7 @@ namespace core\oauth2\server\repository;
+ use League\OAuth2\Server\Repositories\AccessTokenRepositoryInterface;
+ use League\OAuth2\Server\Entities\AccessTokenEntityInterface;
+ use League\OAuth2\Server\Entities\ClientEntityInterface;
++use core\clock;
+ use core\oauth2\server\entity\access_token_entity;
+ 
+ /**
+@@ -29,6 +30,17 @@ use core\oauth2\server\entity\access_token_entity;
+  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+  */
+ class access_token_repository implements AccessTokenRepositoryInterface {
++    /**
++     * Constructor.
++     *
++     * @param clock $clock The clock used to timestamp the issuing client's last access.
++     */
++    public function __construct(
++        /** @var clock The clock used to timestamp the issuing client's last access. */
++        private readonly clock $clock,
++    ) {
++    }
++
+     #[\Override]
+     public function getNewToken(
+         ClientEntityInterface $cliententity,
+@@ -70,6 +82,21 @@ class access_token_repository implements AccessTokenRepositoryInterface {
+         $record->timecreated = time();
+ 
+         $DB->insert_record('oauth2_server_client_access_tokens', $record);
++
++        // The token has just been issued to this client, so this is the definitive moment to record the client's access.
++        try {
++            $DB->set_field(
++                'oauth2_server_clients',
++                'lastaccessed',
++                $this->clock->time(),
++                ['clientidentifier' => $accesstokenentity->getClient()->getIdentifier()],
++            );
++        } catch (\Throwable $exception) {
++            // Best-effort tracking: the token has already been issued above, so a failure here should not affect the
++            // response. error_log() ensures it is still visible in server logs.
++            // phpcs:ignore moodle.PHP.ForbiddenFunctions.FoundWithAlternative
++            error_log('Failed to update client lastaccessed timestamp: ' . $exception->getMessage());
++        }
+     }
+ 
+     #[\Override]
+diff --git a/public/lib/classes/oauth2/server/repository/client_repository.php b/public/lib/classes/oauth2/server/repository/client_repository.php
+index b8ae134a371..611efe57df9 100644
+--- a/public/lib/classes/oauth2/server/repository/client_repository.php
++++ b/public/lib/classes/oauth2/server/repository/client_repository.php
+@@ -28,6 +28,17 @@ use core\oauth2\server\entity\client_entity;
+  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+  */
+ class client_repository implements ClientRepositoryInterface {
++    /**
++     * Constructor.
++     *
++     * @param \core\clock $clock The clock used to timestamp secret access.
++     */
++    public function __construct(
++        /** @var \core\clock The clock used to timestamp secret access. */
++        private readonly \core\clock $clock,
++    ) {
++    }
++
+     #[\Override]
+     public function getClientEntity(string $clientidentifier): ?ClientEntityInterface {
+         global $DB;
+@@ -81,16 +92,32 @@ class client_repository implements ClientRepositoryInterface {
+            AND revoked = :revoked
+            AND expirytime > :now';
+ 
++        $now = $this->clock->time();
+         $params = [
+             'clientidentifier' => $clientidentifier,
+             'revoked' => client_entity::SECRET_REVOKED_NO,
+-            'now' => time(),
++            'now' => $now,
+         ];
+ 
+         $secrets = $DB->get_records_select('oauth2_server_client_secrets', $select, $params);
+ 
+         foreach ($secrets as $secret) {
+             if (password_verify($clientsecret, $secret->secret)) {
++                // The matching secret is already in hand here, so record its use directly.
++                try {
++                    $DB->set_field(
++                        'oauth2_server_client_secrets',
++                        'lastaccessed',
++                        $now,
++                        ['id' => $secret->id],
++                    );
++                } catch (\Throwable $exception) {
++                    // Best-effort tracking: authentication has already succeeded above, so a failure here should not
++                    // affect the result. error_log() ensures it is still visible in server logs.
++                    // phpcs:ignore moodle.PHP.ForbiddenFunctions.FoundWithAlternative
++                    error_log('Failed to update secret lastaccessed timestamp: ' . $exception->getMessage());
++                }
++
+                 return true;
+             }
+         }

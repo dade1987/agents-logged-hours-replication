@@ -1,0 +1,44 @@
+diff --git a/public/admin/tool/task/lang/en/tool_task.php b/public/admin/tool/task/lang/en/tool_task.php
+index 7ccee87463e..114cb166964 100644
+--- a/public/admin/tool/task/lang/en/tool_task.php
++++ b/public/admin/tool/task/lang/en/tool_task.php
+@@ -84,6 +84,7 @@ $string['runadhoctasksfailed'] = 'Run failed \'{$a}\' tasks';
+ $string['runagain'] = 'Run again';
+ $string['runasap'] = 'Run ASAP';
+ $string['runasap_confirm'] = 'Are you sure you want to run this task \'{$a}\' ASAP? The task will run via cron at the next available time.';
++$string['runasapalreadyrunning'] = 'This task \'{$a}\' is currently running, so it cannot be scheduled to run ASAP. Please try again once it has completed.';
+ $string['runasapsuccess'] = 'This task \'{$a}\' has been scheduled to run ASAP.';
+ $string['runclassname'] = 'Run all';
+ $string['runclassnamedueonly'] = 'Run due only';
+diff --git a/public/admin/tool/task/renderer.php b/public/admin/tool/task/renderer.php
+index 583a4ef428b..2ff8a5308c1 100644
+--- a/public/admin/tool/task/renderer.php
++++ b/public/admin/tool/task/renderer.php
+@@ -457,7 +457,7 @@ class tool_task_renderer extends plugin_renderer_base {
+                 );
+ 
+                 $nextruntime = $task->get_next_run_time();
+-                if ($nextruntime > time() && $task->is_enabled()) {
++                if (!$started && $nextruntime > time() && $task->is_enabled()) {
+                     $runnow .= html_writer::div(
+                         html_writer::link(
+                             new moodle_url('/admin/tool/task/schedule_task.php', [
+diff --git a/public/admin/tool/task/schedule_task.php b/public/admin/tool/task/schedule_task.php
+index 2824cea75be..9ab0c8eaf3f 100644
+--- a/public/admin/tool/task/schedule_task.php
++++ b/public/admin/tool/task/schedule_task.php
+@@ -79,6 +79,14 @@ if ($action == 'asap') {
+             $task->get_name()
+         );
+     }
++    // A running task's completion overwrites nextruntime before releasing its lock, so a request made while the
++    // task is running would be silently discarded. Reject it instead of reporting success.
++    if ($task->get_timestarted()) {
++        echo $OUTPUT->notification(get_string('runasapalreadyrunning', 'tool_task', $task->get_name()), 'error');
++        echo $output->link_back(get_class($task));
++        echo $OUTPUT->footer();
++        exit;
++    }
+     // Set nextruntime to the past so cron picks it up on its very next run.
+     \core\task\manager::set_scheduled_task_nextruntime($task, time() - HOURSECS);
+     echo $OUTPUT->notification(get_string('runasapsuccess', 'tool_task', $task->get_name()), 'success');

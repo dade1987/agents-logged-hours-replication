@@ -1,0 +1,202 @@
+diff --git a/public/lib/classes/router/middleware/cors_middleware.php b/public/lib/classes/router/middleware/cors_middleware.php
+index b612fc12903..17138ebd5a6 100644
+--- a/public/lib/classes/router/middleware/cors_middleware.php
++++ b/public/lib/classes/router/middleware/cors_middleware.php
+@@ -32,31 +32,62 @@ use Slim\Routing\RouteContext;
+ class cors_middleware implements MiddlewareInterface {
+     #[\Override]
+     public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface {
+-        $acceptheader = $request->getHeaderLine('Accept');
+-        $accepted = array_map(
+-            fn (string $mimetype): string => trim(strtok($mimetype, ';')),
+-            explode(',', $acceptheader),
+-        );
+-
+         $response = $handler->handle($request);
+ 
+-        $cors = in_array('application/json', $accepted);
+-        $cors = $cors || $request->getMethod() === 'OPTIONS';
+-        $cors = $cors || $request->getMethod() === 'HEAD';
+-
+-        if (!$cors) {
+-            return $response;
+-        }
+-
+         $routecontext = RouteContext::fromRequest($request);
+         $routingresults = $routecontext->getRoutingResults();
+         $methods = $routingresults->getAllowedMethods();
+ 
+-        return $response
+-            ->withHeader('Content-Type', 'application/json')
+-            ->withHeader('Content-Disposition', 'inline')
++        // CORS headers must always be added, regardless of the Accept header supplied by the client.
++        // Browser requests made using fetch() typically send 'Accept: */*', and the browser will block access to
++        // any response which does not include the relevant CORS headers, even though the request was processed.
++        $response = $response
+             ->withHeader('Access-Control-Allow-Origin', '*')
+             ->withHeader('Access-Control-Allow-Methods', implode(',', $methods))
+             ->withHeader('Access-Control-Allow-Headers', 'Content-Type, api_key, Authorization');
++
++        if ($this->should_set_json_content_type($request, $response)) {
++            $response = $response
++                ->withHeader('Content-Type', 'application/json')
++                ->withHeader('Content-Disposition', 'inline');
++        }
++
++        return $response;
++    }
++
++    /**
++     * Determine whether the response should be marked as a JSON response.
++     *
++     * A Content-Type set by the handler is always respected, and responses to requests which explicitly
++     * ask for HTML (for example a browser navigating to a page) are not forced to be JSON.
++     *
++     * @param ServerRequestInterface $request
++     * @param ResponseInterface $response
++     * @return bool
++     */
++    protected function should_set_json_content_type(
++        ServerRequestInterface $request,
++        ResponseInterface $response,
++    ): bool {
++        if ($response->hasHeader('Content-Type')) {
++            // The handler has already specified the type of content being returned.
++            return false;
++        }
++
++        if ($request->getMethod() === 'OPTIONS' || $request->getMethod() === 'HEAD') {
++            return true;
++        }
++
++        $accepted = array_map(
++            fn (string $mimetype): string => strtolower(trim(strtok($mimetype, ';'))),
++            explode(',', $request->getHeaderLine('Accept')),
++        );
++
++        if (in_array('application/json', $accepted)) {
++            return true;
++        }
++
++        // Only avoid setting the JSON content type where the client has explicitly asked for HTML.
++        return !in_array('text/html', $accepted) && !in_array('application/xhtml+xml', $accepted);
+     }
+ }
+diff --git a/public/lib/tests/router/middleware/cors_middleware_test.php b/public/lib/tests/router/middleware/cors_middleware_test.php
+index 164e2d8230a..afe847cd8d3 100644
+--- a/public/lib/tests/router/middleware/cors_middleware_test.php
++++ b/public/lib/tests/router/middleware/cors_middleware_test.php
+@@ -62,31 +62,103 @@ final class cors_middleware_test extends route_testcase {
+     }
+ 
+     /**
+-     * CORS headers are not added for a request which does not accept JSON and is not an OPTIONS
+-     * or HEAD request.
++     * CORS headers are added for all requests, regardless of the Accept header.
++     *
++     * @param array $headers The request headers
++     * @param string $method The request method
+      */
+-    public function test_cors_headers_not_added_for_non_json_request(): void {
++    #[\PHPUnit\Framework\Attributes\DataProvider('cors_always_added_provider')]
++    public function test_cors_headers_always_added(array $headers, string $method): void {
+         $app = $this->get_simple_app();
+         $app->add(di::get(cors_middleware::class));
+         $app->addRoutingMiddleware();
+ 
+-        $app->map(['GET'], '/test', function ($request, $response) {
++        $app->map([$method], '/test', function ($request, $response) {
+             return $response;
+         });
+ 
+-        // Handle the request. No Accept header is provided.
+-        $request = new ServerRequest('GET', '/test');
++        $request = new ServerRequest($method, '/test', $headers);
+         $returns = $app->handle($request);
+         $this->assertInstanceOf(ResponseInterface::class, $returns);
+ 
+-        // No CORS headers should have been added, and the response should be returned unmodified.
+-        $this->assertEquals('', $returns->getHeaderLine('Access-Control-Allow-Origin'));
+-        $this->assertEquals('', $returns->getHeaderLine('Access-Control-Allow-Methods'));
+-        $this->assertEquals('', $returns->getHeaderLine('Access-Control-Allow-Headers'));
++        $this->assertEquals('*', $returns->getHeaderLine('Access-Control-Allow-Origin'));
++        $this->assertEquals($method, $returns->getHeaderLine('Access-Control-Allow-Methods'));
++        $allowedheaders = $returns->getHeaderLine('Access-Control-Allow-Headers');
++        $this->assertStringContainsString('Content-Type', $allowedheaders);
++        $this->assertStringContainsString('api_key', $allowedheaders);
++        $this->assertStringContainsString('Authorization', $allowedheaders);
++    }
++
++    /**
++     * Data provider for test_cors_headers_always_added.
++     *
++     * @return array
++     */
++    public static function cors_always_added_provider(): array {
++        return [
++            'No Accept header (GET)' => [[], 'GET'],
++            'Wildcard Accept header (GET)' => [['Accept' => '*/*'], 'GET'],
++            'Wildcard Accept header (POST)' => [['Accept' => '*/*'], 'POST'],
++            'Wildcard Accept header (DELETE)' => [['Accept' => '*/*'], 'DELETE'],
++            'Plain text Accept header (PUT)' => [['Accept' => 'text/plain'], 'PUT'],
++            'HTML Accept header (GET)' => [['Accept' => 'text/html,application/xhtml+xml,*/*;q=0.8'], 'GET'],
++            'JSON Accept header (PATCH)' => [['Accept' => 'application/json'], 'PATCH'],
++        ];
++    }
++
++    /**
++     * A request using a wildcard Accept header, as sent by fetch(), is treated as JSON.
++     */
++    public function test_cors_headers_wildcard_accept_is_json(): void {
++        $app = $this->get_simple_app();
++        $app->add(di::get(cors_middleware::class));
++        $app->addRoutingMiddleware();
++
++        $app->map(['POST'], '/test', fn ($request, $response) => $response);
++
++        $request = new ServerRequest('POST', '/test', ['Accept' => '*/*']);
++        $returns = $app->handle($request);
++
++        $this->assertEquals('*', $returns->getHeaderLine('Access-Control-Allow-Origin'));
++        $this->assertEquals('application/json', $returns->getHeaderLine('Content-Type'));
++        $this->assertEquals('inline', $returns->getHeaderLine('Content-Disposition'));
++    }
++
++    /**
++     * A request which explicitly asks for HTML does not have its content type forced to JSON.
++     */
++    public function test_html_request_content_type_not_forced(): void {
++        $app = $this->get_simple_app();
++        $app->add(di::get(cors_middleware::class));
++        $app->addRoutingMiddleware();
++
++        $app->map(['GET'], '/test', fn ($request, $response) => $response);
++
++        $request = new ServerRequest('GET', '/test', ['Accept' => 'text/html,application/xhtml+xml,*/*;q=0.8']);
++        $returns = $app->handle($request);
++
++        $this->assertEquals('*', $returns->getHeaderLine('Access-Control-Allow-Origin'));
+         $this->assertEquals('', $returns->getHeaderLine('Content-Type'));
+         $this->assertEquals('', $returns->getHeaderLine('Content-Disposition'));
+     }
+ 
++    /**
++     * An existing Content-Type set by the handler is not overridden.
++     */
++    public function test_existing_content_type_not_overridden(): void {
++        $app = $this->get_simple_app();
++        $app->add(di::get(cors_middleware::class));
++        $app->addRoutingMiddleware();
++
++        $app->map(['GET'], '/test', fn ($request, $response) => $response->withHeader('Content-Type', 'text/csv'));
++
++        $request = new ServerRequest('GET', '/test', ['Accept' => '*/*']);
++        $returns = $app->handle($request);
++
++        $this->assertEquals('*', $returns->getHeaderLine('Access-Control-Allow-Origin'));
++        $this->assertEquals('text/csv', $returns->getHeaderLine('Content-Type'));
++    }
++
+     /**
+      * CORS headers are still added for an OPTIONS request, even when the Accept header does not
+      * request JSON.

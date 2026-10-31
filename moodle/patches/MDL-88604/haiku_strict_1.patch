@@ -1,0 +1,190 @@
+diff --git a/public/course/classes/route/controller/course_navigation.php b/public/course/classes/route/controller/course_navigation.php
+index 120a6c99b6e..ec677a258fc 100644
+--- a/public/course/classes/route/controller/course_navigation.php
++++ b/public/course/classes/route/controller/course_navigation.php
+@@ -63,7 +63,7 @@ class course_navigation {
+         $cm = cm_info::create($cmdata);
+         $modinfo = $cm->get_modinfo();
+         $section = $this->get_section($cm);
+-        $allsectioncms = $this->get_all_section_cms($modinfo, $section);
++        $allsectioncms = self::get_all_section_cms($modinfo, $section);
+         $cmindex = array_search($cm, $allsectioncms, true);
+ 
+         // Last element in the section should redirect to next section page
+@@ -76,7 +76,7 @@ class course_navigation {
+         $cmcount = count($allsectioncms);
+         for ($cmindex++; $cmindex < $cmcount; $cmindex++) {
+             $nextcm = $allsectioncms[$cmindex];
+-            if ($this->is_valid_cm($nextcm)) {
++            if (self::is_valid_cm($nextcm)) {
+                 return $this->redirect($response, $nextcm->get_navigation_url());
+             }
+         }
+@@ -113,7 +113,7 @@ class course_navigation {
+         $cm = cm_info::create($cmdata);
+         $modinfo = $cm->get_modinfo();
+         $section = $this->get_section($cm);
+-        $allsectioncms = $this->get_all_section_cms($modinfo, $section);
++        $allsectioncms = self::get_all_section_cms($modinfo, $section);
+         $cmindex = array_search($cm, $allsectioncms, true);
+ 
+         // First element in the section should redirect to previous section page
+@@ -127,7 +127,7 @@ class course_navigation {
+         // Search for the previous module.
+         for ($cmindex--; $cmindex >= 0; $cmindex--) {
+             $prevcm = $allsectioncms[$cmindex];
+-            if ($this->is_valid_cm($prevcm)) {
++            if (self::is_valid_cm($prevcm)) {
+                 return $this->redirect($response, $prevcm->get_navigation_url());
+             }
+         }
+@@ -136,13 +136,39 @@ class course_navigation {
+         return $this->redirect_to_previous_section($response, $modinfo, $section);
+     }
+ 
++    /**
++     * Get all the valid course modules of a course, in linear navigation order.
++     *
++     * Sections are visited in course order and the activities of delegated sections are placed
++     * where their parent section activity is, so the result follows the same order as the
++     * previous and next navigation.
++     *
++     * @param modinfo $modinfo
++     * @return cm_info[]
++     */
++    public static function get_linear_cms(modinfo $modinfo): array {
++        $cms = [];
++        foreach ($modinfo->get_section_info_all() as $section) {
++            if ($section->is_delegated()) {
++                // Delegated sections are visited through the activity that delegates them.
++                continue;
++            }
++            foreach (self::get_all_section_cms($modinfo, $section) as $cm) {
++                if (self::is_valid_cm($cm)) {
++                    $cms[] = $cm;
++                }
++            }
++        }
++        return $cms;
++    }
++
+     /**
+      * Check if a course module is valid (has a URL).
+      *
+      * @param cm_info $cm The course module to check.
+      * @return bool True if the course module is valid, false otherwise.
+      */
+-    private function is_valid_cm(cm_info $cm): bool {
++    private static function is_valid_cm(cm_info $cm): bool {
+         return
+             // Skip modules that don't have a URL (like labels).
+             !empty($cm->get_navigation_url())
+@@ -175,14 +201,14 @@ class course_navigation {
+      * @param section_info $section
+      * @return cm_info[]
+      */
+-    private function get_all_section_cms(modinfo $modinfo, section_info $section): array {
++    private static function get_all_section_cms(modinfo $modinfo, section_info $section): array {
+         $sectioncms = [];
+         foreach ($section->get_sequence_cm_infos() as $cm) {
+             $delegatedsection = $cm->get_delegated_section_info();
+             if ($delegatedsection) {
+                 $sectioncms = array_merge(
+                     $sectioncms,
+-                    $this->get_all_section_cms($modinfo, $delegatedsection),
++                    self::get_all_section_cms($modinfo, $delegatedsection),
+                 );
+             } else {
+                 $sectioncms[] = $cm;
+diff --git a/public/course/format/classes/output/local/linearnavigation/footer_content.php b/public/course/format/classes/output/local/linearnavigation/footer_content.php
+index f90a7ff41c5..971ec63bec4 100644
+--- a/public/course/format/classes/output/local/linearnavigation/footer_content.php
++++ b/public/course/format/classes/output/local/linearnavigation/footer_content.php
+@@ -47,19 +47,41 @@ class footer_content implements named_templatable, renderable {
+ 
+     #[\Override]
+     public function export_for_template(renderer_base $output) {
+-        // Get previous and next URLs for the current course module.
+-        $previousurl = util::get_path_for_callable(
+-            [course_navigation::class, 'cm_previous_element'],
+-            ['cm' => $this->cminfo->id],
+-        );
+-        $nexturl = util::get_path_for_callable(
+-            [course_navigation::class, 'cm_next_element'],
+-            ['cm' => $this->cminfo->id],
++        $modinfo = $this->cminfo->get_modinfo();
++        $cmids = array_map(
++            fn(cm_info $cm): int => $cm->id,
++            course_navigation::get_linear_cms($modinfo),
+         );
++        $position = array_search($this->cminfo->id, $cmids, true);
++        // When the position is unknown, keep both links so the navigation behaves as before.
++        $hasprevious = $position === false || $position > 0;
++        $hasnext = $position === false || $position < count($cmids) - 1;
++
++        // Previous URL is hidden on the first activity of the course.
++        $previousurl = null;
++        if ($hasprevious) {
++            $previousurl = util::get_path_for_callable(
++                [course_navigation::class, 'cm_previous_element'],
++                ['cm' => $this->cminfo->id],
++            )->out(false);
++        }
++
++        // Next URL is replaced by a link to the course page on the last activity of the course.
++        $nexturl = null;
++        $courseurl = null;
++        if ($hasnext) {
++            $nexturl = util::get_path_for_callable(
++                [course_navigation::class, 'cm_next_element'],
++                ['cm' => $this->cminfo->id],
++            )->out(false);
++        } else {
++            $courseurl = course_get_url($modinfo->get_course())->out(false);
++        }
+ 
+         return [
+-            'previousurl' => $previousurl->out(false),
+-            'nexturl' => $nexturl->out(false),
++            'previousurl' => $previousurl,
++            'nexturl' => $nexturl,
++            'courseurl' => $courseurl,
+             'completion' => $this->export_completion($output),
+         ];
+     }
+diff --git a/public/course/format/templates/local/linearnavigation/footer_content.mustache b/public/course/format/templates/local/linearnavigation/footer_content.mustache
+index a916bc770f4..4b3d68a3278 100644
+--- a/public/course/format/templates/local/linearnavigation/footer_content.mustache
++++ b/public/course/format/templates/local/linearnavigation/footer_content.mustache
+@@ -23,6 +23,7 @@
+     {
+         "previousurl": "http://moodle.com/course/cms/42/previous",
+         "nexturl": "http://moodle.com/course/cms/42/next",
++        "courseurl": null,
+         "completion": "<span class=\"completion-status text-success\"><i class=\"fa fa-check\"></i> <span>Done</span></span>"
+     }
+ }}
+@@ -50,5 +51,11 @@
+             <span class="dir-ltr-hide" aria-hidden="true">{{#pix}} e/backward, core {{/pix}}</span>
+         </a>
+         {{/nexturl}}
++
++        {{#courseurl}}
++        <a href="{{.}}" class="course-linear-navigation-link text-decoration-none d-inline-flex align-items-center gap-1 ms-auto">
++            <span>{{#str}} gotocourse, core_courseformat {{/str}}</span>
++        </a>
++        {{/courseurl}}
+     </div>
+ </div>
+diff --git a/public/lang/en/courseformat.php b/public/lang/en/courseformat.php
+index 7ea1bd1efb3..64a807b7a0a 100644
+--- a/public/lang/en/courseformat.php
++++ b/public/lang/en/courseformat.php
+@@ -70,6 +70,7 @@ $string['cmsmove_title'] = 'Move selected activities';
+ $string['cmsmove_info'] = 'Move {$a} activities after';
+ $string['courseindex'] = 'Course index';
+ $string['courseindexoptions'] = 'Course index options';
++$string['gotocourse'] = 'Go to course';
+ $string['linearnavigationsettings'] = 'Enable linear navigation';
+ $string['linearnavigationsettings_help'] = 'Display \'Previous\' and \'Next\' buttons on activity pages to help learners move sequentially through the course.';
+ $string['nobulkaction'] = 'No bulk actions available';

@@ -1,0 +1,345 @@
+diff --git a/public/lib/classes/oauth2/server/client_manager.php b/public/lib/classes/oauth2/server/client_manager.php
+index ff0353dd677..8a69e4f3c3c 100644
+--- a/public/lib/classes/oauth2/server/client_manager.php
++++ b/public/lib/classes/oauth2/server/client_manager.php
+@@ -53,6 +53,9 @@ class client_manager {
+      */
+     public const int MAX_ACTIVE_SECRETS = 2;
+ 
++    /** @var string Prefix of the plugin name under which client changes are recorded in the config changes log. */
++    public const string CONFIG_LOG_PLUGIN_PREFIX = 'oauth2_server_client_';
++
+     /** @var int How long a generated client secret remains valid for, in seconds. */
+     public const int SECRET_LIFETIME = YEARSECS;
+ 
+@@ -137,6 +140,13 @@ class client_manager {
+         $this->insert_redirect_uris($record->clientidentifier, $redirecturis);
+         $transaction->allow_commit();
+ 
++        $this->log_config_change(
++            $record->clientidentifier,
++            'client_created',
++            null,
++            $this->describe_client($record, $redirecturis),
++        );
++
+         // Everything the entity needs is already in hand, so build it rather than reading it back.
+         $urirecords = array_map(fn(string $uri): \stdClass => (object) ['uri' => $uri], $redirecturis);
+ 
+@@ -198,6 +208,7 @@ class client_manager {
+         }
+ 
+         $client = $this->get_client_record($clientid);
++        $original = clone($client);
+ 
+         foreach ($filteredupdates as $field => $value) {
+             $client->{$field} = $value;
+@@ -214,6 +225,19 @@ class client_manager {
+         $client->timemodified = $this->clock->time();
+ 
+         $this->db->update_record('oauth2_server_clients', $client);
++
++        foreach (['name', 'description', 'ispkcerequired', 'scopes'] as $field) {
++            $oldvalue = $original->{$field} ?? null;
++            $newvalue = $client->{$field} ?? null;
++            if ((string) $oldvalue !== (string) $newvalue) {
++                $this->log_config_change(
++                    $client->clientidentifier,
++                    $field,
++                    $oldvalue === null ? null : (string) $oldvalue,
++                    $newvalue === null ? null : (string) $newvalue,
++                );
++            }
++        }
+     }
+ 
+     /**
+@@ -234,6 +258,7 @@ class client_manager {
+     public function disable_client(int $clientid): void {
+         $client = $this->get_client_record($clientid);
+         $params = ['clientidentifier' => $client->clientidentifier];
++        $oldstatus = (int) $client->status;
+ 
+         $transaction = $this->db->start_delegated_transaction();
+ 
+@@ -266,6 +291,13 @@ class client_manager {
+         );
+ 
+         $transaction->allow_commit();
++
++        $this->log_config_change(
++            $client->clientidentifier,
++            'status',
++            $this->get_status_name($oldstatus),
++            $this->get_status_name(client_entity::STATUS_DISABLED),
++        );
+     }
+ 
+     /**
+@@ -280,11 +312,19 @@ class client_manager {
+      */
+     public function reactivate_client(int $clientid): void {
+         $client = $this->get_client_record($clientid);
++        $oldstatus = (int) $client->status;
+ 
+         $client->status = client_entity::STATUS_ACTIVE;
+         $client->timemodified = $this->clock->time();
+ 
+         $this->db->update_record('oauth2_server_clients', $client);
++
++        $this->log_config_change(
++            $client->clientidentifier,
++            'status',
++            $this->get_status_name($oldstatus),
++            $this->get_status_name(client_entity::STATUS_ACTIVE),
++        );
+     }
+ 
+     /**
+@@ -306,6 +346,7 @@ class client_manager {
+         }
+ 
+         $params = ['clientidentifier' => $client->clientidentifier];
++        $redirecturis = array_values($this->get_uris($client->clientidentifier));
+ 
+         $transaction = $this->db->start_delegated_transaction();
+ 
+@@ -323,6 +364,13 @@ class client_manager {
+         $this->db->delete_records('oauth2_server_clients', ['id' => $clientid]);
+ 
+         $transaction->allow_commit();
++
++        $this->log_config_change(
++            $client->clientidentifier,
++            'client_deleted',
++            $this->describe_client($client, $redirecturis),
++            null,
++        );
+     }
+ 
+     /**
+@@ -353,7 +401,7 @@ class client_manager {
+         $now = $this->clock->time();
+         $secret = bin2hex(random_bytes(32));
+ 
+-        $this->db->insert_record('oauth2_server_client_secrets', (object) [
++        $secretid = $this->db->insert_record('oauth2_server_client_secrets', (object) [
+             'clientidentifier' => $client->clientidentifier,
+             'secret' => password_hash($secret, PASSWORD_DEFAULT),
+             'expirytime' => $expirytime ?? $now + self::SECRET_LIFETIME,
+@@ -361,6 +409,9 @@ class client_manager {
+             'timecreated' => $now,
+         ]);
+ 
++        // Never log the secret itself, only the ID of the record holding its hash.
++        $this->log_config_change($client->clientidentifier, 'secret_created', null, (string) $secretid);
++
+         return $secret;
+     }
+ 
+@@ -412,12 +463,26 @@ class client_manager {
+      * @return void
+      */
+     public function revoke_secret(int $secretid): void {
++        $secret = $this->db->get_record(
++            'oauth2_server_client_secrets',
++            ['id' => $secretid],
++            'id, clientidentifier, revoked',
++        );
++
++        if (!$secret) {
++            return;
++        }
++
+         $this->db->set_field(
+             'oauth2_server_client_secrets',
+             'revoked',
+             client_entity::SECRET_REVOKED_YES,
+             ['id' => $secretid],
+         );
++
++        if ((int) $secret->revoked !== client_entity::SECRET_REVOKED_YES) {
++            $this->log_config_change($secret->clientidentifier, 'secret_revoked', (string) $secretid, null);
++        }
+     }
+ 
+     /**
+@@ -455,6 +520,8 @@ class client_manager {
+         }
+ 
+         $this->insert_redirect_uris($client->clientidentifier, [$uri]);
++
++        $this->log_config_change($client->clientidentifier, 'redirecturi_added', null, $uri);
+     }
+ 
+     /**
+@@ -478,6 +545,8 @@ class client_manager {
+ 
+         [$insql, $params] = $this->db->get_in_or_equal($matches, SQL_PARAMS_NAMED);
+         $this->db->delete_records_select('oauth2_server_client_redirect_uris', "id {$insql}", $params);
++
++        $this->log_config_change($client->clientidentifier, 'redirecturi_removed', $uri, null);
+     }
+ 
+     /**
+@@ -495,6 +564,63 @@ class client_manager {
+         return in_array($uri, $this->get_uris($clientidentifier), true);
+     }
+ 
++    /**
++     * Record an administrative change to a client in the config changes log.
++     *
++     * Each change is logged against a pseudo plugin name which carries the client identifier, so that the
++     * config changes report shows which client was affected.
++     *
++     * @param string $clientidentifier The public client identifier.
++     * @param string $name The name of the property or action which changed.
++     * @param string|null $oldvalue The previous value.
++     * @param string|null $value The new value.
++     * @return void
++     */
++    protected function log_config_change(
++        string $clientidentifier,
++        string $name,
++        ?string $oldvalue,
++        ?string $value,
++    ): void {
++        add_to_config_log($name, $oldvalue, $value, self::CONFIG_LOG_PLUGIN_PREFIX . $clientidentifier);
++    }
++
++    /**
++     * Build a summary of a client suitable for the config changes log.
++     *
++     * @param \stdClass $record The client record.
++     * @param string[] $redirecturis The redirect URIs of the client.
++     * @return string The JSON encoded summary.
++     */
++    protected function describe_client(\stdClass $record, array $redirecturis): string {
++        return json_encode([
++            'name' => $record->name,
++            'description' => $record->description,
++            'clientidentifier' => $record->clientidentifier,
++            'ownercontext' => (int) $record->ownercontext,
++            'status' => $this->get_status_name((int) $record->status),
++            'isconfidential' => (int) $record->isconfidential,
++            'granttypes' => $record->granttypes,
++            'ispkcerequired' => (int) $record->ispkcerequired,
++            'scopes' => $record->scopes ?? '',
++            'redirecturis' => array_values($redirecturis),
++        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
++    }
++
++    /**
++     * Get a readable name for a client status, for the config changes log.
++     *
++     * @param int $status The client status.
++     * @return string The status name.
++     */
++    protected function get_status_name(int $status): string {
++        return match ($status) {
++            client_entity::STATUS_ACTIVE => 'active',
++            client_entity::STATUS_DISABLED => 'disabled',
++            default => (string) $status,
++        };
++    }
++
+     /**
+      * Get a client record by ID.
+      *
+diff --git a/public/lib/tests/oauth2/server/client_manager_test.php b/public/lib/tests/oauth2/server/client_manager_test.php
+index 9a7c214f6cc..76aeb12c226 100644
+--- a/public/lib/tests/oauth2/server/client_manager_test.php
++++ b/public/lib/tests/oauth2/server/client_manager_test.php
+@@ -1038,4 +1038,92 @@ final class client_manager_test extends \advanced_testcase {
+ 
+         $this->assertFalse($manager->validate_redirect_uri('no-such-client', 'https://example.com/callback'));
+     }
++
++    /**
++     * Test that administrative changes to a client are recorded in the config changes log.
++     *
++     * @return void
++     */
++    public function test_changes_are_recorded_in_config_log(): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        $this->setAdminUser();
++
++        $manager = $this->get_manager();
++        $client = $this->create_fixture_client($manager, ['https://example.com/callback']);
++        $plugin = client_manager::CONFIG_LOG_PLUGIN_PREFIX . $client->clientidentifier;
++
++        $getlogs = fn(string $name): array => array_values($DB->get_records(
++            'config_log',
++            ['plugin' => $plugin, 'name' => $name],
++            'id ASC',
++        ));
++
++        // Creation.
++        $logs = $getlogs('client_created');
++        $this->assertCount(1, $logs);
++        $this->assertNull($logs[0]->oldvalue);
++        $created = json_decode($logs[0]->value, true);
++        $this->assertEquals('Test client', $created['name']);
++        $this->assertEquals(['https://example.com/callback'], $created['redirecturis']);
++        $this->assertEquals(get_admin()->id, $logs[0]->userid);
++
++        // Update: only changed fields are logged.
++        $manager->update_client($client->id, ['name' => 'Renamed client', 'description' => $client->description]);
++        $logs = $getlogs('name');
++        $this->assertCount(1, $logs);
++        $this->assertEquals('Test client', $logs[0]->oldvalue);
++        $this->assertEquals('Renamed client', $logs[0]->value);
++        $this->assertCount(0, $getlogs('description'));
++
++        // Redirect URIs.
++        $manager->add_redirect_uri($client->id, 'https://example.com/other');
++        $manager->add_redirect_uri($client->id, 'https://example.com/other');
++        $logs = $getlogs('redirecturi_added');
++        $this->assertCount(1, $logs);
++        $this->assertEquals('https://example.com/other', $logs[0]->value);
++
++        $manager->remove_redirect_uri($client->id, 'https://example.com/callback');
++        $manager->remove_redirect_uri($client->id, 'https://example.com/callback');
++        $logs = $getlogs('redirecturi_removed');
++        $this->assertCount(1, $logs);
++        $this->assertEquals('https://example.com/callback', $logs[0]->oldvalue);
++
++        // Secrets: the plain text secret must never be logged.
++        $secret = $manager->create_secret($client->id);
++        $logs = $getlogs('secret_created');
++        $this->assertCount(1, $logs);
++        $secretid = (int) $logs[0]->value;
++        $this->assertTrue($DB->record_exists('oauth2_server_client_secrets', ['id' => $secretid]));
++        $this->assertFalse($DB->record_exists_select(
++            'config_log',
++            $DB->sql_like('value', ':secret'),
++            ['secret' => '%' . $DB->sql_like_escape($secret) . '%'],
++        ));
++
++        $manager->revoke_secret($secretid);
++        $manager->revoke_secret($secretid);
++        $logs = $getlogs('secret_revoked');
++        $this->assertCount(1, $logs);
++        $this->assertEquals($secretid, $logs[0]->oldvalue);
++
++        // Status changes.
++        $manager->disable_client($client->id);
++        $manager->reactivate_client($client->id);
++        $logs = $getlogs('status');
++        $this->assertCount(2, $logs);
++        $this->assertEquals(['active', 'disabled'], [$logs[0]->oldvalue, $logs[0]->value]);
++        $this->assertEquals(['disabled', 'active'], [$logs[1]->oldvalue, $logs[1]->value]);
++
++        // Deletion.
++        $manager->disable_client($client->id);
++        $manager->delete_client($client->id);
++        $logs = $getlogs('client_deleted');
++        $this->assertCount(1, $logs);
++        $this->assertNull($logs[0]->value);
++        $deleted = json_decode($logs[0]->oldvalue, true);
++        $this->assertEquals('Renamed client', $deleted['name']);
++        $this->assertEquals(['https://example.com/other'], $deleted['redirecturis']);
++    }
+ }

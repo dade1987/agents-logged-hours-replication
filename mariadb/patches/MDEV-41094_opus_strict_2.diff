@@ -1,0 +1,81 @@
+diff --git a/mysql-test/main/func_kdf.result b/mysql-test/main/func_kdf.result
+index e334125c..bf2381b9 100644
+--- a/mysql-test/main/func_kdf.result
++++ b/mysql-test/main/func_kdf.result
+@@ -181,5 +181,34 @@ SELECT KDF('secret','salt') IS NOT NULL;
+ KDF('secret','salt') IS NOT NULL
+ 1
+ #
++# MDEV-41094 KDF() silently reduces large PBKDF2 iteration counts
++#             to weak 32-bit aliases
++#
++SELECT KDF('secret','salt',4294968296,'pbkdf2_hmac',256);
++KDF('secret','salt',4294968296,'pbkdf2_hmac',256)
++NULL
++Warnings:
++Warning	3047	Invalid argument error: 4294968296 in function kdf.
++SELECT KDF('secret','salt',4294968297,'pbkdf2_hmac',256);
++KDF('secret','salt',4294968297,'pbkdf2_hmac',256)
++NULL
++Warnings:
++Warning	3047	Invalid argument error: 4294968297 in function kdf.
++SELECT KDF('secret','salt',2147483648,'pbkdf2_hmac',256);
++KDF('secret','salt',2147483648,'pbkdf2_hmac',256)
++NULL
++Warnings:
++Warning	3047	Invalid argument error: 2147483648 in function kdf.
++SELECT KDF('secret','salt',18446744073709551615,'pbkdf2_hmac',256);
++KDF('secret','salt',18446744073709551615,'pbkdf2_hmac',256)
++NULL
++Warnings:
++Warning	3047	Invalid argument error: 18446744073709551615 in function kdf.
++SELECT KDF('secret','salt',4294967296);
++KDF('secret','salt',4294967296)
++NULL
++Warnings:
++Warning	3047	Invalid argument error: 4294967296 in function kdf.
++#
+ # End of 11.4 tests
+ #
+diff --git a/mysql-test/main/func_kdf.test b/mysql-test/main/func_kdf.test
+index 279323ed..9c6a8e39 100644
+--- a/mysql-test/main/func_kdf.test
++++ b/mysql-test/main/func_kdf.test
+@@ -72,6 +72,16 @@ SELECT KDF('secret','salt',1000,999);
+ SELECT KDF('secret','salt',1000,'pbkdf2_hmac') IS NOT NULL;
+ SELECT KDF('secret','salt') IS NOT NULL;
+ 
++--echo #
++--echo # MDEV-41094 KDF() silently reduces large PBKDF2 iteration counts
++--echo #             to weak 32-bit aliases
++--echo #
++SELECT KDF('secret','salt',4294968296,'pbkdf2_hmac',256);
++SELECT KDF('secret','salt',4294968297,'pbkdf2_hmac',256);
++SELECT KDF('secret','salt',2147483648,'pbkdf2_hmac',256);
++SELECT KDF('secret','salt',18446744073709551615,'pbkdf2_hmac',256);
++SELECT KDF('secret','salt',4294967296);
++
+ --echo #
+ --echo # End of 11.4 tests
+ --echo #
+diff --git a/sql/item_strfunc.cc b/sql/item_strfunc.cc
+index 34e47988..611e711b 100644
+--- a/sql/item_strfunc.cc
++++ b/sql/item_strfunc.cc
+@@ -572,9 +572,14 @@ String *Item_func_kdf::val_str(String *buf)
+   else
+   {
+     longlong iter= arg_count > 2 ? args[2]->val_int() : 1000;
+-    if (iter <= 0)
++    /*
++      PKCS5_PBKDF2_HMAC() takes the iteration count as int. Reject values
++      that do not fit instead of silently truncating them to a (possibly
++      much smaller) 32-bit alias. Large unsigned values are negative here.
++    */
++    if (iter <= 0 || iter > INT_MAX32)
+     {
+-      if (!args[2]->null_value)
++      if (arg_count > 2 && !args[2]->null_value)
+         invalid_argument_error(func_name(),
+           ErrConvInteger({iter, args[2]->unsigned_flag}).ptr());
+     }

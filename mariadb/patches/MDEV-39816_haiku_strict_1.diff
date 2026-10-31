@@ -1,0 +1,33 @@
+diff --git a/storage/myisam/mi_open.c b/storage/myisam/mi_open.c
+index 414e483a..a8653510 100644
+--- a/storage/myisam/mi_open.c
++++ b/storage/myisam/mi_open.c
+@@ -364,6 +364,16 @@ MI_INFO *mi_open(const char *name, int mode, uint open_flags)
+         for (j=0 ; j < keyinfo->keysegs; j++,pos++)
+ 	{
+ 	  disk_pos=mi_keyseg_read(disk_pos, pos);
++          /*
++            Key segments are later copied into buffers of size
++            HA_MAX_KEY_BUFF, so a corrupted (too long) segment length
++            must not be accepted.
++          */
++          if (pos->length > HA_MAX_KEY_LENGTH)
++          {
++            my_errno= HA_ERR_CRASHED;
++            goto err;
++          }
+           if (pos->flag & HA_BLOB_PART &&
+               ! (share->options & (HA_OPTION_COMPRESS_RECORD |
+                                    HA_OPTION_PACK_RECORD)))
+@@ -453,6 +463,11 @@ MI_INFO *mi_open(const char *name, int mode, uint open_flags)
+ 	for (j=0 ; j < share->uniqueinfo[i].keysegs; j++,pos++)
+ 	{
+ 	  disk_pos=mi_keyseg_read(disk_pos, pos);
++          if (pos->length > HA_MAX_KEY_LENGTH)
++          {
++            my_errno= HA_ERR_CRASHED;
++            goto err;
++          }
+ 	  if (pos->type == HA_KEYTYPE_TEXT ||
+               pos->type == HA_KEYTYPE_VARTEXT1 ||
+               pos->type == HA_KEYTYPE_VARTEXT2)

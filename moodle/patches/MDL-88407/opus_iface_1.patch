@@ -1,0 +1,197 @@
+diff --git a/public/grade/classes/penalty_container.php b/public/grade/classes/penalty_container.php
+index c545cd2c37e..66808875f28 100644
+--- a/public/grade/classes/penalty_container.php
++++ b/public/grade/classes/penalty_container.php
+@@ -104,10 +104,13 @@ final class penalty_container {
+     /**
+      * Get the grade before penalties are applied.
+      *
++     * This is the raw grade, before any grade item factors (multiplicator, offset) are applied.
++     * The factors are applied by the gradebook when the final grade is calculated from the penalised raw grade.
++     *
+      * @return float The grade before penalties are applied
+      */
+     public function get_grade_before_penalties(): float {
+-        return $this->gradegrade->finalgrade;
++        return (float) ($this->gradegrade->rawgrade ?? $this->gradegrade->finalgrade ?? 0.0);
+     }
+ 
+     /**
+diff --git a/public/grade/classes/penalty_manager.php b/public/grade/classes/penalty_manager.php
+index c4c7fb904b8..165bbed925b 100644
+--- a/public/grade/classes/penalty_manager.php
++++ b/public/grade/classes/penalty_manager.php
+@@ -231,14 +231,50 @@ class penalty_manager {
+ 
+         // Update the grade if not in preview mode.
+         if (!$previewonly) {
++            // The penalty is calculated against the raw grade, so the penalised grade is a raw grade.
++            // The grade item factors (multiplicator, offset) are applied by update_raw_grade() when calculating the final grade,
++            // so they must not be applied here as well.
++            $penalisedrawgrade = $container->get_grade_after_penalties();
++
++            // The deducted mark is the difference between the final grade before and after the penalty is applied.
++            $finalgradebefore = self::apply_grade_item_factors($container->get_grade_before_penalties(), $gradeitem, $grade);
++            $finalgradeafter = self::apply_grade_item_factors($penalisedrawgrade, $gradeitem, $grade);
++            $deductedmark = max(0.0, (float) $finalgradebefore - (float) $finalgradeafter);
++
+             // Update the raw grade and store the deducted mark.
+-            $gradeitem->update_raw_grade($userid, $container->get_grade_after_penalties(), 'gradepenalty');
+-            $gradeitem->update_deducted_mark($userid, $container->get_penalty());
++            $gradeitem->update_raw_grade($userid, $penalisedrawgrade, 'gradepenalty');
++            $gradeitem->update_deducted_mark($userid, $deductedmark);
+         }
+ 
+         return $container;
+     }
+ 
++    /**
++     * Apply the grade item factors (such as the multiplicator and the offset) to a raw grade.
++     *
++     * This calculates the final grade the gradebook would produce for the given raw grade.
++     *
++     * @param float $rawgrade The raw grade.
++     * @param grade_item $gradeitem The grade item.
++     * @param grade_grade|null $usergrade The user grade, used to determine the original raw grade range.
++     * @return float|null The adjusted grade.
++     */
++    public static function apply_grade_item_factors(
++        float $rawgrade,
++        grade_item $gradeitem,
++        ?grade_grade $usergrade = null
++    ): ?float {
++        $rawmin = $gradeitem->grademin;
++        $rawmax = $gradeitem->grademax;
++        if (!empty($usergrade) && isset($usergrade->rawgrademin) && isset($usergrade->rawgrademax)) {
++            $rawmin = $usergrade->rawgrademin;
++            $rawmax = $usergrade->rawgrademax;
++        }
++
++        $result = $gradeitem->adjust_raw_grade($rawgrade, $rawmin, $rawmax);
++        return is_null($result) ? null : (float) $result;
++    }
++
+     /**
+      * Returns the penalty indicator HTML code if a penalty is applied to the grade.
+      * Otherwise, returns an empty string.
+diff --git a/public/grade/tests/penalty_manager_test.php b/public/grade/tests/penalty_manager_test.php
+index 6e11988a069..fb3a0dc0c90 100644
+--- a/public/grade/tests/penalty_manager_test.php
++++ b/public/grade/tests/penalty_manager_test.php
+@@ -103,4 +103,42 @@ final class penalty_manager_test extends advanced_testcase {
+         // No penalty by default.
+         $this->assertEquals(90, $container->get_grade_after_penalties());
+     }
++
++    /**
++     * Test that grade item factors (multiplicator and offset) are applied only once when applying penalties.
++     */
++    public function test_apply_grade_penalty_to_user_with_grade_item_factors(): void {
++        $this->resetAfterTest();
++        $this->setAdminUser();
++
++        penalty_manager::enable_module('assign');
++
++        $user = $this->getDataGenerator()->create_user();
++        $course = $this->getDataGenerator()->create_course();
++        $assign = $this->getDataGenerator()->create_module('assign', ['course' => $course->id]);
++
++        $gradeitem = grade_item::fetch([
++            'courseid' => $course->id,
++            'itemtype' => 'mod',
++            'itemmodule' => 'assign',
++            'iteminstance' => $assign->id,
++            'itemnumber' => 0,
++        ]);
++        $gradeitem->multfactor = 1.5;
++        $gradeitem->plusfactor = 1;
++        $gradeitem->update();
++
++        grade_update('mod/assign', $course->id, 'mod', 'assign', $assign->id, 0, ['userid' => $user->id, 'rawgrade' => 5]);
++        $this->assertEquals(8.5, $gradeitem->get_final($user->id)->finalgrade);
++
++        $this->assertEquals(8.5, penalty_manager::apply_grade_item_factors(5, $gradeitem));
++        $this->assertEquals(8.5, penalty_manager::apply_grade_item_factors(5, $gradeitem, $gradeitem->get_grade($user->id, false)));
++
++        // No penalty: the final grade must not change.
++        penalty_manager::apply_grade_penalty_to_user($user->id, $gradeitem, time(), time());
++        $grade = $gradeitem->get_final($user->id);
++        $this->assertEquals(5, $grade->rawgrade);
++        $this->assertEquals(8.5, $grade->finalgrade);
++        $this->assertEquals(0, $grade->deductedmark);
++    }
+ }
+diff --git a/public/mod/assign/locallib.php b/public/mod/assign/locallib.php
+index 88fee25411d..7090a1ceb85 100644
+--- a/public/mod/assign/locallib.php
++++ b/public/mod/assign/locallib.php
+@@ -6066,6 +6066,15 @@ class assign {
+             $gradingitem = $gradinginfo->items[0];
+         }
+ 
++        // The gradebook record of the user, used to apply the grade item factors to the attempt grades.
++        $usergraderecord = null;
++        if (!empty($grades)) {
++            $usergraderecord = $this->get_grade_item()->get_grade($userid, false);
++            if (empty($usergraderecord) || empty($usergraderecord->id)) {
++                $usergraderecord = null;
++            }
++        }
++
+         foreach ($grades as $grade) {
+             // First lookup the grader info.
+             if (!$showgradername) {
+@@ -6082,7 +6091,7 @@ class assign {
+ 
+             // The assign grade for each attempt is not stored in the gradebook.
+             // We need to calculate them from assign_grade records.
+-            [$penalisedgrade, $deductedmark] = $this->calculate_penalised_grade($grade);
++            [$penalisedgrade, $deductedmark] = $this->calculate_penalised_grade($grade, $usergraderecord);
+ 
+             // Now get the gradefordisplay.
+             if ($controller) {
+@@ -6110,10 +6119,14 @@ class assign {
+     /**
+      * Calculate penalised grade and deducted mark.
+      *
++     * The assignment grade is a raw grade. The grade item factors (multiplicator, offset) are applied to
++     * the penalised grade so that the result matches the final grade in the gradebook.
++     *
+      * @param stdClass $grade The grade object
++     * @param \grade_grade|null $usergraderecord The gradebook grade record of the user, if available
+      * @return array [$penalisedgrade, $deductedmark] the penalised grade and the deducted mark
+      */
+-    public function calculate_penalised_grade(stdClass $grade): array {
++    public function calculate_penalised_grade(stdClass $grade, ?\grade_grade $usergraderecord = null): array {
+         $penalisedgrade = $grade->grade;
+         $deductedmark = 0;
+ 
+@@ -6122,10 +6135,25 @@ class assign {
+             return [$penalisedgrade, $deductedmark];
+         }
+ 
+-        if ($grade->penalty > 0) {
+-            $deductedmark = $grade->grade * $grade->penalty / 100;
+-            $penalisedgrade = $grade->grade - $deductedmark;
++        $rawgrade = (float) $grade->grade;
++        $penalisedrawgrade = $rawgrade;
++        if (!empty($grade->penalty) && $grade->penalty > 0) {
++            $penalisedrawgrade = $rawgrade - $rawgrade * $grade->penalty / 100;
+         }
++
++        $gradeitem = $this->get_grade_item();
++
++        // Apply grade item factors to get the final grades.
++        $finalgrade = \core_grades\penalty_manager::apply_grade_item_factors($rawgrade, $gradeitem, $usergraderecord);
++        $penalisedgrade = \core_grades\penalty_manager::apply_grade_item_factors(
++            $penalisedrawgrade,
++            $gradeitem,
++            $usergraderecord,
++        );
++        if (!is_null($finalgrade) && !is_null($penalisedgrade)) {
++            $deductedmark = max(0, $finalgrade - $penalisedgrade);
++        }
++
+         return [$penalisedgrade, $deductedmark];
+     }
+ 

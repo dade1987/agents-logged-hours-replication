@@ -1,0 +1,430 @@
+diff --git a/UPGRADING.md b/UPGRADING.md
+index 208e85ac2e3..b6e8fa5f331 100644
+--- a/UPGRADING.md
++++ b/UPGRADING.md
+@@ -105,6 +105,10 @@ The format of this change log follows the advice given at [Keep a CHANGELOG](htt
+ 
+ #### Changed
+ 
++- The `newlogin` message provider (New login notifications) is now forced on (`MESSAGE_FORCED`) by default for the `popup`, `email` and `airnotifier` outputs on new installs. A new security check, `\core\check\security\newloginnotifications`, warns administrators when new login notifications are not forced on.
++
++  For more information see [MDL-89465](https://tracker.moodle.org/browse/MDL-89465)
++
+ - The `search` landmark role in the `core/search_input_auto` template is enclosed within a `searchrole` Mustache block so that templates that use this template can override and remove the `search` landmark role when deemed unnecessary.
+ 
+   For more information see [MDL-88833](https://tracker.moodle.org/browse/MDL-88833)
+diff --git a/public/lib/classes/check/manager.php b/public/lib/classes/check/manager.php
+index 417907106b4..13556fe0d1c 100644
+--- a/public/lib/classes/check/manager.php
++++ b/public/lib/classes/check/manager.php
+@@ -133,6 +133,7 @@ class manager {
+             new security\passwordpolicy(),
+             new security\emailchangeconfirmation(),
+             new security\webcron(),
++            new security\newloginnotifications(),
+             new http\cookiesecure(),
+             new access\riskadmin(),
+             new access\riskxss(),
+diff --git a/public/lib/classes/check/security/newloginnotifications.php b/public/lib/classes/check/security/newloginnotifications.php
+new file mode 100644
+index 00000000000..ef77e57b79e
+--- /dev/null
++++ b/public/lib/classes/check/security/newloginnotifications.php
+@@ -0,0 +1,111 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\check\security;
++
++use core\check\check;
++use core\check\result;
++
++/**
++ * Verifies that new login notifications are forced on.
++ *
++ * Users should be made aware of logins to their account from a new device,
++ * which reduces the risk of users being unaware of unauthorised logins.
++ *
++ * @package    core
++ * @category   check
++ * @copyright  2025 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class newloginnotifications extends check {
++    /**
++     * Get the short check name
++     *
++     * @return string
++     */
++    public function get_name(): string {
++        return get_string('check_newloginnotifications_name', 'report_security');
++    }
++
++    /**
++     * A link to a place to action this
++     *
++     * @return \action_link|null
++     */
++    public function get_action_link(): ?\action_link {
++        return new \action_link(
++            new \moodle_url('/admin/message.php'),
++            get_string('defaultmessageoutputs', 'message')
++        );
++    }
++
++    /**
++     * Return result
++     *
++     * @return result
++     */
++    public function get_result(): result {
++        global $CFG;
++        require_once($CFG->libdir . '/messagelib.php');
++
++        $details = get_string('check_newloginnotifications_details', 'report_security');
++        $defaultpreferences = get_message_output_default_preferences();
++        $preferencebase = 'moodle_newlogin';
++
++        // The provider has been disabled entirely at site level.
++        if (!empty($defaultpreferences->{$preferencebase . '_disable'})) {
++            return new result(
++                result::WARNING,
++                get_string('check_newloginnotifications_disabled', 'report_security'),
++                $details
++            );
++        }
++
++        // Only enabled notification outputs (processors) are able to send the notification.
++        $processors = get_message_processors(true);
++        if (empty($processors)) {
++            return new result(
++                result::WARNING,
++                get_string('check_newloginnotifications_noprocessors', 'report_security'),
++                $details
++            );
++        }
++
++        $enabledpreference = 'message_provider_' . $preferencebase . '_enabled';
++        $enabledprocessors = [];
++        if (!empty($defaultpreferences->{$enabledpreference})) {
++            $enabledprocessors = explode(',', $defaultpreferences->{$enabledpreference});
++        }
++
++        // The notification is forced on when at least one enabled processor is both locked and enabled.
++        foreach ($processors as $processor) {
++            $lockedpreference = $processor->name . '_provider_' . $preferencebase . '_locked';
++            if (!empty($defaultpreferences->{$lockedpreference}) && in_array($processor->name, $enabledprocessors)) {
++                return new result(
++                    result::OK,
++                    get_string('check_newloginnotifications_ok', 'report_security'),
++                    $details
++                );
++            }
++        }
++
++        return new result(
++            result::WARNING,
++            get_string('check_newloginnotifications_notforced', 'report_security'),
++            $details
++        );
++    }
++}
+diff --git a/public/lib/db/messages.php b/public/lib/db/messages.php
+index bf803ce1d1c..8c1bab75688 100644
+--- a/public/lib/db/messages.php
++++ b/public/lib/db/messages.php
+@@ -35,11 +35,12 @@ defined('MOODLE_INTERNAL') || die();
+ 
+ $messageproviders = array (
+ 
++    // New login notifications are forced on by default so users are made aware of unauthorised logins.
+     'newlogin' => array (
+         'defaults' => [
+-            'popup' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
+-            'email' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
+-            'airnotifier' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
++            'popup' => MESSAGE_FORCED,
++            'email' => MESSAGE_FORCED,
++            'airnotifier' => MESSAGE_FORCED,
+         ],
+     ),
+ 
+diff --git a/public/lib/moodlelib.php b/public/lib/moodlelib.php
+index e7c00f76baa..7e531b18e24 100644
+--- a/public/lib/moodlelib.php
++++ b/public/lib/moodlelib.php
+@@ -4121,9 +4121,22 @@ function complete_user_login($user, array $extrauserinfo = []) {
+         // Get message providers enabled for a user.
+         $userpreferences = get_user_preferences('message_provider_moodle_newlogin_enabled');
+         // Check if notification processor plugins (web, email, mobile) are enabled at system level.
+-        $msgprocessorsready = !empty(get_message_processors(true));
++        $msgprocessors = get_message_processors(true);
++        $msgprocessorsready = !empty($msgprocessors);
++        // Check if the notification is forced on for any enabled processor (user preferences are then ignored).
++        $msgproviderforced = false;
++        if ($msgproviderenabled) {
++            $forcedprocessors = explode(',', $sitepreferences->message_provider_moodle_newlogin_enabled);
++            foreach ($msgprocessors as $msgprocessor) {
++                $lockedpreference = $msgprocessor->name . '_provider_moodle_newlogin_locked';
++                if (!empty($sitepreferences->{$lockedpreference}) && in_array($msgprocessor->name, $forcedprocessors)) {
++                    $msgproviderforced = true;
++                    break;
++                }
++            }
++        }
+         // If new login notification is enabled at system level then go for other conditions check.
+-        $newloginenabled = $newlogindisabled ? 0 : ($userpreferences != 'none' && $msgproviderenabled);
++        $newloginenabled = $newlogindisabled ? 0 : ($msgproviderforced || ($userpreferences != 'none' && $msgproviderenabled));
+ 
+         if ($newloginenabled && $msgprocessorsready) {
+             // Schedule adhoc task to send a login notification to the user.
+diff --git a/public/lib/tests/check/security/newloginnotifications_test.php b/public/lib/tests/check/security/newloginnotifications_test.php
+new file mode 100644
+index 00000000000..0c84dce81ef
+--- /dev/null
++++ b/public/lib/tests/check/security/newloginnotifications_test.php
+@@ -0,0 +1,141 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\check\security;
++
++use core\check\result;
++
++/**
++ * Tests for the new login notifications security check.
++ *
++ * @package    core
++ * @category   test
++ * @copyright  2025 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ * @covers     \core\check\security\newloginnotifications
++ */
++final class newloginnotifications_test extends \advanced_testcase {
++    /**
++     * The check is registered as a security check.
++     */
++    public function test_check_is_registered(): void {
++        $checks = \core\check\manager::get_checks('security');
++        $found = array_filter($checks, fn($check) => $check instanceof newloginnotifications);
++        $this->assertCount(1, $found);
++    }
++
++    /**
++     * New login notifications are forced on by default on a new install.
++     */
++    public function test_default_is_forced(): void {
++        global $CFG;
++        $this->resetAfterTest();
++
++        // Simulate a new install: remove the current site defaults and re-apply those defined in lib/db/messages.php.
++        $messageproviders = [];
++        require($CFG->libdir . '/db/messages.php');
++        foreach (get_message_processors() as $processor) {
++            unset_config($processor->name . '_provider_moodle_newlogin_locked', 'message');
++        }
++        unset_config('message_provider_moodle_newlogin_enabled', 'message');
++        message_set_default_message_preference('moodle', 'newlogin', $messageproviders['newlogin']);
++
++        $check = new newloginnotifications();
++        $this->assertEquals(result::OK, $check->get_result()->get_status());
++        $this->assertNotNull($check->get_action_link());
++    }
++
++    /**
++     * Data provider for test_get_result.
++     *
++     * @return array
++     */
++    public static function get_result_provider(): array {
++        return [
++            'Forced for email' => [
++                ['email_provider_moodle_newlogin_locked' => 1, 'message_provider_moodle_newlogin_enabled' => 'email'],
++                result::OK,
++            ],
++            'Forced for popup, permitted for email' => [
++                [
++                    'email_provider_moodle_newlogin_locked' => 0,
++                    'popup_provider_moodle_newlogin_locked' => 1,
++                    'message_provider_moodle_newlogin_enabled' => 'email,popup',
++                ],
++                result::OK,
++            ],
++            'Permitted and enabled by default, but not forced' => [
++                [
++                    'email_provider_moodle_newlogin_locked' => 0,
++                    'popup_provider_moodle_newlogin_locked' => 0,
++                    'airnotifier_provider_moodle_newlogin_locked' => 0,
++                    'message_provider_moodle_newlogin_enabled' => 'email,popup,airnotifier',
++                ],
++                result::WARNING,
++            ],
++            'Locked but disabled (disallowed)' => [
++                [
++                    'email_provider_moodle_newlogin_locked' => 1,
++                    'popup_provider_moodle_newlogin_locked' => 1,
++                    'airnotifier_provider_moodle_newlogin_locked' => 1,
++                    'message_provider_moodle_newlogin_enabled' => 'none',
++                ],
++                result::WARNING,
++            ],
++            'Provider disabled' => [
++                ['moodle_newlogin_disable' => 1],
++                result::WARNING,
++            ],
++        ];
++    }
++
++    /**
++     * Test the check result for various site default preferences.
++     *
++     * @param array $preferences site default message preferences to set
++     * @param string $expected expected result status
++     */
++    #[\PHPUnit\Framework\Attributes\DataProvider('get_result_provider')]
++    public function test_get_result(array $preferences, string $expected): void {
++        $this->resetAfterTest();
++
++        foreach ($preferences as $name => $value) {
++            set_config($name, $value, 'message');
++        }
++
++        $check = new newloginnotifications();
++        $this->assertEquals($expected, $check->get_result()->get_status());
++    }
++
++    /**
++     * The check warns when no notification outputs are enabled.
++     */
++    public function test_get_result_no_processors(): void {
++        global $DB;
++        $this->resetAfterTest();
++
++        $DB->set_field('message_processors', 'enabled', 0);
++        \core_plugin_manager::reset_caches();
++
++        $check = new newloginnotifications();
++        $result = $check->get_result();
++        $this->assertEquals(result::WARNING, $result->get_status());
++        $this->assertEquals(
++            get_string('check_newloginnotifications_noprocessors', 'report_security'),
++            $result->get_summary()
++        );
++    }
++}
+diff --git a/public/lib/tests/task/send_login_notifications_test.php b/public/lib/tests/task/send_login_notifications_test.php
+index b646c168dbe..26f03d05d68 100644
+--- a/public/lib/tests/task/send_login_notifications_test.php
++++ b/public/lib/tests/task/send_login_notifications_test.php
+@@ -60,6 +60,68 @@ final class send_login_notifications_test extends \advanced_testcase {
+         $this->assertEquals('newlogin', $messages[0]->eventtype);
+     }
+ 
++    /**
++     * Test new login notification is sent when forced on, even if the user has disabled it in their preferences.
++     */
++    public function test_login_notification_forced(): void {
++        global $SESSION;
++
++        $this->resetAfterTest();
++
++        \core\session\manager::set_cookies_supported(true);
++        $loginuser = self::getDataGenerator()->create_user();
++        // The user has opted out of the notification, but it is forced on for email at site level.
++        set_user_preference('message_provider_moodle_newlogin_enabled', 'none', $loginuser);
++        set_config('email_provider_moodle_newlogin_locked', 1, 'message');
++        set_config('popup_provider_moodle_newlogin_locked', 0, 'message');
++        set_config('airnotifier_provider_moodle_newlogin_locked', 0, 'message');
++        set_config('message_provider_moodle_newlogin_enabled', 'email', 'message');
++        $this->setUser(0);
++
++        // Mock data for test.
++        $loginuser->lastip = '1.2.3.4.6'; // Different ip that current.
++        $SESSION->isnewsessioncookie = true; // New session cookie.
++        @complete_user_login($loginuser);
++
++        // Redirect messages to sink and stop buffer output from CLI task.
++        $sink = $this->redirectMessages();
++        ob_start();
++        $this->runAdhocTasks(\core\task\send_login_notifications::class);
++        ob_get_contents();
++        ob_end_clean();
++        $messages = $sink->get_messages();
++        $sink->close();
++
++        $this->assertCount(1, $messages);
++        $this->assertEquals($loginuser->id, $messages[0]->useridto);
++        $this->assertEquals('newlogin', $messages[0]->eventtype);
++    }
++
++    /**
++     * Test new login notification is skipped when the user has disabled it and it is not forced on.
++     */
++    public function test_login_notification_skip_user_disabled(): void {
++        global $SESSION;
++
++        $this->resetAfterTest();
++
++        \core\session\manager::set_cookies_supported(true);
++        $loginuser = self::getDataGenerator()->create_user();
++        set_user_preference('message_provider_moodle_newlogin_enabled', 'none', $loginuser);
++        set_config('email_provider_moodle_newlogin_locked', 0, 'message');
++        set_config('popup_provider_moodle_newlogin_locked', 0, 'message');
++        set_config('airnotifier_provider_moodle_newlogin_locked', 0, 'message');
++        set_config('message_provider_moodle_newlogin_enabled', 'email,popup,airnotifier', 'message');
++        $this->setUser(0);
++
++        // Mock data for test.
++        $loginuser->lastip = '1.2.3.4.6'; // Different ip that current.
++        $SESSION->isnewsessioncookie = true; // New session cookie.
++        @complete_user_login($loginuser);
++
++        $this->assertEmpty(\core\task\manager::get_adhoc_tasks(\core\task\send_login_notifications::class));
++    }
++
+     /**
+      * Test new login notification is skipped because of same IP from last login.
+      */
+diff --git a/public/report/security/lang/en/report_security.php b/public/report/security/lang/en/report_security.php
+index dbfc33d7607..e4786b3b406 100644
+--- a/public/report/security/lang/en/report_security.php
++++ b/public/report/security/lang/en/report_security.php
+@@ -86,6 +86,12 @@ $string['check_guestrole_ok'] = 'Guest role definition is OK.';
+ $string['check_nodemodules_details'] = '<p>The directory <code>{$a->path}</code> contains Node.js modules and their dependencies, typically installed by the NPM utility. These modules may be needed for local Moodle development, such as for using the grunt framework. They are not needed to run a Moodle site in production and they can contain potentially dangerous code exposing your site to remote attacks.</p><p>It is strongly recommended to remove the directory if the site is available via a public URL, or at least prohibit web access to it in your webserver configuration.</p>';
+ $string['check_nodemodules_info'] = 'The node_modules directory should not be present on public sites.';
+ $string['check_nodemodules_name'] = 'Node.js modules directory';
++$string['check_newloginnotifications_details'] = '<p>It is recommended that new login notifications are forced on for at least one enabled notification output, so that users are made aware of logins to their account from a new device or location. This reduces the risk of users being unaware of unauthorised access to their account.</p>';
++$string['check_newloginnotifications_disabled'] = 'New login notifications are disabled.';
++$string['check_newloginnotifications_name'] = 'New login notifications';
++$string['check_newloginnotifications_noprocessors'] = 'There are no enabled notification outputs, so new login notifications cannot be sent.';
++$string['check_newloginnotifications_notforced'] = 'New login notifications are not forced on. Users may not be notified of logins from a new device.';
++$string['check_newloginnotifications_ok'] = 'New login notifications are forced on.';
+ $string['check_openprofiles_details'] = 'Open user profiles can be abused by spammers. It is recommended that either <code>Force users to log in for profiles</code> or <code>Force users to log in</code> are enabled.';
+ $string['check_openprofiles_error'] = 'Anyone can may view user profiles without logging in.';
+ $string['check_openprofiles_name'] = 'Open user profiles';

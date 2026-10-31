@@ -1,0 +1,99 @@
+diff --git a/public/blocks/myoverview/templates/course-action-menu.mustache b/public/blocks/myoverview/templates/course-action-menu.mustache
+index 7a820cd08ce..4dda4b14650 100644
+--- a/public/blocks/myoverview/templates/course-action-menu.mustache
++++ b/public/blocks/myoverview/templates/course-action-menu.mustache
+@@ -61,7 +61,7 @@
+             >
+             {{#str}} show, block_myoverview {{/str}}
+             <div class="visually-hidden">
+-                {{#str}} aria:showcourse, block_myoverview, {{fullname}} {{/str}}
++                {{#str}} aria:showcourse, block_myoverview, {{{fullname}}} {{/str}}
+             </div>
+         </a>
+         <a class="dropdown-item {{#hidden}}hidden{{/hidden}}" href="#"
+@@ -71,7 +71,7 @@
+             >
+             {{#str}} hidecourse, block_myoverview {{/str}}
+             <div class="visually-hidden">
+-                {{#str}} aria:hidecourse, block_myoverview, {{fullname}} {{/str}}
++                {{#str}} aria:hidecourse, block_myoverview, {{{fullname}}} {{/str}}
+             </div>
+         </a>
+     </div>
+diff --git a/public/blocks/myoverview/templates/view-cards.mustache b/public/blocks/myoverview/templates/view-cards.mustache
+index b82bb74f12b..13ae33359aa 100644
+--- a/public/blocks/myoverview/templates/view-cards.mustache
++++ b/public/blocks/myoverview/templates/view-cards.mustache
+@@ -50,7 +50,7 @@
+         {{/hasprogress}}
+     {{/progress}}
+     {{$coursename}}
+-        <span class="multiline" title="{{fullname}}">
++        <span class="multiline" title="{{{fullname}}}">
+             <span class="visually-hidden">{{{fullname}}}</span>
+             <span aria-hidden="true">
+                 {{#shortentext}}55, {{{fullname}}} {{/shortentext}}
+diff --git a/public/blocks/myoverview/templates/view-list.mustache b/public/blocks/myoverview/templates/view-list.mustache
+index 4e8a0213649..f8c349b5204 100644
+--- a/public/blocks/myoverview/templates/view-list.mustache
++++ b/public/blocks/myoverview/templates/view-list.mustache
+@@ -45,7 +45,7 @@
+                 <div class="col-md-2 d-flex align-items-center mb-sm-3 mb-md-0">
+                     <a href="{{viewurl}}" tabindex="-1"  class="mw-100 w-100">
+                         <div class="rounded list-image mw-100" style='background-image: url("{{{courseimage}}}");'>
+-                            <span class="visually-hidden">{{fullname}}</span>
++                            <span class="visually-hidden">{{{fullname}}}</span>
+                         </div>
+                     </a>
+                 </div>
+diff --git a/public/blocks/myoverview/templates/view-summary.mustache b/public/blocks/myoverview/templates/view-summary.mustache
+index b3221fcaa00..82ba29d3f0d 100644
+--- a/public/blocks/myoverview/templates/view-summary.mustache
++++ b/public/blocks/myoverview/templates/view-summary.mustache
+@@ -45,7 +45,7 @@
+             <div class="col-md-2 d-flex align-items-center mb-sm-3 mb-md-0">
+                 <a href="{{viewurl}}" tabindex="-1" class="mw-100 w-100">
+                     <div class="summary-image rounded mw-100" style='background-image: url("{{{courseimage}}}");'>
+-                        <span class="visually-hidden">{{fullname}}</span>
++                        <span class="visually-hidden">{{{fullname}}}</span>
+                     </div>
+                 </a>
+             </div>
+diff --git a/public/blocks/myoverview/tests/behat/block_myoverview_dashboard.feature b/public/blocks/myoverview/tests/behat/block_myoverview_dashboard.feature
+index ac27b707d9c..29a317666af 100644
+--- a/public/blocks/myoverview/tests/behat/block_myoverview_dashboard.feature
++++ b/public/blocks/myoverview/tests/behat/block_myoverview_dashboard.feature
+@@ -389,3 +389,20 @@ Feature: The my overview block allows users to easily access their courses
+   Scenario: The My courses page must meet accessibility standards
+     When I am on the "My courses" page logged in as "student1"
+     Then the page should meet accessibility standards with "best-practice" extra tests
++
++  Scenario: Course names containing special characters are displayed without double encoding
++    Given the following "courses" exist:
++      | fullname           | shortname | category |
++      | Course & 'Friends' | C6        | 0        |
++    And the following "course enrolments" exist:
++      | user     | course | role    |
++      | student1 | C6     | student |
++    And I am on the "My courses" page logged in as "student1"
++    And I click on "All" "button" in the "Course overview" "block"
++    When I click on "All" "link" in the "Course overview" "block"
++    Then I should see "Course & 'Friends'" in the "Course overview" "block"
++    And I should not see "&amp;" in the "Course overview" "block"
++    And I should not see "&#039;" in the "Course overview" "block"
++    And I click on ".coursemenubtn" "css_element" in the "//div[contains(@class, 'course-card') and contains(.,\"Course & 'Friends'\")]" "xpath_element"
++    And "Remove Course & 'Friends' from view" "text" should exist in the "Course overview" "block"
++    And "Remove Course &amp; &#039;Friends&#039; from view" "text" should not exist in the "Course overview" "block"
+diff --git a/public/course/templates/coursecard.mustache b/public/course/templates/coursecard.mustache
+index 14df67d9cfc..54668e11d5a 100644
+--- a/public/course/templates/coursecard.mustache
++++ b/public/course/templates/coursecard.mustache
+@@ -39,7 +39,7 @@
+     data-course-id="{{{id}}}">
+     <a href="{{viewurl}}" tabindex="-1">
+         <div class="card-img-top" style='background-image: url("{{{courseimage}}}");'>
+-            <span class="visually-hidden">{{fullname}}</span>
++            <span class="visually-hidden">{{{fullname}}}</span>
+         </div>
+     </a>
+     <div class="card-body pe-1 course-info-container" id="course-info-container-{{id}}-{{uniqid}}">

@@ -1,0 +1,127 @@
+diff --git a/mysql-test/main/gis.result b/mysql-test/main/gis.result
+index b4d0995c..f92404fd 100644
+--- a/mysql-test/main/gis.result
++++ b/mysql-test/main/gis.result
+@@ -5717,3 +5717,43 @@ t
+ #
+ # End of 11.6 tests
+ #
++#
++# MDEV-40143 Inconsistent ST_IsValid() result between VIEW, CTE and
++# TEMPORARY TABLE over RIGHT JOIN with ST_Dimension() predicate
++#
++CREATE TABLE t0 (c0 INT, c1 POINT);
++INSERT INTO t0 VALUES (-4, Point(0,0));
++INSERT INTO t0 VALUES (6, NULL);
++INSERT INTO t0 VALUES (9, Point(1,1));
++SELECT c0, ST_IsValid(c1) FROM t0 ORDER BY c0;
++c0	ST_IsValid(c1)
++-4	1
++6	NULL
++9	1
++CREATE VIEW v0 AS
++SELECT ST_IsValid(a.c1) AS vc_0 FROM t0 AS a RIGHT JOIN t0 AS b ON a.c0 <=> b.c0
++WHERE ST_Dimension(b.c1) >= 0;
++SELECT vc_0 FROM v0 WHERE vc_0 > 0;
++vc_0
++1
++1
++WITH CTE AS (
++SELECT ST_IsValid(a.c1) AS vc_0 FROM t0 AS a RIGHT JOIN t0 AS b ON a.c0 <=> b.c0
++WHERE ST_Dimension(b.c1) >= 0)
++SELECT vc_0 FROM CTE WHERE vc_0 > 0;
++vc_0
++1
++1
++CREATE TEMPORARY TABLE temp_t AS
++SELECT ST_IsValid(a.c1) AS vc_0 FROM t0 AS a RIGHT JOIN t0 AS b ON a.c0 <=> b.c0
++WHERE ST_Dimension(b.c1) >= 0;
++SELECT vc_0 FROM temp_t WHERE vc_0 > 0;
++vc_0
++1
++1
++DROP TEMPORARY TABLE temp_t;
++DROP VIEW v0;
++DROP TABLE t0;
++#
++# End of 12.2 tests
++#
+diff --git a/mysql-test/main/gis.test b/mysql-test/main/gis.test
+index 6355f410..215448c0 100644
+--- a/mysql-test/main/gis.test
++++ b/mysql-test/main/gis.test
+@@ -3682,3 +3682,39 @@ SELECT ST_ISVALID(ST_GEOMFROMTEXT('POLYGON((0 0, 10 0, 10 10, 0 10, 0 0), (15 15
+ --echo #
+ --echo # End of 11.6 tests
+ --echo #
++
++--echo #
++--echo # MDEV-40143 Inconsistent ST_IsValid() result between VIEW, CTE and
++--echo # TEMPORARY TABLE over RIGHT JOIN with ST_Dimension() predicate
++--echo #
++
++CREATE TABLE t0 (c0 INT, c1 POINT);
++INSERT INTO t0 VALUES (-4, Point(0,0));
++INSERT INTO t0 VALUES (6, NULL);
++INSERT INTO t0 VALUES (9, Point(1,1));
++
++# null_value of ST_IsValid() must be reset on every evaluation
++SELECT c0, ST_IsValid(c1) FROM t0 ORDER BY c0;
++
++CREATE VIEW v0 AS
++SELECT ST_IsValid(a.c1) AS vc_0 FROM t0 AS a RIGHT JOIN t0 AS b ON a.c0 <=> b.c0
++WHERE ST_Dimension(b.c1) >= 0;
++SELECT vc_0 FROM v0 WHERE vc_0 > 0;
++
++WITH CTE AS (
++SELECT ST_IsValid(a.c1) AS vc_0 FROM t0 AS a RIGHT JOIN t0 AS b ON a.c0 <=> b.c0
++WHERE ST_Dimension(b.c1) >= 0)
++SELECT vc_0 FROM CTE WHERE vc_0 > 0;
++
++CREATE TEMPORARY TABLE temp_t AS
++SELECT ST_IsValid(a.c1) AS vc_0 FROM t0 AS a RIGHT JOIN t0 AS b ON a.c0 <=> b.c0
++WHERE ST_Dimension(b.c1) >= 0;
++SELECT vc_0 FROM temp_t WHERE vc_0 > 0;
++
++DROP TEMPORARY TABLE temp_t;
++DROP VIEW v0;
++DROP TABLE t0;
++
++--echo #
++--echo # End of 12.2 tests
++--echo #
+diff --git a/sql/item_geofunc.cc b/sql/item_geofunc.cc
+index 29c1bd56..0cf008ff 100644
+--- a/sql/item_geofunc.cc
++++ b/sql/item_geofunc.cc
+@@ -2136,6 +2136,14 @@ longlong Item_func_isvalid::val_int()
+   Geometry_buffer buffer;
+   Geometry *geometry;
+ 
++  DBUG_ASSERT(fixed());
++
++  /*
++    null_value must be reset on every evaluation: otherwise a NULL argument
++    in one row would make the function return NULL for all subsequent rows
++    (MDEV-40143).
++  */
++  null_value= 0;
+   int valid;
+   if ((args[0]->null_value ||
+       !(geometry= Geometry::construct(&buffer, wkb->ptr(), wkb->length()))))
+@@ -2143,13 +2151,13 @@ longlong Item_func_isvalid::val_int()
+     if (!args[0]->null_value)
+       my_error(ER_GIS_INVALID_DATA, MYF(0), func_name());
+     null_value= 1;
+-    return 1;
++    return 0;
+   }
+ 
+   if (geometry->is_valid(&valid))
+   {
+     null_value= 1;
+-    return 1;
++    return 0;
+   }
+ 
+   return (longlong) valid;

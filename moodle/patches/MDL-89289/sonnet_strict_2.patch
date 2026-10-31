@@ -1,0 +1,284 @@
+diff --git a/.upgradenotes/MDL-89289-2026100100000000.yml b/.upgradenotes/MDL-89289-2026100100000000.yml
+new file mode 100644
+index 00000000000..5449633feea
+--- /dev/null
++++ b/.upgradenotes/MDL-89289-2026100100000000.yml
+@@ -0,0 +1,7 @@
++issueNumber: MDL-89289
++notes:
++  core:
++    - message: >-
++        Plugins removed from core are now uninstalled by the new `\core\task\uninstall_plugins_task` ad-hoc task,
++        queued from upgrade steps, instead of being uninstalled synchronously during the upgrade.
++      type: improved
+diff --git a/public/lib/classes/task/uninstall_plugins_task.php b/public/lib/classes/task/uninstall_plugins_task.php
+new file mode 100644
+index 00000000000..0306f629066
+--- /dev/null
++++ b/public/lib/classes/task/uninstall_plugins_task.php
+@@ -0,0 +1,89 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\task;
++
++/**
++ * Ad-hoc task to uninstall plugins which have been removed from core.
++ *
++ * Uninstalling a plugin can take a long time (for example, removing all of the activities of a removed module),
++ * so upgrade steps queue this task instead of doing the work synchronously during the upgrade.
++ *
++ * Custom data: an object with a "plugins" list, each entry being an object with "type" and "name".
++ *
++ * @package   core
++ * @copyright 2026 Moodle Pty Ltd
++ * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class uninstall_plugins_task extends adhoc_task {
++    /**
++     * Create a task for the given plugins, to be uninstalled in the given order.
++     *
++     * @param array $plugins List of [type, name] pairs, or "type_name" keyed entries of ['type' => ..., 'name' => ...].
++     * @return self
++     */
++    public static function create(array $plugins): self {
++        $task = new self();
++        $list = [];
++        foreach ($plugins as $plugin) {
++            $plugin = array_values($plugin);
++            $list[] = ['type' => $plugin[0], 'name' => $plugin[1]];
++        }
++        $task->set_custom_data(['plugins' => $list]);
++        return $task;
++    }
++
++    /**
++     * Queue a task to uninstall a single plugin.
++     *
++     * @param string $type Plugin type.
++     * @param string $name Plugin name.
++     */
++    public static function queue(string $type, string $name): void {
++        manager::queue_adhoc_task(self::create([[$type, $name]]), true);
++    }
++
++    #[\Override]
++    public function execute() {
++        global $CFG;
++        require_once($CFG->libdir . '/adminlib.php');
++        require_once($CFG->libdir . '/upgradelib.php');
++
++        $data = (array) $this->get_custom_data();
++        foreach ($data['plugins'] ?? [] as $plugin) {
++            $plugin = (array) $plugin;
++            $type = $plugin['type'];
++            $name = $plugin['name'];
++            $component = "{$type}_{$name}";
++
++            // Never uninstall a plugin which has been put back on disk in the meantime.
++            if (\core_component::get_plugin_directory($type, $name)) {
++                mtrace("Skipping uninstall of {$component} as it is present on disk.");
++                continue;
++            }
++
++            mtrace("Uninstalling {$component}");
++            ob_start();
++            try {
++                uninstall_plugin($type, $name);
++            } finally {
++                ob_end_clean();
++            }
++            upgrade_log(UPGRADE_LOG_NORMAL, $component, 'Plugin uninstalled');
++            mtrace("Uninstalled {$component}");
++        }
++    }
++}
+diff --git a/public/lib/db/upgrade.php b/public/lib/db/upgrade.php
+index 480f7d2f671..712a374cdfb 100644
+--- a/public/lib/db/upgrade.php
++++ b/public/lib/db/upgrade.php
+@@ -142,7 +142,7 @@ function xmldb_main_upgrade($oldversion) {
+         // If tool_innodb is no longer present, remove it.
+         if (!file_exists($CFG->dirroot . '/admin/tool/innodb/version.php')) {
+             // Delete tool_innodb.
+-            uninstall_plugin('tool', 'innodb');
++            \core\task\uninstall_plugins_task::queue('tool', 'innodb');
+         }
+ 
+         // Main savepoint reached.
+@@ -176,7 +176,7 @@ function xmldb_main_upgrade($oldversion) {
+         // If filter_tidy is no longer present, remove it.
+         if (!file_exists($CFG->dirroot . '/filter/tidy/version.php')) {
+             // Clean config.
+-            uninstall_plugin('filter', 'tidy');
++            \core\task\uninstall_plugins_task::queue('filter', 'tidy');
+         }
+ 
+         upgrade_main_savepoint(true, 2024082900.01);
+@@ -357,7 +357,7 @@ function xmldb_main_upgrade($oldversion) {
+         // If h5plib_v126 is no longer present, remove it.
+         if (!file_exists($CFG->dirroot . '/h5p/h5plib/v126/version.php')) {
+             // Clean config.
+-            uninstall_plugin('h5plib', 'v126');
++            \core\task\uninstall_plugins_task::queue('h5plib', 'v126');
+         }
+ 
+         // If h5plib_v127 is present, set it as the default one.
+@@ -698,7 +698,7 @@ function xmldb_main_upgrade($oldversion) {
+     // Uninstall auth_cas and remove dependencies.
+     if ($oldversion < 2025030500.00) {
+         if (!file_exists($CFG->dirroot . "/auth/cas/version.php")) {
+-            uninstall_plugin('auth', 'cas');
++            \core\task\uninstall_plugins_task::queue('auth', 'cas');
+ 
+             // Remove the sensiblesettings config for auth_cas.
+             $sensiblesettingsraw = explode(',', get_config('adminpresets', 'sensiblesettings'));
+@@ -722,13 +722,13 @@ function xmldb_main_upgrade($oldversion) {
+             // on atto itself will not remove them.
+             $plugins = array_keys(core_plugin_manager::instance()->get_plugins_of_type('atto'));
+ 
+-            // Now remove each.
++            // Queue the removal of each, followed by the actual plugin, to be run post-upgrade.
++            $toremove = [];
+             foreach ($plugins as $pluginname) {
+-                uninstall_plugin('atto', $pluginname);
++                $toremove[] = ['atto', $pluginname];
+             }
+-
+-            // Finally uninstall the actual plugin.
+-            uninstall_plugin('editor', 'atto');
++            $toremove[] = ['editor', 'atto'];
++            \core\task\manager::queue_adhoc_task(\core\task\uninstall_plugins_task::create($toremove), true);
+         }
+ 
+         upgrade_main_savepoint(true, 2025030500.01);
+@@ -737,7 +737,7 @@ function xmldb_main_upgrade($oldversion) {
+     // Remove portfolio_mahara.
+     if ($oldversion < 2025030600.02) {
+         if (!file_exists($CFG->dirroot . "/portfolio/mahara/version.php")) {
+-            uninstall_plugin('portfolio', 'mahara');
++            \core\task\uninstall_plugins_task::queue('portfolio', 'mahara');
+         }
+         // Main savepoint reached.
+         upgrade_main_savepoint(true, 2025030600.02);
+@@ -746,7 +746,7 @@ function xmldb_main_upgrade($oldversion) {
+     // Remove enrol_mnet.
+     if ($oldversion < 2025030600.03) {
+         if (!file_exists($CFG->dirroot . "/enrol/mnet/version.php")) {
+-            uninstall_plugin('enrol', 'mnet');
++            \core\task\uninstall_plugins_task::queue('enrol', 'mnet');
+         }
+         // Main savepoint reached.
+         upgrade_main_savepoint(true, 2025030600.03);
+@@ -755,7 +755,7 @@ function xmldb_main_upgrade($oldversion) {
+     // Remove block_mnet_hosts.
+     if ($oldversion < 2025030600.04) {
+         if (!file_exists($CFG->dirroot . "/blocks/mnet_hosts/version.php")) {
+-            uninstall_plugin('block', 'mnet_hosts');
++            \core\task\uninstall_plugins_task::queue('block', 'mnet_hosts');
+ 
+             // Delete all the admin preset plugin states concerning mnet_hosts in adminpresets_plug table.
+             $DB->delete_records('adminpresets_plug', ['name' => 'mnet_hosts']);
+@@ -768,7 +768,7 @@ function xmldb_main_upgrade($oldversion) {
+     // Remove auth_mnet.
+     if ($oldversion < 2025030600.05) {
+         if (!file_exists($CFG->dirroot . "/auth/mnet/version.php")) {
+-            uninstall_plugin('auth', 'mnet');
++            \core\task\uninstall_plugins_task::queue('auth', 'mnet');
+         }
+         // Main savepoint reached.
+         upgrade_main_savepoint(true, 2025030600.05);
+@@ -778,7 +778,7 @@ function xmldb_main_upgrade($oldversion) {
+         // If mlbackend_php is no longer present, remove it.
+         if (!file_exists($CFG->dirroot . '/lib/mlbackend/php/version.php')) {
+             // Clean config.
+-            uninstall_plugin('mlbackend', 'php');
++            \core\task\uninstall_plugins_task::queue('mlbackend', 'php');
+ 
+             // Change the processor if mlbackend_php is set.
+             if (get_config('analytics', 'predictionsprocessor') === '\mlbackend_php\processor') {
+@@ -817,7 +817,7 @@ function xmldb_main_upgrade($oldversion) {
+     // Remove mnetservice_enrol.
+     if ($oldversion < 2025030600.08) {
+         if (!file_exists($CFG->dirroot . "/mnet/service/enrol/version.php")) {
+-            uninstall_plugin('mnetservice', 'enrol');
++            \core\task\uninstall_plugins_task::queue('mnetservice', 'enrol');
+         }
+         // Main savepoint reached.
+         upgrade_main_savepoint(true, 2025030600.08);
+@@ -882,7 +882,7 @@ function xmldb_main_upgrade($oldversion) {
+         $sqlparams = [];
+ 
+         if (!file_exists($CFG->dirroot . "/mod/survey/version.php")) {
+-            uninstall_plugin('mod', 'survey');
++            \core\task\uninstall_plugins_task::queue('mod', 'survey');
+             $DB->delete_records('adminpresets_plug', ['plugin' => 'mod', 'name' => 'survey']);
+             $indicatorstoremove['survey'] = [
+                 '\mod_survey\analytics\indicator\cognitive_depth',
+@@ -892,7 +892,7 @@ function xmldb_main_upgrade($oldversion) {
+             $sqllikes['survey'] = $DB->sql_like('indicators', ':surveypluginname');
+         }
+         if (!file_exists($CFG->dirroot . "/mod/chat/version.php")) {
+-            uninstall_plugin('mod', 'chat');
++            \core\task\uninstall_plugins_task::queue('mod', 'chat');
+             $DB->delete_records('adminpresets_plug', ['plugin' => 'mod', 'name' => 'chat']);
+             $indicatorstoremove['chat'] = [
+                 '\mod_chat\analytics\indicator\cognitive_depth',
+@@ -1249,7 +1249,7 @@ function xmldb_main_upgrade($oldversion) {
+         // Remove section_links block.
+ 
+         if (!file_exists($CFG->dirroot . "/blocks/section_links/version.php")) {
+-            uninstall_plugin('block', 'section_links');
++            \core\task\uninstall_plugins_task::queue('block', 'section_links');
+             // Delete all the admin preset plugin references to section_links.
+             $DB->delete_records('adminpresets_plug', ['plugin' => 'block', 'name' => 'section_links']);
+             // Remove the section_links block from the unaddableblocks setting.
+@@ -1684,7 +1684,7 @@ function xmldb_main_upgrade($oldversion) {
+             }
+         } while ($recordcount === $batchsize);
+         // Finally, uninstall qtype_random as it's been removed.
+-        uninstall_plugin('qtype', 'random');
++        \core\task\uninstall_plugins_task::queue('qtype', 'random');
+         upgrade_main_savepoint(true, 2026010900.02);
+     }
+ 
+@@ -1692,7 +1692,7 @@ function xmldb_main_upgrade($oldversion) {
+         // Remove activity_modules block.
+ 
+         if (!file_exists($CFG->dirroot . "/blocks/activity_modules/version.php")) {
+-            uninstall_plugin('block', 'activity_modules');
++            \core\task\uninstall_plugins_task::queue('block', 'activity_modules');
+             // Delete all the admin preset plugin references to activity_modules.
+             $DB->delete_records('adminpresets_plug', ['plugin' => 'block', 'name' => 'activity_modules']);
+         }
+@@ -1856,7 +1856,7 @@ function xmldb_main_upgrade($oldversion) {
+             }
+ 
+             // Uninstall the plugin.
+-            uninstall_plugin('tool', 'moodlenet');
++            \core\task\uninstall_plugins_task::queue('tool', 'moodlenet');
+         }
+ 
+         // Main savepoint reached.
+@@ -1867,7 +1867,7 @@ function xmldb_main_upgrade($oldversion) {
+         // If h5plib_v127 is no longer present, remove it.
+         if (!file_exists($CFG->dirroot . '/h5p/h5plib/v127/version.php')) {
+             // Clean config.
+-            uninstall_plugin('h5plib', 'v127');
++            \core\task\uninstall_plugins_task::queue('h5plib', 'v127');
+         }
+ 
+         // If h5plib_v128 is present, set it as the default one.

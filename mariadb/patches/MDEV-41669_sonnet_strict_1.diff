@@ -1,0 +1,16 @@
+diff --git a/storage/innobase/row/row0import.cc b/storage/innobase/row/row0import.cc
+index c589b8f2..16e03080 100644
+--- a/storage/innobase/row/row0import.cc
++++ b/storage/innobase/row/row0import.cc
+@@ -4998,6 +4998,11 @@ row_import_for_mysql(
+ 		goto import_error;
+ 	}
+ 
++	/* Any pre-existing read view must not see the imported data.
++	Treat the import like an insert into an empty table. */
++	ut_ad(trx->id);
++	table->bulk_trx_id = trx->id;
++
+ 	err = row_import_update_discarded_flag(trx, table->id, false);
+ 
+ 	if (err != DB_SUCCESS) {

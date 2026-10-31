@@ -1,0 +1,162 @@
+diff --git a/public/grade/classes/penalty_container.php b/public/grade/classes/penalty_container.php
+index c545cd2c37e..50fc8e59908 100644
+--- a/public/grade/classes/penalty_container.php
++++ b/public/grade/classes/penalty_container.php
+@@ -104,10 +104,14 @@ final class penalty_container {
+     /**
+      * Get the grade before penalties are applied.
+      *
++     * This is the raw grade (the grade sent by the module) and not the final grade, because the final grade already
++     * has the grade item multiplicator and offset applied. The penalised grade is stored as the new raw grade, so the
++     * gradebook will apply the multiplicator and offset to it when calculating the final grade.
++     *
+      * @return float The grade before penalties are applied
+      */
+     public function get_grade_before_penalties(): float {
+-        return $this->gradegrade->finalgrade;
++        return (float) $this->gradegrade->rawgrade;
+     }
+ 
+     /**
+diff --git a/public/grade/classes/penalty_manager.php b/public/grade/classes/penalty_manager.php
+index c4c7fb904b8..467ff98dc09 100644
+--- a/public/grade/classes/penalty_manager.php
++++ b/public/grade/classes/penalty_manager.php
+@@ -233,12 +233,42 @@ class penalty_manager {
+         if (!$previewonly) {
+             // Update the raw grade and store the deducted mark.
+             $gradeitem->update_raw_grade($userid, $container->get_grade_after_penalties(), 'gradepenalty');
+-            $gradeitem->update_deducted_mark($userid, $container->get_penalty());
++            $gradeitem->update_deducted_mark($userid, self::calculate_deducted_final_mark($container));
+         }
+ 
+         return $container;
+     }
+ 
++    /**
++     * Calculate the mark deducted from the final grade.
++     *
++     * Penalties are applied to the raw grade. The final grade is then calculated from the raw grade by the gradebook,
++     * applying the grade item multiplicator and offset (and bounding the result), so the deducted mark shown next
++     * to the final grade must be expressed in the same scale as the final grade.
++     *
++     * @param penalty_container $container The penalty container.
++     * @return float The mark deducted from the final grade.
++     */
++    private static function calculate_deducted_final_mark(penalty_container $container): float {
++        if ($container->get_penalty() <= 0) {
++            return 0.0;
++        }
++
++        $gradeitem = $container->get_grade_item();
++        $gradegrade = $container->get_grade_grade();
++        $rawmin = $gradegrade->rawgrademin ?? $gradeitem->grademin;
++        $rawmax = $gradegrade->rawgrademax ?? $gradeitem->grademax;
++
++        $finalbefore = $gradeitem->adjust_raw_grade($container->get_grade_before_penalties(), $rawmin, $rawmax);
++        $finalafter = $gradeitem->adjust_raw_grade($container->get_grade_after_penalties(), $rawmin, $rawmax);
++
++        if ($finalbefore === null || $finalafter === null) {
++            return $container->get_penalty();
++        }
++
++        return max(0.0, (float) $finalbefore - (float) $finalafter);
++    }
++
+     /**
+      * Returns the penalty indicator HTML code if a penalty is applied to the grade.
+      * Otherwise, returns an empty string.
+diff --git a/public/mod/assign/tests/penalty_test.php b/public/mod/assign/tests/penalty_test.php
+index 6281d9da0f0..46f95de162a 100644
+--- a/public/mod/assign/tests/penalty_test.php
++++ b/public/mod/assign/tests/penalty_test.php
+@@ -276,4 +276,89 @@ final class penalty_test extends \advanced_testcase {
+         // Check the grade.
+         $this->assertEquals(50, $gradeitem->get_final($student->id)->finalgrade);
+     }
++
++    /**
++     * Data provider for test_apply_penalty_with_multfactor_and_plusfactor.
++     *
++     * @return array
++     */
++    public static function apply_penalty_with_multfactor_and_plusfactor_provider(): array {
++        return [
++            // Submission date, multfactor, plusfactor, expected messages, expected final grade, expected deducted mark.
++            'On time, multfactor' => [DAYSECS, 1.5, 0, ['Submission date: 86400', 'Due date: 86400'], 75, 0],
++            'Late, multfactor' => [DAYSECS + 1, 1.5, 0, ['Submission date: 86401', 'Due date: 86400'], 45, 30],
++            'On time, plusfactor' => [DAYSECS, 1, 10, ['Submission date: 86400', 'Due date: 86400'], 60, 0],
++            'Late, plusfactor' => [DAYSECS + 1, 1, 10, ['Submission date: 86401', 'Due date: 86400'], 40, 20],
++            'On time, both' => [DAYSECS, 1.5, 10, ['Submission date: 86400', 'Due date: 86400'], 85, 0],
++            'Late, both' => [DAYSECS + 1, 1.5, 10, ['Submission date: 86401', 'Due date: 86400'], 55, 30],
++        ];
++    }
++
++    /**
++     * Multiplicator and offset of the grade item must be applied only once when penalty is enabled.
++     *
++     * @dataProvider apply_penalty_with_multfactor_and_plusfactor_provider
++     * @covers \mod_assign\penalty\helper::apply_penalty_to_user
++     * @covers \core_grades\penalty_manager::apply_grade_penalty_to_user
++     *
++     * @param int $submissiondate The submission date.
++     * @param float $multfactor The grade item multiplicator.
++     * @param float $plusfactor The grade item offset.
++     * @param array $expectedmessages The expected debug messages.
++     * @param float $expectedgrade The expected final grade.
++     * @param float $expecteddeductedmark The expected deducted mark.
++     */
++    public function test_apply_penalty_with_multfactor_and_plusfactor(
++        int $submissiondate,
++        float $multfactor,
++        float $plusfactor,
++        array $expectedmessages,
++        float $expectedgrade,
++        float $expecteddeductedmark,
++    ): void {
++        global $DB;
++
++        $this->resetAfterTest();
++        [$course, $student] = $this->set_up_test();
++
++        $generator = $this->getDataGenerator();
++        $assignmentgenerator = $generator->get_plugin_generator('mod_assign');
++        $instance = $assignmentgenerator->create_instance([
++            'course' => $course->id,
++            'duedate' => DAYSECS,
++            'assignsubmission_onlinetext_enabled' => 1,
++            'gradepenalty' => 1,
++            'grade' => 200,
++        ]);
++        $cm = get_coursemodule_from_instance('assign', $instance->id);
++        $context = \context_module::instance($cm->id);
++        $assign = new mod_assign_testable_assign($context, $cm, $course);
++
++        // Set the multiplicator and offset of the grade item.
++        $gradeitem = grade_item::fetch([
++            'courseid' => $course->id,
++            'itemtype' => 'mod',
++            'itemmodule' => 'assign',
++            'iteminstance' => $instance->id,
++            'itemnumber' => 0,
++        ]);
++        $gradeitem->multfactor = $multfactor;
++        $gradeitem->plusfactor = $plusfactor;
++        $gradeitem->update();
++
++        // Add submission and grade.
++        $this->add_submission($student, $assign, 'Sample text');
++        $this->submit_for_grading($student, $assign);
++        $DB->set_field('assign_submission', 'timemodified', $submissiondate, ['userid' => $student->id]);
++        $assign->testable_apply_grade_to_user((object)['grade' => 50], $student->id, 0);
++
++        $this->assertdebuggingcalledcount(count($expectedmessages), $expectedmessages);
++
++        $gradeitem = grade_item::fetch(['id' => $gradeitem->id]);
++        $gradegrade = $gradeitem->get_final($student->id);
++        $this->assertEqualsWithDelta($expectedgrade, $gradegrade->finalgrade, 0.00001);
++
++        $gradegrade = \grade_grade::fetch(['itemid' => $gradeitem->id, 'userid' => $student->id]);
++        $this->assertEqualsWithDelta($expecteddeductedmark, $gradegrade->deductedmark, 0.00001);
++    }
+ }

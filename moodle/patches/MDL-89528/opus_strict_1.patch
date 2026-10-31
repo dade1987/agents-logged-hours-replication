@@ -1,0 +1,134 @@
+diff --git a/.upgradenotes/MDL-89528-2026102400000000.yml b/.upgradenotes/MDL-89528-2026102400000000.yml
+new file mode 100644
+index 00000000000..2732ab88497
+--- /dev/null
++++ b/.upgradenotes/MDL-89528-2026102400000000.yml
+@@ -0,0 +1,9 @@
++issueNumber: MDL-89528
++notes:
++  core:
++    - message: >-
++        The DI container now supports attribute-based injection using the PHP-DI
++        `#[\DI\Attribute\Inject]` attribute. This allows injection of
++        properties, including on existing instances using
++        `\core\di::get_container()->injectOn($instance)`.
++      type: improved
+diff --git a/public/lib/classes/di.php b/public/lib/classes/di.php
+index 46dd11354eb..efc9fab4ebf 100644
+--- a/public/lib/classes/di.php
++++ b/public/lib/classes/di.php
+@@ -89,9 +89,11 @@ class di {
+         // Configure the Container builder.
+         $builder = new \DI\ContainerBuilder();
+ 
+-        // At the moment we are using autowiring, but not automatic attribute injection.
+-        // Automatic attribute injection is a php-di specific feature.
++        // Enable autowiring, and attribute-based injection.
++        // Attribute-based injection (using the `\DI\Attribute\Inject` attribute) is a PHP-DI specific feature.
++        // It is enabled to support property injection, including via `injectOn()` for existing instances.
+         $builder->useAutowiring(true);
++        $builder->useAttributes(true);
+ 
+         if (!$CFG->debugdeveloper) {
+             // Enable compilation of the container and write proxies to disk in production.
+diff --git a/public/lib/tests/di_test.php b/public/lib/tests/di_test.php
+index b99707f5aeb..9e28feced8f 100644
+--- a/public/lib/tests/di_test.php
++++ b/public/lib/tests/di_test.php
+@@ -159,4 +159,96 @@ final class di_test extends \advanced_testcase {
+             $stringmanager,
+         );
+     }
++
++    /**
++     * Test that properties marked with the Inject attribute are injected when the object is created by the container.
++     */
++    public function test_attribute_injection_on_get(): void {
++        $instance = di::get(di_test_attribute_injected::class);
++
++        $this->assertInstanceOf(di_test_attribute_injected::class, $instance);
++        $this->assertInstanceOf(http_client::class, $instance->get_client());
++        $this->assertSame(di::get(\moodle_database::class), $instance->get_db());
++    }
++
++    /**
++     * Test that properties marked with the Inject attribute can be injected on to an existing instance.
++     */
++    public function test_attribute_injection_on_instance(): void {
++        $instance = new di_test_attribute_injected();
++        $this->assertNull($instance->get_client());
++
++        /** @var \DI\Container $container */
++        $container = di::get_container();
++        $container->injectOn($instance);
++
++        $this->assertInstanceOf(http_client::class, $instance->get_client());
++        $this->assertSame(di::get(\moodle_database::class), $instance->get_db());
++    }
++
++    /**
++     * Test that injectOn can be called from within a constructor.
++     */
++    public function test_attribute_injection_in_constructor(): void {
++        $instance = new di_test_attribute_self_injected();
++
++        $this->assertInstanceOf(http_client::class, $instance->client);
++    }
++}
++
++// phpcs:disable Generic.Files.OneObjectStructurePerFile.MultipleFound
++
++/**
++ * Test fixture using attribute-based property injection.
++ *
++ * @package   core
++ * @copyright 2026 Andrew Nicols <andrew@nicols.co.uk>
++ * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class di_test_attribute_injected {
++    /** @var http_client|null The injected client */
++    #[\DI\Attribute\Inject]
++    protected ?http_client $client = null;
++
++    /** @var \moodle_database|null The injected database */
++    #[\DI\Attribute\Inject]
++    private ?\moodle_database $db = null;
++
++    /**
++     * Get the client.
++     *
++     * @return http_client|null
++     */
++    public function get_client(): ?http_client {
++        return $this->client;
++    }
++
++    /**
++     * Get the database.
++     *
++     * @return \moodle_database|null
++     */
++    public function get_db(): ?\moodle_database {
++        return $this->db;
++    }
++}
++
++/**
++ * Test fixture which injects on to itself in the constructor.
++ *
++ * @package   core
++ * @copyright 2026 Andrew Nicols <andrew@nicols.co.uk>
++ * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class di_test_attribute_self_injected {
++    /** @var http_client The injected client */
++    #[\DI\Attribute\Inject]
++    public http_client $client;
++
++    /**
++     * Constructor.
++     */
++    public function __construct() {
++        di::get_container()->injectOn($this);
++    }
+ }

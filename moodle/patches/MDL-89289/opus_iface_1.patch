@@ -1,0 +1,228 @@
+diff --git a/public/lang/en/admin.php b/public/lang/en/admin.php
+index c59f0ae188e..8430333566a 100644
+--- a/public/lang/en/admin.php
++++ b/public/lang/en/admin.php
+@@ -1461,6 +1461,7 @@ $string['taskcontextcleanup'] = 'Cleanup contexts';
+ $string['entitytasklog'] = 'Task log';
+ $string['tasklogging'] = 'Task log configuration';
+ $string['taskcreatecontexts'] = 'Create missing contexts';
++$string['taskdeleteblockinstances'] = 'Delete block instances';
+ $string['taskdeleteincompleteusers'] = 'Delete incomplete users';
+ $string['taskdeleteunconfirmedusers'] = 'Delete unconfirmed users';
+ $string['taskeventscron'] = 'Background processing for events';
+diff --git a/public/lib/classes/plugininfo/block.php b/public/lib/classes/plugininfo/block.php
+index 14f7af4de7a..c5058415638 100644
+--- a/public/lib/classes/plugininfo/block.php
++++ b/public/lib/classes/plugininfo/block.php
+@@ -172,10 +172,23 @@ class block extends base {
+                 $blockobject->before_delete();  // Only if we can create instance, block might have been already removed.
+             }
+ 
+-            // First delete instances and related contexts.
+-            $instances = $DB->get_records('block_instances', ['blockname' => $block->name]);
+-            foreach ($instances as $instance) {
+-                blocks_delete_instance($instance);
++            if (!empty($CFG->upgraderunning)) {
++                // During an upgrade, deleting all the instances (and related contexts) can take a very long time on
++                // large sites. Defer it to an ad-hoc task which will be run after the upgrade has completed.
++                // Orphaned instances are not displayed in the meantime, as block instances are only loaded for
++                // blocks that exist in the block table.
++                if ($DB->record_exists('block_instances', ['blockname' => $block->name])) {
++                    \core\task\manager::queue_adhoc_task(
++                        \core\task\delete_block_instances_task::instance($block->name),
++                        true,
++                    );
++                }
++            } else {
++                // First delete instances and related contexts.
++                $instances = $DB->get_records('block_instances', ['blockname' => $block->name]);
++                foreach ($instances as $instance) {
++                    blocks_delete_instance($instance);
++                }
+             }
+ 
+             // Delete block.
+diff --git a/public/lib/classes/task/delete_block_instances_task.php b/public/lib/classes/task/delete_block_instances_task.php
+new file mode 100644
+index 00000000000..3529973d544
+--- /dev/null
++++ b/public/lib/classes/task/delete_block_instances_task.php
+@@ -0,0 +1,84 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\task;
++
++/**
++ * Ad-hoc task to delete all the instances of a given block type.
++ *
++ * This is used when a block plugin is removed during an upgrade, so that the (potentially lengthy)
++ * deletion of all its instances and their related contexts can happen after the upgrade has completed
++ * rather than synchronously during it.
++ *
++ * @package    core
++ * @copyright  2026 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ */
++class delete_block_instances_task extends adhoc_task {
++    /** @var int The number of block instances to process per batch. */
++    protected const BATCH_SIZE = 1000;
++
++    /**
++     * Create a new instance of the task for the given block name.
++     *
++     * @param string $blockname The name of the block (without the block_ prefix), e.g. 'section_links'.
++     * @return static
++     */
++    public static function instance(string $blockname): static {
++        $task = new static();
++        $task->set_custom_data((object) ['blockname' => $blockname]);
++        return $task;
++    }
++
++    #[\Override]
++    public function get_name(): string {
++        return get_string('taskdeleteblockinstances', 'admin');
++    }
++
++    /**
++     * Delete all the instances of the block stored in the custom data.
++     */
++    public function execute(): void {
++        global $CFG, $DB;
++
++        require_once($CFG->libdir . '/blocklib.php');
++
++        $data = $this->get_custom_data();
++        $blockname = $data->blockname ?? '';
++        if ($blockname === '') {
++            mtrace('No block name specified, nothing to delete.');
++            return;
++        }
++
++        $total = 0;
++        do {
++            $instanceids = array_keys($DB->get_records(
++                'block_instances',
++                ['blockname' => $blockname],
++                'id ASC',
++                'id',
++                0,
++                self::BATCH_SIZE,
++            ));
++            if (!empty($instanceids)) {
++                blocks_delete_instances($instanceids);
++                $total += count($instanceids);
++            }
++        } while (count($instanceids) === self::BATCH_SIZE);
++
++        mtrace("Deleted {$total} instance(s) of block '{$blockname}'.");
++    }
++}
+diff --git a/public/lib/tests/task/delete_block_instances_task_test.php b/public/lib/tests/task/delete_block_instances_task_test.php
+new file mode 100644
+index 00000000000..44f28081a18
+--- /dev/null
++++ b/public/lib/tests/task/delete_block_instances_task_test.php
+@@ -0,0 +1,88 @@
++<?php
++// This file is part of Moodle - http://moodle.org/
++//
++// Moodle is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// Moodle is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
++
++namespace core\task;
++
++/**
++ * Unit tests for the delete_block_instances_task ad-hoc task.
++ *
++ * @package    core
++ * @copyright  2026 Moodle Pty Ltd
++ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
++ * @covers     \core\task\delete_block_instances_task
++ */
++final class delete_block_instances_task_test extends \advanced_testcase {
++    /**
++     * Test that executing the task deletes only the instances of the given block.
++     */
++    public function test_execute(): void {
++        global $DB;
++        $this->resetAfterTest();
++
++        $generator = $this->getDataGenerator();
++        $course = $generator->create_course();
++        $coursecontext = \context_course::instance($course->id);
++
++        $online1 = $generator->create_block('online_users', ['parentcontextid' => $coursecontext->id]);
++        $online2 = $generator->create_block('online_users', ['parentcontextid' => $coursecontext->id]);
++        $html = $generator->create_block('html', ['parentcontextid' => $coursecontext->id]);
++
++        $this->assertEquals(2, $DB->count_records('block_instances', ['blockname' => 'online_users']));
++
++        $task = delete_block_instances_task::instance('online_users');
++        manager::queue_adhoc_task($task);
++
++        $this->expectOutputRegex('/Deleted 2 instance/');
++        $this->run_all_adhoc_tasks();
++
++        $this->assertEquals(0, $DB->count_records('block_instances', ['blockname' => 'online_users']));
++        $this->assertFalse($DB->record_exists('context', ['contextlevel' => CONTEXT_BLOCK, 'instanceid' => $online1->id]));
++        $this->assertFalse($DB->record_exists('context', ['contextlevel' => CONTEXT_BLOCK, 'instanceid' => $online2->id]));
++
++        // Other blocks are untouched.
++        $this->assertTrue($DB->record_exists('block_instances', ['id' => $html->id]));
++        $this->assertTrue($DB->record_exists('context', ['contextlevel' => CONTEXT_BLOCK, 'instanceid' => $html->id]));
++    }
++
++    /**
++     * Test that uninstalling a block during an upgrade queues the ad-hoc task instead of deleting synchronously.
++     */
++    public function test_uninstall_cleanup_during_upgrade_queues_task(): void {
++        global $CFG, $DB;
++        $this->resetAfterTest();
++
++        $generator = $this->getDataGenerator();
++        $course = $generator->create_course();
++        $coursecontext = \context_course::instance($course->id);
++        $generator->create_block('online_users', ['parentcontextid' => $coursecontext->id]);
++
++        $CFG->upgraderunning = time() + 300;
++        $plugininfo = \core_plugin_manager::instance()->get_plugin_info('block_online_users');
++        $plugininfo->uninstall_cleanup();
++        unset($CFG->upgraderunning);
++
++        $this->assertFalse($DB->record_exists('block', ['name' => 'online_users']));
++        $this->assertEquals(1, $DB->count_records('block_instances', ['blockname' => 'online_users']));
++
++        $tasks = manager::get_adhoc_tasks(delete_block_instances_task::class);
++        $this->assertCount(1, $tasks);
++        $this->assertEquals('online_users', reset($tasks)->get_custom_data()->blockname);
++
++        $this->expectOutputRegex('/Deleted 1 instance/');
++        $this->run_all_adhoc_tasks();
++        $this->assertEquals(0, $DB->count_records('block_instances', ['blockname' => 'online_users']));
++    }
++}
