@@ -38,7 +38,7 @@ python3 failure_audit/analyze_mariadb.py              # -> failure_audit/mariadb
 python3 moodle/scripts/score.py                       # rebuilds moodle/results.csv from moodle/eval_logs/
 ```
 
-Re-running these scripts from a clean clone reproduces the committed output files byte for byte. The one exception is `analysis/moodle/leak_check.csv`, which gains two rows for the tests condition (see `moodle/deviations.md`).
+Re-running these scripts from a clean clone reproduces every committed output file byte for byte (checked on 31 October 2026).
 
 Generating new agent runs or re-evaluating patches needs much more: a Moodle or MariaDB Server clone, PHP 8 with PostgreSQL 17 (Moodle) or a MariaDB debug build (MariaDB), and Claude Code. The scripts in `moodle/scripts/` and `mariadb/scripts/` are the ones used in the study. They expect the clone in `MOODLE` (default `/home/user/moodle`) or at `/home/user/mariadb`, and workspaces under `/home/user/ws` or `/home/user/ws_mdb`.
 
