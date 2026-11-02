@@ -17,6 +17,7 @@ Four Claude models (Haiku 5.5, Sonnet 5.5, Opus 5.5, Fable 5.1) re-solved real i
 | `mariadb/` | Frozen sample (`frozen_sample.json`, `excluded.json`), preregistration, prompts, patches, evaluation logs, outcomes (`results.jsonl`), run metadata (`runs.tsv`), blind clarity ratings, deviations log, scripts, oracle check of the candidates (`pilot/`) |
 | `analysis/moodle/` | Moodle analysis, transcript audit, leak check, patch-quality scan (SonarQube) and their outputs |
 | `analysis/mariadb/` | Preregistered MariaDB analysis (H1–H3, sensitivity analyses a–e), transcript audit and outputs |
+| `analysis/robustness/` | Exploratory robustness analyses added in revision: human fix size, issue creation dates, worklog roles, power, spline, contamination, small-sample errors, all-runs H2 (`robustness.json`, `robustness2.json`, `figure_hours_curve.png`) |
 | `failure_audit/` | Codebook, rater prompts, case packets, AI rater outputs, final codes and analysis of the failed-patch audit (exploratory) |
 | `transcripts/` | Sanitized transcripts of all 1,538 agent runs (`<agent_id>.jsonl.gz`) |
 | `tools/` | Script used to sanitize the transcripts |
@@ -35,8 +36,12 @@ python3 analysis/mariadb/audit_transcripts_mariadb.py # -> analysis/mariadb/audi
 python3 analysis/mariadb/analysis_mariadb.py          # -> analysis/mariadb/results_mdb.json
 python3 failure_audit/analyze_moodle.py               # -> failure_audit/moodle_results.json
 python3 failure_audit/analyze_mariadb.py              # -> failure_audit/mariadb_results.json
+python3 analysis/robustness/robustness.py          # -> analysis/robustness/robustness.json, figure_hours_curve.png (slow: power simulation)
+python3 analysis/robustness/robustness2.py         # -> analysis/robustness/robustness2.json
 python3 moodle/scripts/score.py                       # rebuilds moodle/results.csv from moodle/eval_logs/
 ```
+
+`analysis/robustness/fix_size.py`, `fetch_created.py`, `fetch_worklog_roles.py` and `analysis/mariadb/similarity_mariadb.py` (needs `rapidfuzz`) built their CSV inputs from the Git clones and the public Jira APIs (read on 2 November 2026); their outputs are committed, so the analyses above need neither.
 
 Re-running these scripts from a clean clone reproduces every committed output file byte for byte (checked on 31 October 2026).
 
@@ -51,9 +56,17 @@ Generating new agent runs or re-evaluating patches needs much more: a Moodle or 
 | §4.2 MariaDB solve rates, H1–H3, Holm, labour share, reliability, Brier | `analysis/mariadb/results_mdb.json` (`descriptive_primary`, `primary`, `H3`, `holm_adjusted_p`, `labour_share_primary`, `reliability`, `calibration_primary`) |
 | §4.2 sensitivity analyses a–e | `analysis/mariadb/results_mdb.json` (`sensitivity`) |
 | §4.2 transcript audit | `analysis/mariadb/audit_runs.csv` |
-| §4.3 failure audit (both projects) | `failure_audit/moodle_results.json`, `failure_audit/mariadb_results.json` |
+| §4.3 failure audit (both projects, including rater agreement) | `failure_audit/moodle_results.json`, `failure_audit/mariadb_results.json` |
 | §4.3 objective re-check with test-support files | `failure_audit/moodle_fixture_recheck.json`, `moodle/eval_logs_fixture_recheck/` |
+| §3.2 worklog roles | `analysis/robustness/worklog_roles.csv`, `robustness2.json` (`developer_hours`) |
+| §3.3 fix sizes | `analysis/robustness/fix_size.csv` |
+| §4.1 Moodle model Wald test | `analysis/robustness/robustness2.json` (`moodle_models_wald`) |
+| §4.2 H2 on all runs, clear-only, bias-reduced errors | `analysis/robustness/robustness2.json` (`mariadb_all_runs`, `b_extended_clear_only`, `bias_reduced_se`) |
+| §4.3 M/W share differences, fixture cases | `analysis/robustness/robustness2.json` (`failure_audit`) |
+| §4.3 corrected-oracle OR, M-share bootstrap | `analysis/robustness/robustness.json` (`moodle_with_fixtures`, `pooled_with_moodle_fixtures`, `moodle_M_as_solved_bootstrap`) |
 | §4.4 patch quality | `analysis/moodle/quality_results.json`, `analysis/moodle/results_quality_en.md` |
+| §4.4 MariaDB similarity | `analysis/mariadb/similarity_mariadb.json` |
+| §4.5 Table 6, Figure 1, power, spline, influence, contamination | `analysis/robustness/robustness.json`, `robustness2.json`, `figure_hours_curve.png` |
 
 ## Notes on the data
 

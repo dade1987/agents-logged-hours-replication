@@ -20,7 +20,11 @@ for s in keys:
 json.dump(keys,open(f'{F}/moodle_final_codes.json','w'),indent=1)
 def wilson(k,n,z=1.96):
     p=k/n; d=1+z*z/n; c=(p+z*z/(2*n))/d; h=z*math.sqrt(p*(1-p)/n+z*z/(4*n*n))/d; return [round(c-h,3),round(c+h,3)]
-out={'n':len(keys),'by_stratum':{}}
+n=len(keys); po=sum(A[s['case']]==B[s['case']] for s in keys)/n
+pa=collections.Counter(A[s['case']] for s in keys); pb=collections.Counter(B[s['case']] for s in keys); cats='WMAU'
+pe=sum(pa[k]*pb[k] for k in cats)/n/n; pi={k:(pa[k]+pb[k])/(2*n) for k in cats}; q=sum(1 for k in cats if pa[k]+pb[k])
+out={'n':n,'agreement':{'observed':round(po,3),'kappa':round((po-pe)/(1-pe),3),'AC1':round((po-sum(p*(1-p) for p in pi.values())/(q-1))/(1-sum(p*(1-p) for p in pi.values())/(q-1)),3),
+     'disagreements':{s['case']:[A[s['case']],B[s['case']],ADJ[s['case']][0]] for s in keys if A[s['case']]!=B[s['case']]}},'by_stratum':{}}
 for st in 'SL':
     xs=[s for s in keys if s['stratum']==st]; cnt=collections.Counter(s['final'] for s in xs); n=len(xs)
     out['by_stratum'][st]={'n':n,'counts':dict(cnt),'M_share':round(cnt['M']/n,3),'M_CI95':wilson(cnt['M'],n),
