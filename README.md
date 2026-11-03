@@ -2,7 +2,7 @@
 
 This repository holds the data, scripts and agent transcripts for the article
 
-> *Where Do AI Coding Agents Stop? Re-solving Real Moodle and MariaDB Issues Against Human-Logged Hours. An exploratory study and a preregistered replication.*
+> *Where Do Claude Coding Agents Stop? Logged Hours, Fix Size and Test Coupling on Real Moodle and MariaDB Issues*
 
 Four Claude models (Haiku 5.5, Sonnet 5.5, Opus 5.5, Fable 5.1) re-solved real issues that were fixed after their training cut-off. Each agent saw only the issue text and the source code at the parent of the fix commit. The developers' own tests from the fix commit then judged its patch. Success is related to the hours the developers logged on the issue in Jira.
 
