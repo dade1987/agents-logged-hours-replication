@@ -1,0 +1,199 @@
+<title>Patch fallite Gianluigi</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,600&family=Source+Sans+3:wght@400;600&family=JetBrains+Mono:wght@400&display=swap">
+<style>
+/* Layout: one failed patch at a time; number strip on top; issue, diffs and test output in collapsible blocks; four category buttons. */
+:root{
+  --bg:#f2f4f6; --card:#ffffff; --fg:#1b2530; --muted:#5a6878; --line:#d3dae2;
+  --accent:#1d5d8f; --accent-fg:#ffffff; --soft:#e0ebf4; --code:#eef1f4; --warn:#9a5b00;
+  --display:"Literata",Georgia,serif; --body:"Source Sans 3",system-ui,sans-serif; --mono:"JetBrains Mono",ui-monospace,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#11161b; --card:#1a2129; --fg:#e2e9f0; --muted:#97a6b6; --line:#2f3b47;
+  --accent:#6fb2e6; --accent-fg:#0c1319; --soft:#1f3142; --code:#141a20; --warn:#e0a54a; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#11161b; --card:#1a2129; --fg:#e2e9f0; --muted:#97a6b6; --line:#2f3b47;
+  --accent:#6fb2e6; --accent-fg:#0c1319; --soft:#1f3142; --code:#141a20; --warn:#e0a54a; color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font:17px/1.5 var(--body)}
+.wrap{max-width:760px;margin:0 auto;padding-block:20px 48px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:18px}
+h1{font:600 1.45rem/1.2 var(--display);margin:0;text-wrap:balance}
+.how{display:flex;flex-direction:column;gap:4px}
+.how p{margin:0}
+.status{font-size:.95rem;color:var(--muted);font-variant-numeric:tabular-nums}
+.status b{color:var(--fg)}
+.strip{display:grid;grid-template-columns:repeat(12,1fr);gap:5px}
+.strip button{font:600 .78rem var(--body);font-variant-numeric:tabular-nums;padding:6px 0;border:1px solid var(--line);background:var(--card);color:var(--muted);border-radius:6px;cursor:pointer}
+.strip button.done{background:var(--soft);color:var(--accent);border-color:transparent}
+.strip button.cur{outline:2px solid var(--accent);outline-offset:1px;color:var(--fg)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.num{font-size:.8rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.card h2{font:600 1.12rem/1.3 var(--display);margin:0;text-wrap:balance;overflow-wrap:anywhere}
+.body{display:flex;flex-direction:column;gap:10px;min-width:0}
+.body p{white-space:pre-wrap;overflow-wrap:anywhere;margin:0}
+pre{margin:0;background:var(--code);border:1px solid var(--line);border-radius:6px;padding:10px;font:.72rem/1.45 var(--mono);overflow-x:auto;max-height:28em;overflow-y:auto;white-space:pre}
+.blk{border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.blk summary{font-weight:600;color:var(--accent)}
+.blk pre{margin-top:8px}
+.add{color:#1f7a3a}.del{color:#b3261e}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .add{color:#7fd39a}:root:not([data-theme="light"]) .del{color:#f19a92}}
+:root[data-theme="dark"] .add{color:#7fd39a}:root[data-theme="dark"] .del{color:#f19a92}
+.proj{font-size:.9rem;color:var(--muted)}
+details{font-size:.95rem;color:var(--muted)}
+.guide{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;color:var(--fg)}
+.guide ul{margin:8px 0 0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+details summary{cursor:pointer;color:var(--accent)}
+details pre{margin-top:8px;white-space:pre-wrap;overflow-wrap:anywhere}
+.ask{font-weight:600;margin:4px 0 0}
+.opts{display:flex;flex-direction:column;gap:8px}
+.opts button{text-align:left;font:1rem/1.3 var(--body);padding:12px 14px;border:1px solid var(--line);background:var(--bg);color:var(--fg);border-radius:8px;cursor:pointer}
+.opts button small{display:block;color:var(--muted);font-size:.85rem}
+.opts button.sel{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+.opts button.sel small{color:var(--accent-fg)}
+label{font-size:.95rem;color:var(--muted)}
+textarea{width:100%;box-sizing:border-box;font:1rem var(--body);padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);min-height:3.5em}
+.nav{display:flex;gap:10px}
+.nav button,.copy{flex:1;font:600 1rem var(--body);padding:12px;border-radius:8px;border:1px solid var(--accent);background:transparent;color:var(--accent);cursor:pointer}
+.nav button.next{background:var(--accent);color:var(--accent-fg)}
+.nav button:disabled{opacity:.4;cursor:default}
+.msg{font-size:.9rem;color:var(--muted);min-height:1.3em;margin:0}
+.msg.err{color:var(--warn)}
+.foot{font-size:.85rem;color:var(--muted);display:flex;flex-direction:column;gap:10px}
+.foot p{margin:0}
+#out{width:100%;box-sizing:border-box;font:.8rem var(--mono);min-height:6em}
+a{color:var(--accent)}
+button:focus-visible,textarea:focus-visible,a:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+</style>
+
+<div class="wrap">
+  <h1>Ciao Gianluigi, di nuovo grazie!</h1>
+  <div class="how">
+    <p><b>Cosa sono:</b> 24 correzioni scritte da un agente AI che i test degli sviluppatori hanno bocciato.</p>
+    <p><b>La domanda:</b> la correzione è davvero sbagliata, o è giusta ma i test si aspettavano dettagli che la issue non diceva?</p>
+    <p><b>Salvataggio:</b> automatico. Puoi fermarti e riprendere quando vuoi. Ci vogliono circa 3–5 minuti per caso.</p>
+    <p><b>Alla fine:</b> avvisa Davide.</p>
+  </div>
+  <details class="guide" open>
+    <summary>Come guardare un caso (vale per tutti)</summary>
+    <ul>
+      <li>Leggi la <b>issue</b>: cosa chiede di sistemare.</li>
+      <li>Guarda la <b>correzione dell'agente</b> e confrontala con la <b>correzione degli sviluppatori</b> e con i loro <b>test</b>.</li>
+      <li>Guarda <b>perché il test è fallito</b> (l'ultimo riquadro).</li>
+      <li>Se la correzione dell'agente ha un errore che la rende sbagliata comunque, scegli <b>Sbagliata</b>, anche se c'è anche una differenza di nomi.</li>
+      <li>Nei casi Moodle i file di supporto ai test (fixture, generatori) <b>non</b> venivano copiati: se il test fallisce solo per questo, la correzione può essere giusta.</li>
+      <li>Non serve eseguire niente. Se non riesci a decidere, scegli <b>Non si capisce</b>.</li>
+    </ul>
+  </details>
+  <div class="status" id="status">Caricamento delle risposte salvate…</div>
+  <div class="strip" id="strip"></div>
+  <div class="card">
+    <div class="num" id="num"></div>
+    <div class="proj" id="proj"></div>
+    <h2 id="ti"></h2>
+    <div class="body" id="body"></div>
+    <p class="ask">Com'è la correzione dell'agente?</p>
+    <div class="opts" id="opts">
+      <button data-v="W">Sbagliata<small>non fa quello che chiede la issue, lo fa solo in parte, rompe altro, o non compila / dà errore</small></button>
+      <button data-v="M">Giusta, ma diversa dai test<small>fa quello che chiede la issue; i test falliscono perché si aspettano nomi, firme, messaggi o file scelti dagli sviluppatori che la issue non dice</small></button>
+      <button data-v="A">Issue ambigua<small>la issue permette più comportamenti giusti; l'agente ne ha scelto uno diverso da quello degli sviluppatori</small></button>
+      <button data-v="U">Non si capisce<small>non ci sono abbastanza informazioni per decidere</small></button>
+    </div>
+    <label for="nota">Perché? Una frase (facoltativa ma utile)</label>
+    <textarea id="nota"></textarea>
+    <p class="msg" id="msg"></p>
+    <div class="nav"><button id="prev">Indietro</button><button id="next" class="next">Avanti</button></div>
+  </div>
+  <div class="foot">
+    <p>I testi sono in inglese, come nelle issue originali. Non vedi chi ha scritto la correzione né quanto tempo hanno impiegato gli sviluppatori: è voluto.</p>
+    <button class="copy" id="copy">Copia le risposte</button>
+    <textarea id="out" hidden readonly></textarea>
+  </div>
+</div>
+<script>
+const ROWS = __DATA__;
+const N = ROWS.length;
+const ans = {};
+let cur = 0, shownAt = Date.now(), col = null;
+const $ = id => document.getElementById(id);
+
+function firstOpen(){ for (let i=0;i<N;i++) if(!ans[ROWS[i].id]?.giudizio) return i; return 0; }
+
+function renderStrip(){
+  const s=$('strip'); s.textContent='';
+  ROWS.forEach((r,i)=>{ const b=document.createElement('button'); b.textContent=i+1; b.setAttribute('aria-label','Caso '+(i+1));
+    if(ans[r.id]?.giudizio) b.classList.add('done'); if(i===cur) b.classList.add('cur'); b.onclick=()=>go(i); s.appendChild(b); });
+  const done=ROWS.filter(r=>ans[r.id]?.giudizio).length;
+  $('status').innerHTML = done===N ? '<b>Finito: '+N+' di '+N+'.</b> Grazie!' : '<b>'+done+' di '+N+'</b> fatte';
+}
+
+function diffPre(txt){
+  const pre=document.createElement('pre');
+  (txt||'(vuoto)').split('\n').forEach((l,i,arr)=>{ const sp=document.createElement('span');
+    if(l.startsWith('+')&&!l.startsWith('+++')) sp.className='add'; else if(l.startsWith('-')&&!l.startsWith('---')) sp.className='del';
+    sp.textContent=l+(i<arr.length-1?'\n':''); pre.appendChild(sp); });
+  return pre;
+}
+function block(title, txt, open, diff){
+  const d=document.createElement('details'); d.className='blk'; d.open=open;
+  const s=document.createElement('summary'); s.textContent=title; d.appendChild(s);
+  if(diff) d.appendChild(diffPre(txt)); else { const p=document.createElement('pre'); p.style.whiteSpace='pre-wrap'; p.textContent=txt||'(vuoto)'; d.appendChild(p); }
+  return d;
+}
+function render(){
+  const r=ROWS[cur], a=ans[r.id]||{};
+  $('num').textContent='Caso '+(cur+1)+' di '+N;
+  $('proj').textContent=r.p;
+  const lines=(r.issue||'').split('\n'); const t=(lines[0]||'').replace(/^#\s*/,'');
+  $('ti').textContent=t;
+  const body=$('body'); body.textContent='';
+  body.appendChild(block('1. La issue', lines.slice(1).join('\n').trim(), true, false));
+  body.appendChild(block("2. Correzione dell'agente (bocciata)", r.agent, true, true));
+  body.appendChild(block('3. Correzione degli sviluppatori (codice)', r.hcode, false, true));
+  body.appendChild(block('4. Test degli sviluppatori', r.htest, false, true));
+  body.appendChild(block('5. Perché il test è fallito', r.tests, true, false));
+  document.querySelectorAll('#opts button').forEach(b=>b.classList.toggle('sel', b.dataset.v===a.giudizio));
+  $('nota').value=a.nota||''; $('msg').textContent=''; $('msg').className='msg';
+  $('prev').disabled=cur===0; $('next').textContent=cur===N-1?'Fine':'Avanti';
+  renderStrip();
+}
+function elapsed(){ const s=Math.round((Date.now()-shownAt)/1000); shownAt=Date.now(); return Math.min(s,1800); }
+function addTime(){ const k=ROWS[cur].id; ans[k]=ans[k]||{}; ans[k].secondi=(ans[k].secondi||0)+elapsed(); }
+
+function saveLocal(){ try{ localStorage.setItem('audit_gianluigi', JSON.stringify(ans)); }catch(e){} }
+async function save(k){
+  saveLocal();
+  const a=ans[k]; if(!a) return;
+  if(!col){ $('msg').textContent='Salvato solo su questo telefono. Alla fine premi "Copia le risposte" e manda il testo a Davide.'; $('msg').className='msg err'; return; }
+  try{ await col.doc(k).set({giudizio:a.giudizio||'', nota:a.nota||'', secondi:a.secondi||0, salvato_il:new Date().toISOString()});
+       $('msg').textContent='Salvato.'; $('msg').className='msg'; }
+  catch(e){ $('msg').textContent='Salvato solo su questo telefono (la pagina non ti permette di salvare online: chiedi a Davide di darti il permesso di usare la pagina). Alla fine premi "Copia le risposte" e manda il testo a Davide.'; $('msg').className='msg err'; }
+}
+
+function go(i){
+  const k=ROWS[cur].id; addTime(); if(ans[k]?.giudizio) save(k);
+  cur=Math.max(0,Math.min(N-1,i)); shownAt=Date.now(); render(); window.scrollTo({top:0});
+}
+
+document.querySelectorAll('#opts button').forEach(b=>b.onclick=()=>{
+  const k=ROWS[cur].id; ans[k]=ans[k]||{}; ans[k].giudizio=b.dataset.v; addTime(); render(); save(k);
+});
+$('nota').addEventListener('change',()=>{ const k=ROWS[cur].id; ans[k]=ans[k]||{}; ans[k].nota=$('nota').value.trim(); if(ans[k].giudizio) save(k); });
+$('prev').onclick=()=>go(cur-1);
+$('next').onclick=()=>{ if(cur===N-1){ go(cur); $('status').scrollIntoView({behavior:'smooth'}); } else go(cur+1); };
+$('copy').onclick=async()=>{
+  const txt=['caso\tgiudizio\tsecondi\tnota'].concat(ROWS.map(r=>{const a=ans[r.id]||{}; return [r.id,a.giudizio||'',a.secondi||'',(a.nota||'').replace(/\s+/g,' ')].join('\t');})).join('\n');
+  const o=$('out');
+  try{ await navigator.clipboard.writeText(txt); $('copy').textContent='Copiate'; }
+  catch(e){ o.hidden=false; o.value=txt; o.select(); $('copy').textContent='Seleziona il testo qui sotto e copialo'; }
+};
+
+try{ Object.assign(ans, JSON.parse(localStorage.getItem('audit_gianluigi')||'{}')); }catch(e){}
+cur=firstOpen(); render();
+(async()=>{
+  const db=await window.claude?.use?.('db').catch(()=>null);
+  if(!db){ $('status').textContent='Le risposte restano su questo telefono: alla fine premi "Copia le risposte" e manda il testo a Davide.'; return; }
+  col=db.collection('audit_gianluigi');
+  try{ const snap=await col.get(); snap.docs.forEach(d=>{ const v=d.data()||{}; ans[d.id]={giudizio:v.giudizio||'', nota:v.nota||'', secondi:v.secondi||0}; }); saveLocal(); }catch(e){}
+  cur=firstOpen(); shownAt=Date.now(); render();
+})();
+</script>
