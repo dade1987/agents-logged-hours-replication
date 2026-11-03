@@ -38,6 +38,7 @@ python3 failure_audit/analyze_moodle.py               # -> failure_audit/moodle_
 python3 failure_audit/analyze_mariadb.py              # -> failure_audit/mariadb_results.json
 python3 analysis/robustness/robustness.py          # -> analysis/robustness/robustness.json, figure_hours_curve.png (slow: power simulation)
 python3 analysis/robustness/robustness2.py         # -> analysis/robustness/robustness2.json
+python3 failure_audit/human_check/analyze_human_check.py # -> failure_audit/human_check/human_check_results.json
 python3 moodle/scripts/score.py                       # rebuilds moodle/results.csv from moodle/eval_logs/
 ```
 
@@ -62,6 +63,7 @@ Generating new agent runs or re-evaluating patches needs much more: a Moodle or 
 | §3.3 fix sizes | `analysis/robustness/fix_size.csv` |
 | §4.1 Moodle model Wald test | `analysis/robustness/robustness2.json` (`moodle_models_wald`) |
 | §4.2 H2 on all runs, clear-only, bias-reduced errors | `analysis/robustness/robustness2.json` (`mariadb_all_runs`, `b_extended_clear_only`, `bias_reduced_se`) |
+| §3.7, §4.3 blind human check of 24 audit cases | `failure_audit/human_check/human_check_results.json` (ratings in `human_ratings.json`, case map in `sample_keys.json`) |
 | §4.3 M/W share differences, fixture cases | `analysis/robustness/robustness2.json` (`failure_audit`) |
 | §4.3 corrected-oracle OR, M-share bootstrap | `analysis/robustness/robustness.json` (`moodle_with_fixtures`, `pooled_with_moodle_fixtures`, `moodle_M_as_solved_bootstrap`) |
 | §4.4 patch quality | `analysis/moodle/quality_results.json`, `analysis/moodle/results_quality_en.md` |
@@ -72,7 +74,7 @@ Generating new agent runs or re-evaluating patches needs much more: a Moodle or 
 
 - **Evaluation logs.** The Moodle evaluation logs use Italian block markers, kept as written: `PRIMA:` means before the fix (the oracle check), `DOPO:` means with the human fix, and `AGENTE <model>_<condition>_<run>:` marks an agent patch. MariaDB outcomes are in `mariadb/results.jsonl`, with build and mtr logs in `mariadb/eval_logs/`.
 - **Clarity ratings.** `mariadb/clarity/ratings.json` holds the blind clarity ratings used for sensitivity analysis (b). The values are Italian: `chiara` = clear, `in_parte` = partly clear, `poco_chiara` = unclear. The ratings were made by an independent rater, not by the author as preregistered, and before any MariaDB result was seen (see `mariadb/deviations.txt`).
-- **Failure audit.** Two AI raters (Claude Opus and Claude Fable) made the classification, not humans. Disagreements were resolved with the codebook decision rule. The rater prompts are kept exactly as used, including the paths of the original environment.
+- **Failure audit.** Two AI raters (Claude Opus and Claude Fable) made the classification. A blind human rater, without AI help, re-coded 24 random cases afterwards (`failure_audit/human_check/`; filled in a spreadsheet copy of the page, so no timing is recorded). Disagreements were resolved with the codebook decision rule. The rater prompts are kept exactly as used, including the paths of the original environment.
 - **Transcripts.** Each transcript keeps the agent's messages, its tool calls and the full tool outputs. Removed for privacy: the session context injected by the environment, the model's hidden reasoning blocks, the outputs of project/environment tools (a few Haiku runs called them by mistake), e-mail addresses and session links. The first line of each file gives the issue, model, condition and run.
 - **Issue texts.** Prompts contain the issue title and description as written in Jira, with user names replaced by `[user]`. The original issues are public at `https://moodle.atlassian.net/browse/<KEY>` and `https://jira.mariadb.org/browse/<KEY>`.
 
